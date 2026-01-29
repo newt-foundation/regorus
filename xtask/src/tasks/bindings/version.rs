@@ -19,11 +19,13 @@
 // - When the root races ahead, we follow it: a clean binding at 0.6.2 syncing against root 0.7.0 ends up at 0.7.0.
 // - Use `cargo xtask bindings --check` in CI or pre-commit to fail fast when any manifest would be rewritten.
 
-use std::collections::HashSet;
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
@@ -52,14 +54,14 @@ impl BindingsCommand {
     pub fn run(&self) -> Result<()> {
         let workspace_root = workspace_root();
         let root_version = match self.new_version.as_deref() {
-            Some(explicit) => Version::parse(explicit)
-                .with_context(|| format!("invalid --new-version '{explicit}'"))?,
+            Some(explicit) => {
+                Version::parse(explicit).with_context(|| format!("invalid --new-version '{explicit}'"))?
+            }
             None => read_root_crate_version(&workspace_root)?,
         };
 
         let watch_dirs = collect_watch_dirs();
-        let changed_paths =
-            collect_changed_paths(&workspace_root, self.base_ref.as_deref(), &watch_dirs)?;
+        let changed_paths = collect_changed_paths(&workspace_root, self.base_ref.as_deref(), &watch_dirs)?;
 
         let mut touched_paths = Vec::new();
         let mut summaries = Vec::new();
@@ -68,8 +70,7 @@ impl BindingsCommand {
             let binding_changed = binding_has_changes(binding, &changed_paths);
             let current_version = read_binding_version(&workspace_root, binding)?;
             let desired_version = desired_version(&current_version, &root_version, binding_changed);
-            let mut files =
-                apply_binding_version(&workspace_root, binding, &desired_version, self.check)?;
+            let mut files = apply_binding_version(&workspace_root, binding, &desired_version, self.check)?;
             let files_modified = !files.is_empty();
             touched_paths.append(&mut files);
             let version_changed = desired_version != current_version;
@@ -96,10 +97,7 @@ impl BindingsCommand {
                     } else {
                         "metadata normalized"
                     };
-                    println!(
-                        "  {} -> {} ({reason})",
-                        summary.name, summary.desired_version
-                    );
+                    println!("  {} -> {} ({reason})", summary.name, summary.desired_version);
                 }
             }
         }
@@ -215,11 +213,7 @@ fn collect_watch_dirs() -> Vec<&'static str> {
 
 /// Returns every binding-relative path that changed compared to the base
 /// revision as well as unstaged or untracked files in the working tree.
-fn collect_changed_paths(
-    root: &Path,
-    base_ref: Option<&str>,
-    watch_dirs: &[&'static str],
-) -> Result<HashSet<String>> {
+fn collect_changed_paths(root: &Path, base_ref: Option<&str>, watch_dirs: &[&'static str]) -> Result<HashSet<String>> {
     let mut paths = HashSet::new();
 
     if !watch_dirs.is_empty() {
@@ -296,10 +290,7 @@ where
         .output()
         .context("failed to invoke git")?;
     if !output.status.success() {
-        bail!(
-            "git command failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        bail!("git command failed: {}", String::from_utf8_lossy(&output.stderr).trim());
     }
     String::from_utf8(output.stdout).context("git output was not valid UTF-8")
 }
@@ -317,16 +308,14 @@ fn binding_has_changes(binding: &Binding, changed_paths: &HashSet<String>) -> bo
 
 /// Reads the version declared in the root `Cargo.toml`.
 fn read_root_crate_version(root: &Path) -> Result<Version> {
-    let manifest = fs::read_to_string(root.join("Cargo.toml"))
-        .context("failed to read workspace Cargo.toml")?;
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).context("failed to read workspace Cargo.toml")?;
     let doc = manifest
         .parse::<DocumentMut>()
         .context("failed to parse workspace Cargo.toml")?;
     let version = doc["package"]["version"]
         .as_str()
         .ok_or_else(|| anyhow!("workspace Cargo.toml missing package.version"))?;
-    Version::parse(version)
-        .with_context(|| format!("invalid workspace package.version '{version}'"))
+    Version::parse(version).with_context(|| format!("invalid workspace package.version '{version}'"))
 }
 
 /// Reads the authoritative version for a binding (Cargo manifest or C# project).
@@ -341,28 +330,24 @@ fn read_binding_version(root: &Path, binding: &Binding) -> Result<Version> {
 }
 
 fn read_manifest_version(path: &Path) -> Result<Version> {
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let contents = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let doc = contents
         .parse::<DocumentMut>()
         .with_context(|| format!("failed to parse {}", path.display()))?;
     let version = doc["package"]["version"]
         .as_str()
         .ok_or_else(|| anyhow!("{} missing package.version", path.display()))?;
-    Version::parse(version)
-        .with_context(|| format!("invalid version '{}' in {}", version, path.display()))
+    Version::parse(version).with_context(|| format!("invalid version '{}' in {}", version, path.display()))
 }
 
 fn read_csharp_version(path: PathBuf) -> Result<Version> {
-    let contents =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let contents = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let re = Regex::new(r#"(?s)<VersionPrefix>(?P<value>[^<]+)</VersionPrefix>"#)?;
     let caps = re
         .captures(&contents)
         .ok_or_else(|| anyhow!("{} missing <VersionPrefix> entry", path.display()))?;
     let version = caps.name("value").unwrap().as_str();
-    Version::parse(version)
-        .with_context(|| format!("invalid VersionPrefix '{}' in {}", version, path.display()))
+    Version::parse(version).with_context(|| format!("invalid VersionPrefix '{}' in {}", version, path.display()))
 }
 
 /// Calculates the version to write, bumping the minor release when the binding
@@ -385,12 +370,7 @@ fn desired_version(current: &Version, target: &Version, binding_changed: bool) -
 }
 
 /// Applies the chosen version across every artefact owned by the binding.
-fn apply_binding_version(
-    root: &Path,
-    binding: &Binding,
-    version: &Version,
-    check: bool,
-) -> Result<Vec<String>> {
+fn apply_binding_version(root: &Path, binding: &Binding, version: &Version, check: bool) -> Result<Vec<String>> {
     let mut touched = Vec::new();
     let version_str = version.to_string();
 
@@ -433,12 +413,7 @@ fn apply_binding_version(
 }
 
 /// Updates a Cargo manifest with the supplied version string.
-fn update_manifest_version(
-    root: &Path,
-    manifest: &str,
-    version: &str,
-    check: bool,
-) -> Result<bool> {
+fn update_manifest_version(root: &Path, manifest: &str, version: &str, check: bool) -> Result<bool> {
     let path = root.join(manifest);
     edit_file(&path, check, |contents| {
         let mut doc = contents
@@ -456,12 +431,7 @@ fn update_manifest_version(
 }
 
 /// Rewrites the Ruby gem version constant.
-fn update_ruby_version(
-    root: &Path,
-    version_file: &str,
-    version: &str,
-    check: bool,
-) -> Result<bool> {
+fn update_ruby_version(root: &Path, version_file: &str, version: &str, check: bool) -> Result<bool> {
     let path = root.join(version_file);
     edit_file(&path, check, |contents| {
         let re = Regex::new(r#"(?m)^(?P<prefix>\s*VERSION\s*=\s*")(?P<value>[^"]+)(?P<suffix>")"#)?;
@@ -483,9 +453,7 @@ fn update_ruby_version(
 fn update_java_pom(root: &Path, pom_path: &str, version: &str, check: bool) -> Result<bool> {
     let path = root.join(pom_path);
     edit_file(&path, check, |contents| {
-        let re = Regex::new(
-            r#"(?s)(<artifactId>regorus-java</artifactId>\s*<version>)(?P<value>[^<]+)(</version>)"#,
-        )?;
+        let re = Regex::new(r#"(?s)(<artifactId>regorus-java</artifactId>\s*<version>)(?P<value>[^<]+)(</version>)"#)?;
         if let Some(caps) = re.captures(contents) {
             if caps.name("value").unwrap().as_str() == version {
                 return Ok(None);
@@ -509,9 +477,7 @@ fn update_csharp_projects(
     check: bool,
 ) -> Result<Vec<String>> {
     let mut touched = Vec::new();
-    let version_prefix = Regex::new(
-        r#"(?s)(?P<prefix><VersionPrefix>)(?P<value>[^<]+)(?P<suffix></VersionPrefix>)"#,
-    )?;
+    let version_prefix = Regex::new(r#"(?s)(?P<prefix><VersionPrefix>)(?P<value>[^<]+)(?P<suffix></VersionPrefix>)"#)?;
     let pkg_ref = Regex::new(
         r#"(?i)(?P<prefix><PackageReference[^>]*Include="regorus"[^>]*Version=")(?P<value>\d+\.\d+\.\d+)(?P<suffix>[^\"]*")"#,
     )?;
@@ -590,8 +556,7 @@ fn edit_file<F>(path: &Path, check: bool, apply: F) -> Result<bool>
 where
     F: FnOnce(&str) -> Result<Option<String>>,
 {
-    let original =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let original = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
 
     if let Some(updated) = apply(&original)? {
         if check {
@@ -610,8 +575,8 @@ fn update_cargo_lock(root: &Path, manifest: &str) -> Result<()> {
     let manifest_path = root.join(manifest);
 
     // Read the package name and version from the manifest
-    let contents = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+    let contents =
+        fs::read_to_string(&manifest_path).with_context(|| format!("failed to read {}", manifest_path.display()))?;
     let doc = contents
         .parse::<DocumentMut>()
         .with_context(|| format!("failed to parse {}", manifest_path.display()))?;

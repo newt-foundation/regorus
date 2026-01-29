@@ -3,8 +3,7 @@
 
 #![allow(dead_code)]
 
-use core::fmt;
-use core::time::Duration;
+use core::{fmt, time::Duration};
 
 /// Errors reported when execution time or memory ceilings are enforced.
 #[derive(Clone, Copy, PartialEq, Eq)]

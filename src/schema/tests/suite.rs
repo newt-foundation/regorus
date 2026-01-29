@@ -26,10 +26,7 @@ fn test_deserialize_any() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Any {
-            description,
-            default,
-        } => {
+        Type::Any { description, default } => {
             assert_eq!(description.as_deref(), Some("any type"));
             assert_eq!(default, &Some(Value::from(42)));
         }
@@ -144,9 +141,7 @@ fn test_deserialize_integer_minimum_equals_maximum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Integer {
-            minimum, maximum, ..
-        } => {
+        Type::Integer { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(5));
             assert_eq!(maximum, &Some(5));
         }
@@ -163,9 +158,7 @@ fn test_deserialize_integer_negative_minimum_and_maximum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Integer {
-            minimum, maximum, ..
-        } => {
+        Type::Integer { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(-100));
             assert_eq!(maximum, &Some(-1));
         }
@@ -181,9 +174,7 @@ fn test_deserialize_integer_zero_minimum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Integer {
-            minimum, maximum, ..
-        } => {
+        Type::Integer { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(0));
             assert_eq!(maximum, &None);
         }
@@ -200,9 +191,7 @@ fn test_deserialize_integer_large_values() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Integer {
-            minimum, maximum, ..
-        } => {
+        Type::Integer { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(i64::MIN));
             assert_eq!(maximum, &Some(i64::MAX));
         }
@@ -240,9 +229,7 @@ fn test_deserialize_integer_minimum_greater_than_maximum() {
     // This will not error at deserialization, but you may want to add validation logic elsewhere.
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Integer {
-            minimum, maximum, ..
-        } => {
+        Type::Integer { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(10));
             assert_eq!(maximum, &Some(5));
         }
@@ -357,9 +344,7 @@ fn test_deserialize_number_minimum_equals_maximum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Number {
-            minimum, maximum, ..
-        } => {
+        Type::Number { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(5.5));
             assert_eq!(maximum, &Some(5.5));
         }
@@ -376,9 +361,7 @@ fn test_deserialize_number_negative_minimum_and_maximum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Number {
-            minimum, maximum, ..
-        } => {
+        Type::Number { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(-100.25));
             assert_eq!(maximum, &Some(-1.75));
         }
@@ -394,9 +377,7 @@ fn test_deserialize_number_zero_minimum() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Number {
-            minimum, maximum, ..
-        } => {
+        Type::Number { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(0.0));
             assert_eq!(maximum, &None);
         }
@@ -413,9 +394,7 @@ fn test_deserialize_number_large_values() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Number {
-            minimum, maximum, ..
-        } => {
+        Type::Number { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(f64::MIN));
             assert_eq!(maximum, &Some(f64::MAX));
         }
@@ -453,9 +432,7 @@ fn test_deserialize_number_minimum_greater_than_maximum() {
     // This will not error at deserialization, but you may want to add validation logic elsewhere.
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Number {
-            minimum, maximum, ..
-        } => {
+        Type::Number { minimum, maximum, .. } => {
             assert_eq!(minimum, &Some(10.0));
             assert_eq!(maximum, &Some(5.0));
         }
@@ -472,10 +449,7 @@ fn test_deserialize_boolean_all_fields() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Boolean {
-            description,
-            default,
-        } => {
+        Type::Boolean { description, default } => {
             assert_eq!(description.as_deref(), Some("a boolean"));
             assert_eq!(default, &Some(Value::from(true)));
         }
@@ -491,10 +465,7 @@ fn test_deserialize_boolean_no_description() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Boolean {
-            description,
-            default,
-        } => {
+        Type::Boolean { description, default } => {
             assert_eq!(description, &None);
             assert_eq!(default, &Some(Value::from(false)));
         }
@@ -510,10 +481,7 @@ fn test_deserialize_boolean_no_default() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Boolean {
-            description,
-            default,
-        } => {
+        Type::Boolean { description, default } => {
             assert_eq!(description.as_deref(), Some("no default"));
             assert_eq!(default, &None);
         }
@@ -528,10 +496,7 @@ fn test_deserialize_boolean_only_required() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Boolean {
-            description,
-            default,
-        } => {
+        Type::Boolean { description, default } => {
             assert_eq!(description, &None);
             assert_eq!(default, &None);
         }
@@ -657,9 +622,7 @@ fn test_deserialize_string_min_equals_max() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::String {
-            min_length,
-            max_length,
-            ..
+            min_length, max_length, ..
         } => {
             assert_eq!(min_length, &Some(5));
             assert_eq!(max_length, &Some(5));
@@ -743,9 +706,7 @@ fn test_deserialize_string_large_min_max_length() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::String {
-            min_length,
-            max_length,
-            ..
+            min_length, max_length, ..
         } => {
             assert_eq!(min_length, &Some(usize::MAX));
             assert_eq!(max_length, &Some(usize::MAX));
@@ -822,10 +783,7 @@ fn test_deserialize_array_min_equals_max() {
             assert_eq!(min_items, &Some(3));
             assert_eq!(max_items, &Some(3));
             match items.as_type() {
-                Type::Boolean {
-                    description,
-                    default,
-                } => {
+                Type::Boolean { description, default } => {
                     assert_eq!(description, &None);
                     assert_eq!(default, &None);
                 }
@@ -845,9 +803,7 @@ fn test_deserialize_array_zero_min_items() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Array {
-            min_items, items, ..
-        } => {
+        Type::Array { min_items, items, .. } => {
             assert_eq!(min_items, &Some(0));
             match items.as_type() {
                 Type::Null { description } => {
@@ -976,10 +932,7 @@ fn test_deserialize_array_items_with_fields() {
             assert_eq!(description.as_deref(), Some("outer array"));
             assert_eq!(min_items, &Some(1));
             assert_eq!(max_items, &Some(2));
-            assert_eq!(
-                default,
-                &Some(Value::Array(Rc::new(vec![Value::from("bar")])))
-            );
+            assert_eq!(default, &Some(Value::Array(Rc::new(vec![Value::from("bar")]))));
             match items.as_type() {
                 Type::String {
                     description,
@@ -1182,13 +1135,10 @@ fn test_deserialize_object_all_fields() {
             assert_eq!(
                 default,
                 &Some(Value::Object(Rc::new(
-                    [
-                        ("foo".into(), Value::from("abc")),
-                        ("bar".into(), Value::from(42))
-                    ]
-                    .iter()
-                    .cloned()
-                    .collect()
+                    [("foo".into(), Value::from("abc")), ("bar".into(), Value::from(42))]
+                        .iter()
+                        .cloned()
+                        .collect()
                 )))
             );
             // properties
@@ -1368,9 +1318,7 @@ fn test_deserialize_object_empty_properties_and_required() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            properties,
-            required,
-            ..
+            properties, required, ..
         } => {
             assert_eq!(properties.len(), 0);
             let req = required.as_ref().expect("required should be present");
@@ -1390,9 +1338,7 @@ fn test_deserialize_object_required_not_in_properties() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            properties,
-            required,
-            ..
+            properties, required, ..
         } => {
             assert_eq!(properties.len(), 1);
             let req = required.as_ref().expect("required should be present");
@@ -1412,8 +1358,7 @@ fn test_deserialize_object_additional_properties_none() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            additional_properties,
-            ..
+            additional_properties, ..
         } => {
             // When no additionalProperties field is specified, the default behavior
             // is to allow additional properties of any type
@@ -1436,8 +1381,7 @@ fn test_deserialize_object_additional_properties_false() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            additional_properties,
-            ..
+            additional_properties, ..
         } => {
             // When additionalProperties is false, no additional properties are allowed
             assert!(
@@ -1459,8 +1403,7 @@ fn test_deserialize_object_additional_properties_true() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            additional_properties,
-            ..
+            additional_properties, ..
         } => {
             // When additionalProperties is true, additional properties of any type are allowed
             match additional_properties.as_ref().unwrap().as_type() {
@@ -1533,9 +1476,7 @@ fn test_deserialize_object_nested_2_levels() {
         Type::Object { properties, .. } => {
             let level1 = properties.get("level1").expect("level1 property");
             match level1.as_type() {
-                Type::Object {
-                    properties: props2, ..
-                } => {
+                Type::Object { properties: props2, .. } => {
                     let level2 = props2.get("level2").expect("level2 property");
                     match level2.as_type() {
                         Type::String { .. } => {}
@@ -1573,14 +1514,12 @@ fn test_deserialize_object_nested_3_levels() {
             let a = properties.get("a").expect("a property");
             match a.as_type() {
                 Type::Object {
-                    properties: props_b,
-                    ..
+                    properties: props_b, ..
                 } => {
                     let b = props_b.get("b").expect("b property");
                     match b.as_type() {
                         Type::Object {
-                            properties: props_c,
-                            ..
+                            properties: props_c, ..
                         } => {
                             let c = props_c.get("c").expect("c property");
                             match c.as_type() {
@@ -1606,10 +1545,7 @@ fn test_deserialize_enum_all_fields() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Enum {
-            description,
-            values,
-        } => {
+        Type::Enum { description, values } => {
             assert_eq!(description.as_deref(), Some("an enum"));
             assert_eq!(values.len(), 5);
             assert_eq!(values[0], Value::from("foo"));
@@ -1629,10 +1565,7 @@ fn test_deserialize_enum_only_required() {
     });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
-        Type::Enum {
-            description,
-            values,
-        } => {
+        Type::Enum { description, values } => {
             assert_eq!(description, &None);
             assert_eq!(values.len(), 2);
             assert_eq!(values[0], Value::from("a"));
@@ -2190,9 +2123,7 @@ fn test_deserialize_anyof_with_duplicates() {
 
 #[test]
 fn test_deserialize_anyof_large_number_of_variants() {
-    let variants: Vec<_> = (0..100)
-        .map(|i| json!({ "type": "integer", "default": i }))
-        .collect();
+    let variants: Vec<_> = (0..100).map(|i| json!({ "type": "integer", "default": i })).collect();
     let schema = json!({
         "anyOf": variants
     });
@@ -2336,9 +2267,7 @@ fn test_deserialize_anyof_with_nested_types() {
                 _ => panic!("Expected second variant to be Type::Integer"),
             }
             match &variants[2].as_type() {
-                Type::Array {
-                    items, min_items, ..
-                } => {
+                Type::Array { items, min_items, .. } => {
                     assert_eq!(min_items, &Some(1));
                     match items.as_type() {
                         Type::Boolean { .. } => {}
@@ -2349,9 +2278,7 @@ fn test_deserialize_anyof_with_nested_types() {
             }
             match &variants[3].as_type() {
                 Type::Object {
-                    properties,
-                    required,
-                    ..
+                    properties, required, ..
                 } => {
                     assert!(properties.contains_key("foo"));
                     assert!(properties.contains_key("bar"));
@@ -2538,9 +2465,7 @@ fn test_deserialize_anyof_with_duplicate_and_null_variants() {
 
 #[test]
 fn test_deserialize_anyof_with_large_number_of_variants() {
-    let variants: Vec<_> = (0..100)
-        .map(|i| json!({ "type": "integer", "minimum": i }))
-        .collect();
+    let variants: Vec<_> = (0..100).map(|i| json!({ "type": "integer", "minimum": i })).collect();
     let schema = json!({ "anyOf": variants });
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {

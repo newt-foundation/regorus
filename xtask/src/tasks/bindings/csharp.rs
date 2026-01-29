@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::HashSet;
-use std::fs::{self, File};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -90,10 +92,7 @@ pub fn build_nuget_package(config: &BuildNugetConfig) -> Result<BuildNugetResult
 
     let packages = find_packages(&package_dir)?;
 
-    Ok(BuildNugetResult {
-        package_dir,
-        packages,
-    })
+    Ok(BuildNugetResult { package_dir, packages })
 }
 
 /// Returns all NuGet packages currently present in the given directory.
@@ -103,12 +102,8 @@ pub fn find_packages(package_dir: &Path) -> Result<Vec<PathBuf>> {
     }
 
     let mut packages = Vec::new();
-    let entries = fs::read_dir(package_dir).with_context(|| {
-        format!(
-            "failed to enumerate NuGet artefacts under {}",
-            package_dir.display()
-        )
-    })?;
+    let entries = fs::read_dir(package_dir)
+        .with_context(|| format!("failed to enumerate NuGet artefacts under {}", package_dir.display()))?;
 
     for entry in entries {
         let entry = entry?;
@@ -196,10 +191,7 @@ impl BuildNugetCommand {
         let config = self.to_config();
         let result = build_nuget_package(&config)?;
 
-        println!(
-            "NuGet package(s) available under {}",
-            result.package_dir.display()
-        );
+        println!("NuGet package(s) available under {}", result.package_dir.display());
 
         if result.packages.is_empty() {
             println!("No NuGet packages were produced; check earlier log output.");
@@ -224,16 +216,15 @@ impl BuildNugetCommand {
 fn print_package_listing(packages: &[PathBuf]) -> Result<()> {
     for package in packages {
         println!("Contents of {}:", package.display());
-        let file =
-            File::open(package).with_context(|| format!("failed to open {}", package.display()))?;
-        let mut archive = ZipArchive::new(file)
-            .with_context(|| format!("failed to read zip archive from {}", package.display()))?;
+        let file = File::open(package).with_context(|| format!("failed to open {}", package.display()))?;
+        let mut archive =
+            ZipArchive::new(file).with_context(|| format!("failed to read zip archive from {}", package.display()))?;
 
         let mut entries = Vec::new();
         for index in 0..archive.len() {
-            let file = archive.by_index(index).with_context(|| {
-                format!("failed to access entry {index} in {}", package.display())
-            })?;
+            let file = archive
+                .by_index(index)
+                .with_context(|| format!("failed to access entry {index} in {}", package.display()))?;
             entries.push(file.name().to_string());
         }
 
@@ -296,9 +287,7 @@ impl TestCsharpCommand {
                 workspace.join(path)
             }
         } else {
-            workspace
-                .join("bindings/csharp/Regorus/bin")
-                .join(configuration)
+            workspace.join("bindings/csharp/Regorus/bin").join(configuration)
         };
 
         let build_config = BuildNugetConfig {
@@ -323,10 +312,7 @@ impl TestCsharpCommand {
             package_dir = build.package_dir;
             packages = build.packages;
         } else {
-            println!(
-                "Reusing existing NuGet package(s) under {}.",
-                package_dir.display()
-            );
+            println!("Reusing existing NuGet package(s) under {}.", package_dir.display());
         }
 
         if packages.is_empty() {
@@ -342,12 +328,8 @@ impl TestCsharpCommand {
         }
 
         let package_cache = workspace.join("bindings/csharp/.nuget/packages");
-        fs::create_dir_all(&package_cache).with_context(|| {
-            format!(
-                "failed to create NuGet cache directory at {}",
-                package_cache.display()
-            )
-        })?;
+        fs::create_dir_all(&package_cache)
+            .with_context(|| format!("failed to create NuGet cache directory at {}", package_cache.display()))?;
 
         let mut package_versions = HashSet::new();
         for package in &packages {
@@ -363,22 +345,12 @@ impl TestCsharpCommand {
         for version in &package_versions {
             let cache_entry = package_cache.join("regorus").join(version);
             if cache_entry.exists() {
-                fs::remove_dir_all(&cache_entry).with_context(|| {
-                    format!(
-                        "failed to remove cached package at {}",
-                        cache_entry.display()
-                    )
-                })?;
+                fs::remove_dir_all(&cache_entry)
+                    .with_context(|| format!("failed to remove cached package at {}", cache_entry.display()))?;
             }
         }
 
-        run_regorus_tests(
-            &workspace,
-            configuration,
-            &package_dir,
-            self.clean,
-            &package_cache,
-        )?;
+        run_regorus_tests(&workspace, configuration, &package_dir, self.clean, &package_cache)?;
 
         Ok(())
     }
@@ -407,12 +379,7 @@ fn run_regorus_tests(
     if clean {
         clean_msbuild_project(&regorus_tests)?;
     }
-    restore_with_source(
-        &regorus_tests,
-        &property_args,
-        "Regorus.Tests",
-        package_cache,
-    )?;
+    restore_with_source(&regorus_tests, &property_args, "Regorus.Tests", package_cache)?;
 
     let mut test = Command::new("dotnet");
     test.current_dir(&regorus_tests);
@@ -458,12 +425,7 @@ fn run_regorus_tests(
     if clean {
         clean_msbuild_project(&target_example)?;
     }
-    restore_with_source(
-        &target_example,
-        &property_args,
-        "TargetExampleApp",
-        package_cache,
-    )?;
+    restore_with_source(&target_example, &property_args, "TargetExampleApp", package_cache)?;
     let mut build_example = Command::new("dotnet");
     build_example.current_dir(&target_example);
     build_example.arg("build");
@@ -491,12 +453,7 @@ fn run_regorus_tests(
     Ok(())
 }
 
-fn restore_with_source(
-    project_dir: &Path,
-    properties: &[&str],
-    label: &str,
-    package_cache: &Path,
-) -> Result<()> {
+fn restore_with_source(project_dir: &Path, properties: &[&str], label: &str, package_cache: &Path) -> Result<()> {
     let mut restore = Command::new("dotnet");
     restore.current_dir(project_dir);
     restore.arg("restore");
@@ -516,22 +473,14 @@ fn clean_msbuild_project(project_dir: &Path) -> Result<()> {
 
     let bin_dir = project_dir.join("bin");
     if bin_dir.exists() {
-        fs::remove_dir_all(&bin_dir).with_context(|| {
-            format!(
-                "failed to remove bin directory at {} while cleaning",
-                bin_dir.display()
-            )
-        })?;
+        fs::remove_dir_all(&bin_dir)
+            .with_context(|| format!("failed to remove bin directory at {} while cleaning", bin_dir.display()))?;
     }
 
     let obj_dir = project_dir.join("obj");
     if obj_dir.exists() {
-        fs::remove_dir_all(&obj_dir).with_context(|| {
-            format!(
-                "failed to remove obj directory at {} while cleaning",
-                obj_dir.display()
-            )
-        })?;
+        fs::remove_dir_all(&obj_dir)
+            .with_context(|| format!("failed to remove obj directory at {} while cleaning", obj_dir.display()))?;
     }
 
     Ok(())

@@ -154,6 +154,9 @@ pub mod test_utils;
 pub mod utils;
 mod value;
 
+#[cfg(feature = "newton-crypto")]
+pub mod extensions;
+
 #[cfg(feature = "azure_policy")]
 pub use {
     compile::compile_policy_for_target,
@@ -169,9 +172,8 @@ pub use policy_info::PolicyInfo;
 pub use utils::limits::LimitError;
 #[cfg(feature = "allocator-memory-limits")]
 pub use utils::limits::{
-    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters,
-    global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
-    thread_memory_flush_threshold,
+    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters, global_memory_limit,
+    set_global_memory_limit, set_thread_flush_threshold_override, thread_memory_flush_threshold,
 };
 pub use value::Value;
 
@@ -333,7 +335,6 @@ pub struct QueryResult {
     /// Expressions in the query.
     ///
     /// Each statement in the query is treated as a separte expression.
-    ///
     pub expressions: Vec<Expression>,
 
     /// Bindings created in the query.
@@ -427,16 +428,34 @@ impl Default for QueryResult {
 ///
 /// // Assert expressions and bindings of results.
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
-/// assert_eq!(results.result[0].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
-/// assert_eq!(results.result[0].bindings[&Value::from("x")], Value::from(1u64));
+/// assert_eq!(
+///     results.result[0].expressions[0].text.as_ref(),
+///     "x = [1, 2, 3][_]"
+/// );
+/// assert_eq!(
+///     results.result[0].bindings[&Value::from("x")],
+///     Value::from(1u64)
+/// );
 ///
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
-/// assert_eq!(results.result[1].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
-/// assert_eq!(results.result[1].bindings[&Value::from("x")], Value::from(2u64));
+/// assert_eq!(
+///     results.result[1].expressions[0].text.as_ref(),
+///     "x = [1, 2, 3][_]"
+/// );
+/// assert_eq!(
+///     results.result[1].bindings[&Value::from("x")],
+///     Value::from(2u64)
+/// );
 ///
 /// assert_eq!(results.result[2].expressions[0].value, Value::Bool(true));
-/// assert_eq!(results.result[2].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
-/// assert_eq!(results.result[2].bindings[&Value::from("x")], Value::from(3u64));
+/// assert_eq!(
+///     results.result[2].expressions[0].text.as_ref(),
+///     "x = [1, 2, 3][_]"
+/// );
+/// assert_eq!(
+///     results.result[2].bindings[&Value::from("x")],
+///     Value::from(3u64)
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -452,16 +471,28 @@ impl Default for QueryResult {
 ///
 /// // Assert expressions and bindings of results.
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
-/// assert_eq!(results.result[0].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
+/// assert_eq!(
+///     results.result[0].expressions[0].text.as_ref(),
+///     "x = [1, 2, 3][_]"
+/// );
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
 /// assert_eq!(results.result[0].expressions[1].text.as_ref(), "x >= 2");
-/// assert_eq!(results.result[0].bindings[&Value::from("x")], Value::from(2u64));
+/// assert_eq!(
+///     results.result[0].bindings[&Value::from("x")],
+///     Value::from(2u64)
+/// );
 ///
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
-/// assert_eq!(results.result[1].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
+/// assert_eq!(
+///     results.result[1].expressions[0].text.as_ref(),
+///     "x = [1, 2, 3][_]"
+/// );
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
 /// assert_eq!(results.result[1].expressions[1].text.as_ref(), "x >= 2");
-/// assert_eq!(results.result[1].bindings[&Value::from("x")], Value::from(3u64));
+/// assert_eq!(
+///     results.result[1].bindings[&Value::from("x")],
+///     Value::from(3u64)
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -580,9 +611,7 @@ pub mod coverage {
 /// Items in `unstable` are likely to change.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::ast::*;
-    pub use crate::lexer::*;
-    pub use crate::parser::*;
+    pub use crate::{ast::*, lexer::*, parser::*};
 }
 
 #[cfg(test)]

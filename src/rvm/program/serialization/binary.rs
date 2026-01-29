@@ -1,18 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::format;
-use alloc::string::{String, ToString as _};
-use alloc::vec::Vec;
-use bincode::config::standard;
-use bincode::serde::{decode_from_slice, encode_to_vec};
+use alloc::{
+    format,
+    string::{String, ToString as _},
+    vec::Vec,
+};
+use bincode::{
+    config::standard,
+    serde::{decode_from_slice, encode_to_vec},
+};
 
 use super::{DeserializationResult, Program};
 use crate::value::Value;
 
-use super::value::{
-    binaries_to_values, binary_to_value, BinaryValue, BinaryValueRef, BinaryValueSlice,
-};
+use super::value::{binaries_to_values, binary_to_value, BinaryValue, BinaryValueRef, BinaryValueSlice};
 
 /// Helper for tracking offsets with overflow checking
 struct OffsetTracker {
@@ -196,63 +198,56 @@ impl Program {
                     .and_then(|v| v.checked_add(json_len))
                     .ok_or("Offset overflow")?;
 
-                let entry_points = decode_from_slice(
-                    Self::get_slice(data, entry_points_start, sources_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+                let entry_points =
+                    decode_from_slice(Self::get_slice(data, entry_points_start, sources_start)?, standard())
+                        .map(|(value, _)| value)
+                        .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
-                let sources = decode_from_slice(
-                    Self::get_slice(data, sources_start, binary_len_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Sources deserialization failed: {}", e))?;
+                let sources = decode_from_slice(Self::get_slice(data, sources_start, binary_len_start)?, standard())
+                    .map(|(value, _)| value)
+                    .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 let mut needs_recompilation = false;
 
-                let mut program = match decode_from_slice::<Program, _>(
-                    Self::get_slice(data, binary_start, json_start)?,
-                    standard(),
-                ) {
-                    Ok((prog, _)) => prog,
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Program::new()
-                    }
-                };
-
-                let (literals, rule_tree) =
-                    match serde_json::from_slice::<serde_json::Value>(Self::get_slice(
-                        data,
-                        json_start.checked_add(4).ok_or("Offset overflow")?,
-                        json_end,
-                    )?) {
-                        Ok(combined) => {
-                            let literals = combined
-                                .get("literals")
-                                .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
-                                .unwrap_or_else(|| {
-                                    needs_recompilation = true;
-                                    Vec::new()
-                                });
-
-                            let rule_tree = combined
-                                .get("rule_tree")
-                                .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
-                                .unwrap_or_else(|| {
-                                    needs_recompilation = true;
-                                    Value::new_object()
-                                });
-
-                            (literals, rule_tree)
-                        }
+                let mut program =
+                    match decode_from_slice::<Program, _>(Self::get_slice(data, binary_start, json_start)?, standard())
+                    {
+                        Ok((prog, _)) => prog,
                         Err(_e) => {
                             needs_recompilation = true;
-                            (Vec::new(), Value::new_object())
+                            Program::new()
                         }
                     };
+
+                let (literals, rule_tree) = match serde_json::from_slice::<serde_json::Value>(Self::get_slice(
+                    data,
+                    json_start.checked_add(4).ok_or("Offset overflow")?,
+                    json_end,
+                )?) {
+                    Ok(combined) => {
+                        let literals = combined
+                            .get("literals")
+                            .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
+                            .unwrap_or_else(|| {
+                                needs_recompilation = true;
+                                Vec::new()
+                            });
+
+                        let rule_tree = combined
+                            .get("rule_tree")
+                            .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
+                            .unwrap_or_else(|| {
+                                needs_recompilation = true;
+                                Value::new_object()
+                            });
+
+                        (literals, rule_tree)
+                    }
+                    Err(_e) => {
+                        needs_recompilation = true;
+                        (Vec::new(), Value::new_object())
+                    }
+                };
 
                 program.entry_points = entry_points;
                 program.sources = sources;
@@ -306,19 +301,14 @@ impl Program {
                     return Err("Data truncated".to_string());
                 }
 
-                let entry_points = decode_from_slice(
-                    Self::get_slice(data, entry_points_start, sources_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
+                let entry_points =
+                    decode_from_slice(Self::get_slice(data, entry_points_start, sources_start)?, standard())
+                        .map(|(value, _)| value)
+                        .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
 
-                let sources = decode_from_slice(
-                    Self::get_slice(data, sources_start, literals_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Sources deserialization failed: {}", e))?;
+                let sources = decode_from_slice(Self::get_slice(data, sources_start, literals_start)?, standard())
+                    .map(|(value, _)| value)
+                    .map_err(|e| format!("Sources deserialization failed: {}", e))?;
 
                 let mut needs_recompilation = false;
 
@@ -356,16 +346,15 @@ impl Program {
                     }
                 };
 
-                let mut program = match decode_from_slice::<Program, _>(
-                    Self::get_slice(data, binary_start, binary_end)?,
-                    standard(),
-                ) {
-                    Ok((prog, _)) => prog,
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Program::new()
-                    }
-                };
+                let mut program =
+                    match decode_from_slice::<Program, _>(Self::get_slice(data, binary_start, binary_end)?, standard())
+                    {
+                        Ok((prog, _)) => prog,
+                        Err(_e) => {
+                            needs_recompilation = true;
+                            Program::new()
+                        }
+                    };
 
                 program.entry_points = entry_points;
                 program.sources = sources;

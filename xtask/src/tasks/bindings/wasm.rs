@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::Result;
 use clap::Args;
@@ -28,12 +30,7 @@ impl BuildWasmCommand {
     pub fn run(&self) -> Result<()> {
         let workspace = workspace_root();
         let wasm_dir = workspace.join("bindings/wasm");
-        build_wasm(
-            &wasm_dir,
-            self.release,
-            &self.target,
-            self.out_dir.as_deref(),
-        )
+        build_wasm(&wasm_dir, self.release, &self.target, self.out_dir.as_deref())
     }
 }
 
@@ -70,12 +67,7 @@ impl TestWasmCommand {
         let wasm_dir = workspace.join("bindings/wasm");
 
         if !self.skip_build {
-            build_wasm(
-                &wasm_dir,
-                self.release,
-                &self.target,
-                self.out_dir.as_deref(),
-            )?;
+            build_wasm(&wasm_dir, self.release, &self.target, self.out_dir.as_deref())?;
         }
 
         run_wasm_tests(&wasm_dir, self.release)?;

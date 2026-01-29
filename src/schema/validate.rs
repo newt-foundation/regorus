@@ -50,22 +50,14 @@ impl SchemaValidator {
     }
 
     /// Internal validation function that tracks the current path for error reporting.
-    fn validate_with_path(
-        value: &Value,
-        schema: &Schema,
-        path: &str,
-    ) -> Result<(), ValidationError> {
+    fn validate_with_path(value: &Value, schema: &Schema, path: &str) -> Result<(), ValidationError> {
         match schema.as_type() {
             Type::Any { .. } => {
                 // Any type accepts all values
                 Ok(())
             }
-            Type::Integer {
-                minimum, maximum, ..
-            } => Self::validate_integer(value, *minimum, *maximum, path),
-            Type::Number {
-                minimum, maximum, ..
-            } => Self::validate_number(value, *minimum, *maximum, path),
+            Type::Integer { minimum, maximum, .. } => Self::validate_integer(value, *minimum, *maximum, path),
+            Type::Number { minimum, maximum, .. } => Self::validate_number(value, *minimum, *maximum, path),
             Type::Boolean { .. } => Self::validate_boolean(value, path),
             Type::Null { .. } => Self::validate_null(value, path),
             Type::String {
@@ -95,9 +87,7 @@ impl SchemaValidator {
                 path,
             ),
             Type::AnyOf(schemas) => Self::validate_any_of(value, schemas, path),
-            Type::Const {
-                value: const_value, ..
-            } => Self::validate_const(value, const_value, path),
+            Type::Const { value: const_value, .. } => Self::validate_const(value, const_value, path),
             Type::Enum { values, .. } => Self::validate_enum(value, values, path),
             Type::Set { items, .. } => Self::validate_set(value, items, path),
         }
@@ -252,11 +242,10 @@ impl SchemaValidator {
 
                 // Check pattern constraint
                 if let Some(pattern_str) = pattern {
-                    let regex =
-                        Regex::new(pattern_str).map_err(|e| ValidationError::InvalidPattern {
-                            pattern: pattern_str.as_ref().into(),
-                            error: e.to_string().into(),
-                        })?;
+                    let regex = Regex::new(pattern_str).map_err(|e| ValidationError::InvalidPattern {
+                        pattern: pattern_str.as_ref().into(),
+                        error: e.to_string().into(),
+                    })?;
 
                     if !regex.is_match(string_value) {
                         return Err(ValidationError::PatternMismatch {
@@ -321,12 +310,10 @@ impl SchemaValidator {
                             format!("{path}[{index}]")
                         },
                     )
-                    .map_err(|e| {
-                        ValidationError::ArrayItemValidationFailed {
-                            index,
-                            path: path.into(),
-                            error: Box::new(e),
-                        }
+                    .map_err(|e| ValidationError::ArrayItemValidationFailed {
+                        index,
+                        path: path.into(),
+                        error: Box::new(e),
                     })?;
                 }
 
@@ -398,26 +385,22 @@ impl SchemaValidator {
 
                         if let Some(prop_schema) = properties.get(prop_name_str) {
                             // Property is defined in schema, validate against it
-                            Self::validate_with_path(prop_value, prop_schema, &make_prop_path())
-                                .map_err(|e| ValidationError::PropertyValidationFailed {
-                                    property: prop_name_str.clone(),
-                                    path: path.into(),
-                                    error: Box::new(e),
-                                })?;
-                        } else if let Some(additional_schema) = additional_properties {
-                            // Property is not defined but additional properties are allowed
-                            Self::validate_with_path(
-                                prop_value,
-                                additional_schema,
-                                &make_prop_path(),
-                            )
-                            .map_err(|e| {
+                            Self::validate_with_path(prop_value, prop_schema, &make_prop_path()).map_err(|e| {
                                 ValidationError::PropertyValidationFailed {
                                     property: prop_name_str.clone(),
                                     path: path.into(),
                                     error: Box::new(e),
                                 }
                             })?;
+                        } else if let Some(additional_schema) = additional_properties {
+                            // Property is not defined but additional properties are allowed
+                            Self::validate_with_path(prop_value, additional_schema, &make_prop_path()).map_err(
+                                |e| ValidationError::PropertyValidationFailed {
+                                    property: prop_name_str.clone(),
+                                    path: path.into(),
+                                    error: Box::new(e),
+                                },
+                            )?;
                         } else {
                             // Property is not defined and additional properties are not allowed
                             return Err(ValidationError::AdditionalPropertiesNotAllowed {
@@ -438,11 +421,7 @@ impl SchemaValidator {
         }
     }
 
-    fn validate_any_of(
-        value: &Value,
-        schemas: &Vec<Schema>,
-        path: &str,
-    ) -> Result<(), ValidationError> {
+    fn validate_any_of(value: &Value, schemas: &Vec<Schema>, path: &str) -> Result<(), ValidationError> {
         let mut errors = Vec::new();
 
         for schema in schemas {
@@ -459,16 +438,11 @@ impl SchemaValidator {
         })
     }
 
-    fn validate_const(
-        value: &Value,
-        const_value: &Value,
-        path: &str,
-    ) -> Result<(), ValidationError> {
+    fn validate_const(value: &Value, const_value: &Value, path: &str) -> Result<(), ValidationError> {
         if value == const_value {
             Ok(())
         } else {
-            let expected_json =
-                serde_json::to_string(const_value).unwrap_or_else(|_| format!("{const_value:?}"));
+            let expected_json = serde_json::to_string(const_value).unwrap_or_else(|_| format!("{const_value:?}"));
             let actual_json = serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"));
 
             Err(ValidationError::ConstMismatch {
@@ -479,11 +453,7 @@ impl SchemaValidator {
         }
     }
 
-    fn validate_enum(
-        value: &Value,
-        allowed_values: &[Value],
-        path: &str,
-    ) -> Result<(), ValidationError> {
+    fn validate_enum(value: &Value, allowed_values: &[Value], path: &str) -> Result<(), ValidationError> {
         if allowed_values.contains(value) {
             Ok(())
         } else {
@@ -492,11 +462,7 @@ impl SchemaValidator {
 
             let allowed_json: Vec<String> = allowed_values
                 .iter()
-                .map(|v| {
-                    serde_json::to_string(v)
-                        .unwrap_or_else(|_| format!("{v:?}"))
-                        .into()
-                })
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| format!("{v:?}")).into())
                 .collect();
 
             Err(ValidationError::NotInEnum {
@@ -507,11 +473,7 @@ impl SchemaValidator {
         }
     }
 
-    fn validate_set(
-        value: &Value,
-        items_schema: &Schema,
-        path: &str,
-    ) -> Result<(), ValidationError> {
+    fn validate_set(value: &Value, items_schema: &Schema, path: &str) -> Result<(), ValidationError> {
         match value {
             Value::Set(set_value) => {
                 // Validate each item in the set
@@ -547,12 +509,13 @@ impl SchemaValidator {
         let discriminator_key = Value::String(discriminator_field.clone());
 
         // Find the discriminator field value in the object
-        let discriminator_value = object_value.get(&discriminator_key).ok_or_else(|| {
-            ValidationError::MissingDiscriminator {
-                discriminator: discriminator_field.clone(),
-                path: path.into(),
-            }
-        })?;
+        let discriminator_value =
+            object_value
+                .get(&discriminator_key)
+                .ok_or_else(|| ValidationError::MissingDiscriminator {
+                    discriminator: discriminator_field.clone(),
+                    path: path.into(),
+                })?;
 
         // Extract the string value from the discriminator field
         let discriminator_str = match discriminator_value {
@@ -567,15 +530,14 @@ impl SchemaValidator {
         };
 
         // Find the corresponding variant schema
-        let variant_schema = discriminated_subobject
-            .variants
-            .get(discriminator_str)
-            .ok_or_else(|| ValidationError::UnknownDiscriminatorValue {
+        let variant_schema = discriminated_subobject.variants.get(discriminator_str).ok_or_else(|| {
+            ValidationError::UnknownDiscriminatorValue {
                 discriminator: discriminator_field.clone(),
                 value: discriminator_str.into(),
                 allowed_values: discriminated_subobject.variants.keys().cloned().collect(),
                 path: path.into(),
-            })?;
+            }
+        })?;
 
         // Validate all properties against the appropriate schemas
         for (prop_name, prop_value) in object_value.iter() {
@@ -608,13 +570,13 @@ impl SchemaValidator {
             // Check if this property is defined in the base schema properties
             if let Some(prop_schema) = base_properties.get(prop_name_str) {
                 // Property is defined in base schema, validate against it
-                Self::validate_with_path(prop_value, prop_schema, &make_prop_path()).map_err(
-                    |e| ValidationError::PropertyValidationFailed {
+                Self::validate_with_path(prop_value, prop_schema, &make_prop_path()).map_err(|e| {
+                    ValidationError::PropertyValidationFailed {
                         property: prop_name_str.clone(),
                         path: path.into(),
                         error: Box::new(e),
-                    },
-                )?;
+                    }
+                })?;
                 continue;
             }
 
@@ -625,13 +587,13 @@ impl SchemaValidator {
                 continue;
             } else if let Some(base_additional) = base_additional_properties {
                 // Check if additional properties are allowed in the base schema
-                Self::validate_with_path(prop_value, base_additional, &make_prop_path()).map_err(
-                    |e| ValidationError::PropertyValidationFailed {
+                Self::validate_with_path(prop_value, base_additional, &make_prop_path()).map_err(|e| {
+                    ValidationError::PropertyValidationFailed {
                         property: prop_name_str.clone(),
                         path: path.into(),
                         error: Box::new(e),
-                    },
-                )?;
+                    }
+                })?;
             } else {
                 // Property is not defined and additional properties are not allowed
                 return Err(ValidationError::AdditionalPropertiesNotAllowed {
@@ -704,12 +666,10 @@ impl SchemaValidator {
                                 format!("{path}.{prop_name_str}")
                             },
                         )
-                        .map_err(|e| {
-                            ValidationError::PropertyValidationFailed {
-                                property: prop_name_str.clone(),
-                                path: path.into(),
-                                error: Box::new(e),
-                            }
+                        .map_err(|e| ValidationError::PropertyValidationFailed {
+                            property: prop_name_str.clone(),
+                            path: path.into(),
+                            error: Box::new(e),
                         })?;
                     }
                 }

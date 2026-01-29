@@ -1,9 +1,10 @@
-use super::super::error::TargetCompileError;
-use super::super::*;
-use crate::ast::{BoolOp, Expr, Literal, Query, Rule};
-use crate::compiled_policy::InferredResourceTypes;
-use crate::value::Value;
-use crate::{Rc, Schema};
+use super::super::{error::TargetCompileError, *};
+use crate::{
+    ast::{BoolOp, Expr, Literal, Query, Rule},
+    compiled_policy::InferredResourceTypes,
+    value::Value,
+    Rc, Schema,
+};
 
 type String = Rc<str>;
 
@@ -45,9 +46,7 @@ type String = Rc<str>;
 /// ```
 /// This function returns a map with entries for each query containing the resource type
 /// conditions, mapping queries to their respective type names and schemas.
-pub fn infer_resource_type(
-    interpreter: &mut Interpreter,
-) -> Result<InferredResourceTypes, TargetCompileError> {
+pub fn infer_resource_type(interpreter: &mut Interpreter) -> Result<InferredResourceTypes, TargetCompileError> {
     // Check if we have target info
     if let Some(ref target_info) = interpreter.compiled_policy.target_info {
         let target = &target_info.target;
@@ -265,7 +264,8 @@ fn validate_default_schema_compatibility(
                 format!(
                     "Default resource schema must either have additional properties enabled or contain a '{}' property",
                     resource_selector
-                ).into()
+                )
+                .into(),
             ))
         }
         _ => {

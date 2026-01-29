@@ -1,15 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::OsString;
-use std::path::Path;
+use std::{ffi::OsString, path::Path};
 
 use anyhow::Result;
 use clap::Args;
 
-use crate::tasks::util::{
-    opa_passing_arguments, run_cargo_step as util_run_cargo_step, workspace_root,
-};
+use crate::tasks::util::{opa_passing_arguments, run_cargo_step as util_run_cargo_step, workspace_root};
 
 pub mod musl;
 
@@ -187,12 +184,7 @@ fn run_ci_suite(config: CiSuiteConfig) -> Result<()> {
     )?;
 
     if config.include_run_example {
-        run_example(
-            &workspace,
-            config.release,
-            config.frozen,
-            joined_features.as_deref(),
-        )?;
+        run_example(&workspace, config.release, config.frozen, joined_features.as_deref())?;
     }
 
     run_named_test(
@@ -211,12 +203,7 @@ fn run_ci_suite(config: CiSuiteConfig) -> Result<()> {
         "kata",
     )?;
 
-    run_opa_tests(
-        &workspace,
-        config.release,
-        config.frozen,
-        &config.opa_features,
-    )?;
+    run_opa_tests(&workspace, config.release, config.frozen, &config.opa_features)?;
 
     if config.include_azure_policy {
         run_ci_cargo_step(
@@ -261,11 +248,7 @@ fn example_features(base: &[String]) -> String {
 }
 
 fn run_fmt(workspace: &Path) -> Result<()> {
-    util_run_cargo_step(
-        workspace,
-        "cargo xtask fmt --check",
-        ["xtask", "fmt", "--check"],
-    )
+    util_run_cargo_step(workspace, "cargo xtask fmt --check", ["xtask", "fmt", "--check"])
 }
 
 fn run_ci_cargo_step(
@@ -284,31 +267,12 @@ fn run_ci_cargo_step(
     util_run_cargo_step(workspace, label, args)
 }
 
-fn run_named_test(
-    workspace: &Path,
-    release: bool,
-    frozen: bool,
-    features: Option<&str>,
-    name: &str,
-) -> Result<()> {
+fn run_named_test(workspace: &Path, release: bool, frozen: bool, features: Option<&str>, name: &str) -> Result<()> {
     let label = format!("cargo test --test {} (ci)", name);
-    run_ci_cargo_step(
-        workspace,
-        "test",
-        release,
-        frozen,
-        features,
-        &["--test", name],
-        &label,
-    )
+    run_ci_cargo_step(workspace, "test", release, frozen, features, &["--test", name], &label)
 }
 
-fn run_example(
-    workspace: &Path,
-    release: bool,
-    frozen: bool,
-    features: Option<&str>,
-) -> Result<()> {
+fn run_example(workspace: &Path, release: bool, frozen: bool, features: Option<&str>) -> Result<()> {
     let mut args = base_cargo_args("run", release, frozen, features);
     args.extend(
         [
@@ -343,12 +307,7 @@ fn run_opa_tests(workspace: &Path, release: bool, frozen: bool, features: &str) 
     util_run_cargo_step(workspace, &label, args)
 }
 
-fn base_cargo_args(
-    subcommand: &str,
-    release: bool,
-    frozen: bool,
-    features: Option<&str>,
-) -> Vec<OsString> {
+fn base_cargo_args(subcommand: &str, release: bool, frozen: bool, features: Option<&str>) -> Vec<OsString> {
     let mut args = vec![OsString::from(subcommand)];
     if release {
         args.push(OsString::from("--release"));

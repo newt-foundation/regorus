@@ -1,28 +1,29 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::program::Program;
 #[cfg(feature = "allocator-memory-limits")]
 use crate::utils::limits;
-use crate::utils::limits::{
-    fallback_execution_timer_config, monotonic_now, ExecutionTimer, ExecutionTimerConfig,
-    LimitError,
+use crate::{
+    rvm::program::Program,
+    utils::limits::{fallback_execution_timer_config, monotonic_now, ExecutionTimer, ExecutionTimerConfig, LimitError},
+    value::Value,
+    CompiledPolicy,
 };
-use crate::value::Value;
-use crate::CompiledPolicy;
-use alloc::collections::{btree_map::Entry, BTreeMap, VecDeque};
 #[cfg(feature = "allocator-memory-limits")]
 use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{
+    collections::{btree_map::Entry, BTreeMap, VecDeque},
+    string::String,
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
 use core::time::Duration;
 
-use super::context::{CallRuleContext, ComprehensionContext, LoopContext};
-use super::errors::{Result, VmError};
-use super::execution_model::{
-    BreakpointSet, ExecutionMode, ExecutionStack, ExecutionState, SuspendReason,
+use super::{
+    context::{CallRuleContext, ComprehensionContext, LoopContext},
+    errors::{Result, VmError},
+    execution_model::{BreakpointSet, ExecutionMode, ExecutionStack, ExecutionState, SuspendReason},
 };
 
 /// The Rego Virtual Machine
@@ -145,9 +146,9 @@ impl RegoVM {
             call_rule_stack: Vec::new(),
             register_stack: Vec::new(),
             comprehension_stack: Vec::new(),
-            base_register_count: 2, // Default to 2 registers for basic operations
+            base_register_count: 2,           // Default to 2 registers for basic operations
             register_window_pool: Vec::new(), // Initialize register window pool
-            max_instructions: 25000, // Default maximum instruction limit
+            max_instructions: 25000,          // Default maximum instruction limit
             executed_instructions: 0,
             evaluated: Value::new_object(), // Initialize evaluation cache
             cache_hits: 0,                  // Initialize cache hit counter
@@ -208,8 +209,7 @@ impl RegoVM {
     pub fn set_base_register_count(&mut self, count: usize) {
         self.base_register_count = count.max(1); // Ensure at least 1 register
         if !self.registers.is_empty() {
-            self.registers
-                .resize(self.base_register_count, Value::Undefined);
+            self.registers.resize(self.base_register_count, Value::Undefined);
         }
     }
 
@@ -305,11 +305,7 @@ impl RegoVM {
         }
     }
 
-    pub(super) fn next_host_await_response(
-        &mut self,
-        identifier: &Value,
-        dest: u8,
-    ) -> Result<Value> {
+    pub(super) fn next_host_await_response(&mut self, identifier: &Value, dest: u8) -> Result<Value> {
         let missing_error = || VmError::HostAwaitResponseMissing {
             dest,
             identifier: identifier.clone(),
@@ -366,8 +362,7 @@ impl RegoVM {
     }
 
     fn effective_execution_timer_config(&self) -> Option<ExecutionTimerConfig> {
-        self.execution_timer_config
-            .or_else(fallback_execution_timer_config)
+        self.execution_timer_config.or_else(fallback_execution_timer_config)
     }
 
     pub(super) fn execution_timer_tick(&mut self, work_units: u32) -> Result<()> {
@@ -379,20 +374,18 @@ impl RegoVM {
             return Ok(());
         };
 
-        self.execution_timer
-            .tick(work_units, now)
-            .map_err(|err| match err {
-                LimitError::TimeLimitExceeded { elapsed, limit } => VmError::TimeLimitExceeded {
-                    elapsed,
-                    limit,
-                    pc: self.pc,
-                },
-                LimitError::MemoryLimitExceeded { usage, limit } => VmError::MemoryLimitExceeded {
-                    usage,
-                    limit,
-                    pc: self.pc,
-                },
-            })
+        self.execution_timer.tick(work_units, now).map_err(|err| match err {
+            LimitError::TimeLimitExceeded { elapsed, limit } => VmError::TimeLimitExceeded {
+                elapsed,
+                limit,
+                pc: self.pc,
+            },
+            LimitError::MemoryLimitExceeded { usage, limit } => VmError::MemoryLimitExceeded {
+                usage,
+                limit,
+                pc: self.pc,
+            },
+        })
     }
 
     pub(super) fn snapshot_execution_timer_on_suspend(&mut self) {
@@ -456,13 +449,14 @@ impl RegoVM {
     pub(super) fn set_register(&mut self, index: u8, value: Value) -> Result<()> {
         let register_count = self.registers.len();
 
-        let slot = self.registers.get_mut(usize::from(index)).ok_or(
-            VmError::RegisterIndexOutOfBounds {
+        let slot = self
+            .registers
+            .get_mut(usize::from(index))
+            .ok_or(VmError::RegisterIndexOutOfBounds {
                 index,
                 pc: self.pc,
                 register_count,
-            },
-        )?;
+            })?;
         *slot = value;
         Ok(())
     }

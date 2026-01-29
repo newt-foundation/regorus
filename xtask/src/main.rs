@@ -7,11 +7,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use tasks::{
-    BindingsCommand, BuildAllBindingsCommand, BuildFfiCommand, BuildJavaCommand, BuildNugetCommand,
-    BuildPythonCommand, BuildWasmCommand, CiDebugCommand, CiReleaseCommand, ClippyCommand,
-    FmtCommand, PrecommitCommand, PrepushCommand, TestAllBindingsCommand, TestCCommand,
-    TestCNoStdCommand, TestCppCommand, TestCsharpCommand, TestFfiCommand, TestGoCommand,
-    TestJavaCommand, TestMuslCommand, TestNoStdCommand, TestPythonCommand, TestRubyCommand,
+    BindingsCommand, BuildAllBindingsCommand, BuildFfiCommand, BuildJavaCommand, BuildNugetCommand, BuildPythonCommand,
+    BuildWasmCommand, CiDebugCommand, CiReleaseCommand, ClippyCommand, FmtCommand, PrecommitCommand, PrepushCommand,
+    TestAllBindingsCommand, TestCCommand, TestCNoStdCommand, TestCppCommand, TestCsharpCommand, TestFfiCommand,
+    TestGoCommand, TestJavaCommand, TestMuslCommand, TestNoStdCommand, TestPythonCommand, TestRubyCommand,
     TestWasmCommand, UpdateDepsCommand,
 };
 

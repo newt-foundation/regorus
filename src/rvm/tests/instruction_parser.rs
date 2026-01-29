@@ -10,8 +10,10 @@
 )] // tests unwrap conversions and slice math for brevity
 
 use crate::rvm::instructions::{Instruction, LoopMode};
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use anyhow::{anyhow, bail, Result};
 
 /// Parse a textual instruction like "Load { dest: 0, literal_idx: 1 }"
@@ -493,10 +495,7 @@ fn parse_loop_next(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let body_start = get_param_u16(&params, "body_start")?;
     let loop_end = get_param_u16(&params, "loop_end")?;
-    Ok(Instruction::LoopNext {
-        body_start,
-        loop_end,
-    })
+    Ok(Instruction::LoopNext { body_start, loop_end })
 }
 
 fn parse_load_true(params_text: &str) -> Result<Instruction> {

@@ -7,16 +7,15 @@
 
 use core::net::IpAddr;
 use ipnet::IpNet;
-use std::format;
-use std::string::ToString;
-use std::sync::Arc;
-use std::vec::Vec;
+use std::{format, string::ToString, sync::Arc, vec::Vec};
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{enforce_limit, ensure_args_count};
-use crate::lexer::Span;
-use crate::value::Value;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{enforce_limit, ensure_args_count},
+    lexer::Span,
+    value::Value,
+};
 
 use anyhow::{anyhow, bail, Result};
 
@@ -32,12 +31,7 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 /// `net::IpAddr` type to determine if the string is a valid IP,
 /// and checks to ensure that the mask is in bounds for the parsed
 /// IP address type (v4 or v6).
-pub fn cidr_is_valid(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+pub fn cidr_is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "cidr_is_valid", params, args, 1)?;
     let cidr = ensure_string("cidr_is_valid", &params[0], &args[0])?;
 
@@ -73,12 +67,7 @@ fn is_valid_cidr(cidr: Arc<str>) -> bool {
 }
 
 /// Checks if a CIDR string contains a given CIDR or individual network address.
-pub fn cidr_contains(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
+pub fn cidr_contains(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     ensure_args_count(span, "cidr_contains", params, args, 2)?;
     let cidr = ensure_string("cidr_contains", &params[0], &args[0])?;
     let cidr_or_ip = ensure_string("cidr_contains", &params[1], &args[1])?;
@@ -117,12 +106,7 @@ fn _cidr_contains(cidr: Arc<str>, cidr_or_ip: Arc<str>) -> Result<bool> {
     Ok(net.contains(&subnet))
 }
 
-pub fn cidr_expand(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+pub fn cidr_expand(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "cidr_expand", params, args, 1)?;
     let cidr = ensure_string("cidr_expand", &params[0], &args[0])?;
 
@@ -166,17 +150,11 @@ mod net_tests {
         let invalids = Vec::from(["256.0.0.0/8", "127.0.0.1/33", "::1/129"]);
 
         for cidr in valids {
-            assert!(
-                is_valid_cidr(Arc::from(cidr)),
-                "Valid CIDR {cidr} deemed invalid"
-            );
+            assert!(is_valid_cidr(Arc::from(cidr)), "Valid CIDR {cidr} deemed invalid");
         }
 
         for cidr in invalids {
-            assert!(
-                !is_valid_cidr(Arc::from(cidr)),
-                "Invalid CIDR {cidr} deemed valid"
-            );
+            assert!(!is_valid_cidr(Arc::from(cidr)), "Invalid CIDR {cidr} deemed valid");
         }
     }
 
@@ -184,39 +162,14 @@ mod net_tests {
     fn test_cidr_contains() {
         let test_cases: std::vec::IntoIter<(Arc<str>, Arc<str>, bool, bool)> = Vec::from([
             // Each case is a tuple of (cidr, cidr_or_ip, expected Ok(result), and expected error)
-            (
-                Arc::from("127.0.0.1/32"),
-                Arc::from("127.0.0.1"),
-                true,
-                false,
-            ),
-            (
-                Arc::from("10.0.0.0/8"),
-                Arc::from("10.10.10.10"),
-                true,
-                false,
-            ),
-            (
-                Arc::from("10.0.0.0/8"),
-                Arc::from("10.10.10.0/24"),
-                true,
-                false,
-            ),
+            (Arc::from("127.0.0.1/32"), Arc::from("127.0.0.1"), true, false),
+            (Arc::from("10.0.0.0/8"), Arc::from("10.10.10.10"), true, false),
+            (Arc::from("10.0.0.0/8"), Arc::from("10.10.10.0/24"), true, false),
             (Arc::from("fd00::/16"), Arc::from("fd00::/17"), true, false),
-            (
-                Arc::from("127.0.0.1/32"),
-                Arc::from("127.0.0.2"),
-                false,
-                false,
-            ),
+            (Arc::from("127.0.0.1/32"), Arc::from("127.0.0.2"), false, false),
             (Arc::from("10.0.0.0/8"), Arc::from("11.0.0.1"), false, false),
             (Arc::from("fd00::/16"), Arc::from("fd00::/15"), false, false),
-            (
-                Arc::from("127.0.0.0/8"),
-                Arc::from("not a cidr"),
-                false,
-                true,
-            ),
+            (Arc::from("127.0.0.0/8"), Arc::from("not a cidr"), false, true),
         ])
         .into_iter();
 
@@ -226,9 +179,7 @@ mod net_tests {
                 Err(_) if should_err => continue,
                 Ok(res) if res == result => continue,
                 _ => {
-                    panic!(
-                        "Expected `cidr_contains` for cidr {cidr} and subnet {sub} to be {result}"
-                    )
+                    panic!("Expected `cidr_contains` for cidr {cidr} and subnet {sub} to be {result}")
                 }
             }
         }
@@ -241,8 +192,7 @@ mod net_tests {
             (
                 "10.0.0.0/29",
                 Vec::from([
-                    "10.0.0.0", "10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5",
-                    "10.0.0.6", "10.0.0.7",
+                    "10.0.0.0", "10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6", "10.0.0.7",
                 ]),
             ),
         ]);

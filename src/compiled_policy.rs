@@ -7,12 +7,7 @@
     clippy::pattern_type_mismatch
 )]
 
-use crate::ast::*;
-use crate::compiler::hoist::HoistedLoopsLookup;
-use crate::engine::Engine;
-use crate::scheduler::*;
-use crate::utils::*;
-use crate::*;
+use crate::{ast::*, compiler::hoist::HoistedLoopsLookup, engine::Engine, scheduler::*, utils::*, *};
 
 use alloc::collections::BTreeMap;
 use anyhow::Result;
@@ -163,17 +158,17 @@ impl CompiledPolicy {
 
         // Extract applicable resource types from inferred types
         #[cfg(feature = "azure_policy")]
-        let applicable_resource_types: Vec<Rc<str>> =
-            if let Some(inferred_types) = &self.inner.inferred_resource_types {
-                inferred_types
-                    .values()
-                    .map(|(resource_type, _schema)| resource_type.clone())
-                    .collect::<std::collections::BTreeSet<_>>() // Remove duplicates
-                    .into_iter()
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        let applicable_resource_types: Vec<Rc<str>> = if let Some(inferred_types) = &self.inner.inferred_resource_types
+        {
+            inferred_types
+                .values()
+                .map(|(resource_type, _schema)| resource_type.clone())
+                .collect::<std::collections::BTreeSet<_>>() // Remove duplicates
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         #[cfg(not(feature = "azure_policy"))]
         let applicable_resource_types: Vec<Rc<str>> = Vec::new();

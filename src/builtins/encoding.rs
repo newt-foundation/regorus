@@ -2,17 +2,17 @@
 // Licensed under the MIT License.
 #![allow(clippy::unused_trait_names, clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
 #[cfg(feature = "urlquery")]
 use crate::builtins::utils::enforce_limit;
 #[allow(unused)]
-use crate::builtins::utils::{
-    ensure_args_count, ensure_object, ensure_string, ensure_string_collection,
+use crate::builtins::utils::{ensure_args_count, ensure_object, ensure_string, ensure_string_collection};
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    lexer::Span,
+    value::Value,
+    *,
 };
-use crate::lexer::Span;
-use crate::value::Value;
-use crate::*;
 
 #[allow(unused)]
 use anyhow::{anyhow, bail, Context, Result};
@@ -56,51 +56,28 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 }
 
 #[cfg(feature = "base64")]
-fn base64_decode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64.decode";
     ensure_args_count(span, name, params, args, 1)?;
 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     let decoded_bytes = data_encoding::BASE64
         .decode(encoded_str.as_bytes())
-        .map_err(|e| {
-            params[0]
-                .span()
-                .error(&format!("decode failed\nCaused by\n{e}"))
-        })?;
-    Ok(Value::String(
-        String::from_utf8_lossy(&decoded_bytes).into(),
-    ))
+        .map_err(|e| params[0].span().error(&format!("decode failed\nCaused by\n{e}")))?;
+    Ok(Value::String(String::from_utf8_lossy(&decoded_bytes).into()))
 }
 
 #[cfg(feature = "base64")]
-fn base64_encode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64_encode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64.encode";
     ensure_args_count(span, name, params, args, 1)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
-    Ok(Value::String(
-        data_encoding::BASE64.encode(string.as_bytes()).into(),
-    ))
+    Ok(Value::String(data_encoding::BASE64.encode(string.as_bytes()).into()))
 }
 
 #[cfg(feature = "base64")]
-fn base64_is_valid(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64_is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64.is_valid";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -111,12 +88,7 @@ fn base64_is_valid(
 }
 
 #[cfg(feature = "base64url")]
-fn base64url_decode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64url_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64url.decode";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -137,42 +109,26 @@ fn base64url_decode(
         }
     };
 
-    Ok(Value::String(
-        String::from_utf8_lossy(&decoded_bytes).into(),
-    ))
+    Ok(Value::String(String::from_utf8_lossy(&decoded_bytes).into()))
 }
 
 #[cfg(feature = "base64url")]
-fn base64url_encode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64url_encode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64url.encode";
     ensure_args_count(span, name, params, args, 1)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
-    Ok(Value::String(
-        data_encoding::BASE64URL.encode(string.as_bytes()).into(),
-    ))
+    Ok(Value::String(data_encoding::BASE64URL.encode(string.as_bytes()).into()))
 }
 
 #[cfg(feature = "base64url")]
-fn base64url_encode_no_pad(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn base64url_encode_no_pad(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "base64url.encode_no_pad";
     ensure_args_count(span, name, params, args, 1)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
-        data_encoding::BASE64URL_NOPAD
-            .encode(string.as_bytes())
-            .into(),
+        data_encoding::BASE64URL_NOPAD.encode(string.as_bytes()).into(),
     ))
 }
 
@@ -184,14 +140,8 @@ fn hex_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let encoded_str = ensure_string(name, &params[0], &args[0])?;
     let decoded_bytes = data_encoding::HEXLOWER_PERMISSIVE
         .decode(encoded_str.as_bytes())
-        .map_err(|e| {
-            params[0]
-                .span()
-                .error(&format!("decode failure\nCaused by\n{e}"))
-        })?;
-    Ok(Value::String(
-        String::from_utf8_lossy(&decoded_bytes).into(),
-    ))
+        .map_err(|e| params[0].span().error(&format!("decode failure\nCaused by\n{e}")))?;
+    Ok(Value::String(String::from_utf8_lossy(&decoded_bytes).into()))
 }
 
 #[cfg(feature = "hex")]
@@ -201,19 +151,12 @@ fn hex_encode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
 
     let string = ensure_string(name, &params[0], &args[0])?;
     Ok(Value::String(
-        data_encoding::HEXLOWER_PERMISSIVE
-            .encode(string.as_bytes())
-            .into(),
+        data_encoding::HEXLOWER_PERMISSIVE.encode(string.as_bytes()).into(),
     ))
 }
 
 #[cfg(feature = "urlquery")]
-fn urlquery_decode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn urlquery_decode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "urlquery.decode";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -236,12 +179,7 @@ fn urlquery_decode(
 }
 
 #[cfg(feature = "urlquery")]
-fn urlquery_decode_object(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn urlquery_decode_object(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "urlquery.decode_object";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -266,12 +204,7 @@ fn urlquery_decode_object(
 }
 
 #[cfg(feature = "urlquery")]
-fn urlquery_encode(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn urlquery_encode(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "urlquery.encode";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -291,12 +224,7 @@ fn urlquery_encode(
 }
 
 #[cfg(feature = "urlquery")]
-fn urlquery_encode_object(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn urlquery_encode_object(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "urlquery.encode_object";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -332,12 +260,7 @@ fn urlquery_encode_object(
 }
 
 #[cfg(feature = "yaml")]
-fn yaml_is_valid(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn yaml_is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "yaml.is_valid";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -350,31 +273,21 @@ fn yaml_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool
     let name = "yaml.marshal";
     ensure_args_count(span, name, params, args, 1)?;
 
-    let serialized = serde_yaml::to_string(&args[0])
-        .map_err(|err| span.error(&format!("could not serialize to yaml: {err}")))?;
+    let serialized =
+        serde_yaml::to_string(&args[0]).map_err(|err| span.error(&format!("could not serialize to yaml: {err}")))?;
 
     Ok(Value::String(serialized.into()))
 }
 
 #[cfg(feature = "yaml")]
-fn yaml_unmarshal(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn yaml_unmarshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "yaml.unmarshal";
     ensure_args_count(span, name, params, args, 1)?;
     let yaml_str = ensure_string(name, &params[0], &args[0])?;
     Value::from_yaml_str(&yaml_str).with_context(|| span.error("could not deserialize yaml."))
 }
 
-fn json_is_valid(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn json_is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.is_valid";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -385,17 +298,12 @@ fn json_is_valid(
 fn json_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.marshal";
     ensure_args_count(span, name, params, args, 1)?;
-    Ok(Value::from(serde_json::to_string(&args[0]).map_err(
-        |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
-    )?))
+    Ok(Value::from(serde_json::to_string(&args[0]).map_err(|e| {
+        span.error(&format!("could not serialize to json\nCaused by\n{e}"))
+    })?))
 }
 
-fn json_marshal_with_options(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn json_marshal_with_options(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.marshal_with_options";
     ensure_args_count(span, name, params, args, 2)?;
 
@@ -412,15 +320,15 @@ fn json_marshal_with_options(
             Value::String(s) if s.as_ref() == "prefix" && option_value.as_string().is_ok() => {
                 prefix = Some(option_value.as_string()?.as_ref().to_string());
             }
-            Value::String(s) if s.as_ref() == "prefix" => bail!(params[1]
-                .span()
-                .error("marshaling option `pretty` must be string")),
+            Value::String(s) if s.as_ref() == "prefix" => {
+                bail!(params[1].span().error("marshaling option `pretty` must be string"))
+            }
             Value::String(s) if s.as_ref() == "indent" && option_value.as_string().is_ok() => {
                 indent = Some(option_value.as_string()?.as_ref().to_string());
             }
-            Value::String(s) if s.as_ref() == "indent" => bail!(params[1]
-                .span()
-                .error("marshaling option `pretty` must be string")),
+            Value::String(s) if s.as_ref() == "indent" => {
+                bail!(params[1].span().error("marshaling option `pretty` must be string"))
+            }
             _ => bail!(params[1]
                 .span()
                 .error("marshaling option must be one of `indent`, `prefix` or `pretty`")),
@@ -428,9 +336,9 @@ fn json_marshal_with_options(
     }
 
     if !pretty || options.is_empty() {
-        return Ok(Value::from(serde_json::to_string(&args[0]).map_err(
-            |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
-        )?));
+        return Ok(Value::from(serde_json::to_string(&args[0]).map_err(|e| {
+            span.error(&format!("could not serialize to json\nCaused by\n{e}"))
+        })?));
     }
 
     let lines: Vec<String> = serde_json::to_string_pretty(&args[0])
@@ -456,12 +364,7 @@ fn json_marshal_with_options(
     Ok(Value::from(lines.join("\n")))
 }
 
-fn json_unmarshal(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn json_unmarshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.unmarshal";
     ensure_args_count(span, name, params, args, 1)?;
     let json_str = ensure_string(name, &params[0], &args[0])?;

@@ -66,10 +66,7 @@ pub enum ValidationError {
         path: String,
     },
     /// Value does not match any schema in a union (anyOf).
-    NoUnionMatch {
-        path: String,
-        errors: Vec<ValidationError>,
-    },
+    NoUnionMatch { path: String, errors: Vec<ValidationError> },
     /// Invalid regex pattern in schema.
     InvalidPattern { pattern: String, error: String },
     /// Array item validation failed.
@@ -101,32 +98,17 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ValidationError::TypeMismatch {
-                expected,
-                actual,
-                path,
-            } => {
-                write!(
-                    f,
-                    "Type mismatch at '{path}': expected {expected}, got {actual}"
-                )
+            ValidationError::TypeMismatch { expected, actual, path } => {
+                write!(f, "Type mismatch at '{path}': expected {expected}, got {actual}")
             }
-            ValidationError::OutOfRange {
-                value,
-                min,
-                max,
-                path,
-            } => {
+            ValidationError::OutOfRange { value, min, max, path } => {
                 let range_desc = match (min, max) {
                     (Some(min), Some(max)) => format!("between {min} and {max}"),
                     (Some(min), None) => format!("at least {min}"),
                     (None, Some(max)) => format!("at most {max}"),
                     (None, None) => "within valid range".to_string(),
                 };
-                write!(
-                    f,
-                    "Value {value} at '{path}' is out of range: must be {range_desc}"
-                )
+                write!(f, "Value {value} at '{path}' is out of range: must be {range_desc}")
             }
             ValidationError::LengthConstraint {
                 actual_length,
@@ -145,15 +127,8 @@ impl fmt::Display for ValidationError {
                     "String length {actual_length} at '{path}' violates constraint: must be {constraint_desc}"
                 )
             }
-            ValidationError::PatternMismatch {
-                value,
-                pattern,
-                path,
-            } => {
-                write!(
-                    f,
-                    "String '{value}' at '{path}' does not match pattern '{pattern}'"
-                )
+            ValidationError::PatternMismatch { value, pattern, path } => {
+                write!(f, "String '{value}' at '{path}' does not match pattern '{pattern}'")
             }
             ValidationError::ArraySizeConstraint {
                 actual_size,
@@ -175,40 +150,26 @@ impl fmt::Display for ValidationError {
             ValidationError::MissingRequiredProperty { property, path } => {
                 write!(f, "Missing required property '{property}' at '{path}'")
             }
-            ValidationError::PropertyValidationFailed {
-                property,
-                path,
-                error,
-            } => {
-                write!(
-                    f,
-                    "Property '{property}' at '{path}' failed validation: {error}"
-                )
+            ValidationError::PropertyValidationFailed { property, path, error } => {
+                write!(f, "Property '{property}' at '{path}' failed validation: {error}")
             }
             ValidationError::AdditionalPropertiesNotAllowed { property, path } => {
-                write!(
-                    f,
-                    "Additional property '{property}' not allowed at '{path}'"
-                )
+                write!(f, "Additional property '{property}' not allowed at '{path}'")
             }
             ValidationError::NotInEnum {
                 value,
                 allowed_values,
                 path,
             } => {
-                let values_json = serde_json::to_string(&allowed_values)
-                    .unwrap_or_else(|_| format!("{allowed_values:?}"));
+                let values_json =
+                    serde_json::to_string(&allowed_values).unwrap_or_else(|_| format!("{allowed_values:?}"));
 
                 write!(
                     f,
                     "Value '{value}' at '{path}' is not in allowed enum values: {values_json}",
                 )
             }
-            ValidationError::ConstMismatch {
-                expected,
-                actual,
-                path,
-            } => {
+            ValidationError::ConstMismatch { expected, actual, path } => {
                 write!(
                     f,
                     "Constant mismatch at '{path}': expected '{expected}', got '{actual}'"
@@ -224,25 +185,13 @@ impl fmt::Display for ValidationError {
                 write!(f, "Invalid regex pattern '{pattern}': {error}")
             }
             ValidationError::ArrayItemValidationFailed { index, path, error } => {
-                write!(
-                    f,
-                    "Array item {index} at '{path}' failed validation: {error}"
-                )
+                write!(f, "Array item {index} at '{path}' failed validation: {error}")
             }
             ValidationError::NonStringKey { key_type, path } => {
-                write!(
-                    f,
-                    "Object key at '{path}' must be a string, but found {key_type}"
-                )
+                write!(f, "Object key at '{path}' must be a string, but found {key_type}")
             }
-            ValidationError::MissingDiscriminator {
-                discriminator,
-                path,
-            } => {
-                write!(
-                    f,
-                    "Missing discriminator field '{discriminator}' at '{path}'"
-                )
+            ValidationError::MissingDiscriminator { discriminator, path } => {
+                write!(f, "Missing discriminator field '{discriminator}' at '{path}'")
             }
             ValidationError::UnknownDiscriminatorValue {
                 discriminator,

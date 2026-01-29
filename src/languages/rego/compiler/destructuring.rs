@@ -1,14 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 #![allow(clippy::pattern_type_mismatch)]
-use super::Compiler;
-use super::Register;
-use crate::compiler::destructuring_planner::plans::{
-    AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide,
+use super::{Compiler, Register};
+use crate::{
+    compiler::destructuring_planner::plans::{AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide},
+    lexer::Span,
+    rvm::instructions::Instruction,
+    value::Value,
 };
-use crate::lexer::Span;
-use crate::rvm::instructions::Instruction;
-use crate::value::Value;
 use anyhow::{bail, Result};
 
 #[derive(Clone, Copy, Debug)]
@@ -24,10 +23,7 @@ impl PlanContext {
     fn require_defined_values(self) -> bool {
         matches!(
             self,
-            PlanContext::Assignment
-                | PlanContext::FunctionParameter
-                | PlanContext::LoopIndex
-                | PlanContext::SomeIn
+            PlanContext::Assignment | PlanContext::FunctionParameter | PlanContext::LoopIndex | PlanContext::SomeIn
         )
     }
 }
@@ -39,52 +35,25 @@ impl<'a> Compiler<'a> {
         span: &Span,
     ) -> Result<Register> {
         match plan {
-            AssignmentPlan::ColonEquals {
-                rhs_expr, lhs_plan, ..
-            } => {
+            AssignmentPlan::ColonEquals { rhs_expr, lhs_plan, .. } => {
                 let rhs_reg = self.compile_rego_expr_with_span(rhs_expr, rhs_expr.span(), false)?;
-                let _ = self.apply_destructuring_plan(
-                    lhs_plan,
-                    rhs_reg,
-                    span,
-                    PlanContext::ColonAssignment,
-                )?;
+                let _ = self.apply_destructuring_plan(lhs_plan, rhs_reg, span, PlanContext::ColonAssignment)?;
                 Ok(rhs_reg)
             }
-            AssignmentPlan::EqualsBindLeft {
-                rhs_expr, lhs_plan, ..
-            } => {
+            AssignmentPlan::EqualsBindLeft { rhs_expr, lhs_plan, .. } => {
                 let rhs_reg = self.compile_rego_expr_with_span(rhs_expr, rhs_expr.span(), false)?;
-                let _ = self.apply_destructuring_plan(
-                    lhs_plan,
-                    rhs_reg,
-                    span,
-                    PlanContext::Assignment,
-                )?;
+                let _ = self.apply_destructuring_plan(lhs_plan, rhs_reg, span, PlanContext::Assignment)?;
                 Ok(self.load_bool_literal(true, span))
             }
-            AssignmentPlan::EqualsBindRight {
-                lhs_expr, rhs_plan, ..
-            } => {
+            AssignmentPlan::EqualsBindRight { lhs_expr, rhs_plan, .. } => {
                 let lhs_reg = self.compile_rego_expr_with_span(lhs_expr, lhs_expr.span(), false)?;
-                let _ = self.apply_destructuring_plan(
-                    rhs_plan,
-                    lhs_reg,
-                    span,
-                    PlanContext::Assignment,
-                )?;
+                let _ = self.apply_destructuring_plan(rhs_plan, lhs_reg, span, PlanContext::Assignment)?;
                 Ok(self.load_bool_literal(true, span))
             }
             AssignmentPlan::EqualsBothSides { element_pairs, .. } => {
                 for (value_expr, value_plan) in element_pairs {
-                    let value_reg =
-                        self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
-                    let _ = self.apply_destructuring_plan(
-                        value_plan,
-                        value_reg,
-                        span,
-                        PlanContext::Assignment,
-                    )?;
+                    let value_reg = self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
+                    let _ = self.apply_destructuring_plan(value_plan, value_reg, span, PlanContext::Assignment)?;
                 }
                 Ok(self.load_bool_literal(true, span))
             }
@@ -112,21 +81,13 @@ impl<'a> Compiler<'a> {
             } => match wildcard_side {
                 WildcardSide::Both => Ok(self.load_bool_literal(true, span)),
                 WildcardSide::Lhs => {
-                    let rhs_reg =
-                        self.compile_rego_expr_with_span(rhs_expr, rhs_expr.span(), false)?;
-                    self.emit_instruction(
-                        Instruction::AssertNotUndefined { register: rhs_reg },
-                        span,
-                    );
+                    let rhs_reg = self.compile_rego_expr_with_span(rhs_expr, rhs_expr.span(), false)?;
+                    self.emit_instruction(Instruction::AssertNotUndefined { register: rhs_reg }, span);
                     Ok(self.load_bool_literal(true, span))
                 }
                 WildcardSide::Rhs => {
-                    let lhs_reg =
-                        self.compile_rego_expr_with_span(lhs_expr, lhs_expr.span(), false)?;
-                    self.emit_instruction(
-                        Instruction::AssertNotUndefined { register: lhs_reg },
-                        span,
-                    );
+                    let lhs_reg = self.compile_rego_expr_with_span(lhs_expr, lhs_expr.span(), false)?;
+                    self.emit_instruction(Instruction::AssertNotUndefined { register: lhs_reg }, span);
                     Ok(self.load_bool_literal(true, span))
                 }
             },
@@ -143,22 +104,12 @@ impl<'a> Compiler<'a> {
             BindingPlan::Assignment { .. } => {
                 bail!("assignment binding plans should be handled via compile_assignment_plan")
             }
-            BindingPlan::LoopIndex {
-                destructuring_plan, ..
-            } => self.apply_destructuring_plan(
-                destructuring_plan,
-                value_register,
-                span,
-                PlanContext::LoopIndex,
-            ),
-            BindingPlan::Parameter {
-                destructuring_plan, ..
-            } => self.apply_destructuring_plan(
-                destructuring_plan,
-                value_register,
-                span,
-                PlanContext::FunctionParameter,
-            ),
+            BindingPlan::LoopIndex { destructuring_plan, .. } => {
+                self.apply_destructuring_plan(destructuring_plan, value_register, span, PlanContext::LoopIndex)
+            }
+            BindingPlan::Parameter { destructuring_plan, .. } => {
+                self.apply_destructuring_plan(destructuring_plan, value_register, span, PlanContext::FunctionParameter)
+            }
             BindingPlan::SomeIn { .. } => {
                 bail!("use apply_some_in_binding_plan for SomeIn bindings")
             }
@@ -176,8 +127,7 @@ impl<'a> Compiler<'a> {
         if let (Some(plan), Some(register)) = (key_plan, key_register) {
             let _ = self.apply_destructuring_plan(plan, register, span, PlanContext::SomeIn)?;
         }
-        let _ =
-            self.apply_destructuring_plan(value_plan, value_register, span, PlanContext::SomeIn)?;
+        let _ = self.apply_destructuring_plan(value_plan, value_register, span, PlanContext::SomeIn)?;
         Ok(())
     }
 
@@ -194,8 +144,7 @@ impl<'a> Compiler<'a> {
             }
             DestructuringPlan::Ignore => {}
             DestructuringPlan::EqualityExpr(expected_expr) => {
-                let expected_reg =
-                    self.compile_rego_expr_with_span(expected_expr, expected_expr.span(), false)?;
+                let expected_reg = self.compile_rego_expr_with_span(expected_expr, expected_expr.span(), false)?;
                 let cmp_reg = self.alloc_register();
                 self.emit_instruction(
                     Instruction::Eq {
@@ -240,15 +189,9 @@ impl<'a> Compiler<'a> {
                         span,
                     );
                     if context.require_defined_values() {
-                        self.emit_instruction(
-                            Instruction::AssertNotUndefined {
-                                register: element_reg,
-                            },
-                            span,
-                        );
+                        self.emit_instruction(Instruction::AssertNotUndefined { register: element_reg }, span);
                     }
-                    let _ =
-                        self.apply_destructuring_plan(element_plan, element_reg, span, context)?;
+                    let _ = self.apply_destructuring_plan(element_plan, element_reg, span, context)?;
                 }
             }
             DestructuringPlan::Object {
@@ -266,18 +209,12 @@ impl<'a> Compiler<'a> {
                         },
                         span,
                     );
-                    self.emit_instruction(
-                        Instruction::AssertNotUndefined {
-                            register: field_reg,
-                        },
-                        span,
-                    );
+                    self.emit_instruction(Instruction::AssertNotUndefined { register: field_reg }, span);
                     let _ = self.apply_destructuring_plan(field_plan, field_reg, span, context)?;
                 }
 
                 for (key_expr, field_plan) in dynamic_fields {
-                    let key_reg =
-                        self.compile_rego_expr_with_span(key_expr, key_expr.span(), false)?;
+                    let key_reg = self.compile_rego_expr_with_span(key_expr, key_expr.span(), false)?;
                     let field_reg = self.alloc_register();
                     self.emit_instruction(
                         Instruction::Index {
@@ -287,12 +224,7 @@ impl<'a> Compiler<'a> {
                         },
                         span,
                     );
-                    self.emit_instruction(
-                        Instruction::AssertNotUndefined {
-                            register: field_reg,
-                        },
-                        span,
-                    );
+                    self.emit_instruction(Instruction::AssertNotUndefined { register: field_reg }, span);
                     let _ = self.apply_destructuring_plan(field_plan, field_reg, span, context)?;
                 }
             }
@@ -346,12 +278,7 @@ impl<'a> Compiler<'a> {
         dest
     }
 
-    fn assert_array_length(
-        &mut self,
-        array_register: Register,
-        expected_length: usize,
-        span: &Span,
-    ) -> Result<()> {
+    fn assert_array_length(&mut self, array_register: Register, expected_length: usize, span: &Span) -> Result<()> {
         let expected_literal = self.add_literal(Value::from(expected_length));
         let actual_len_reg = self.alloc_register();
         self.emit_instruction(

@@ -9,16 +9,20 @@
 )]
 
 use super::{Compiler, CompilerError, Register, Result, WorklistEntry};
-use crate::lexer::Span;
-use crate::rvm::instructions::{
-    ChainedIndexParams, LiteralOrRegister, VirtualDataDocumentLookupParams,
+use crate::{
+    lexer::Span,
+    rvm::{
+        instructions::{ChainedIndexParams, LiteralOrRegister, VirtualDataDocumentLookupParams},
+        Instruction,
+    },
+    Value,
 };
-use crate::rvm::Instruction;
-use crate::Value;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 use crate::ast::{Expr, ExprRef};
 
@@ -124,8 +128,7 @@ impl<'a> Compiler<'a> {
                 _ => self.compile_local_var_chain(&name, &chain, span),
             },
             ReferenceRoot::Expression(root_expr) => {
-                let root_reg =
-                    self.compile_rego_expr_with_span(&root_expr, root_expr.span(), false)?;
+                let root_reg = self.compile_rego_expr_with_span(&root_expr, root_expr.span(), false)?;
                 self.compile_chain_access(root_reg, &chain.components, span)
             }
         }
@@ -198,15 +201,10 @@ impl<'a> Compiler<'a> {
         if !matching_rules.is_empty() {
             // This path is a prefix of some rules - use DataVirtualDocumentLookup
             for rule_path in &matching_rules {
-                if !self
-                    .rule_worklist
-                    .iter()
-                    .any(|entry| entry.rule_path == *rule_path)
-                {
+                if !self.rule_worklist.iter().any(|entry| entry.rule_path == *rule_path) {
                     // Assign a rule index for this rule before adding to worklist
                     self.get_or_assign_rule_index(rule_path)?;
-                    let entry =
-                        WorklistEntry::new(rule_path.clone(), self.current_call_stack.clone());
+                    let entry = WorklistEntry::new(rule_path.clone(), self.current_call_stack.clone());
                     self.rule_worklist.push(entry);
                 }
             }
@@ -277,19 +275,11 @@ impl<'a> Compiler<'a> {
         // 1. It's at least as long as the pattern, OR
         // 2. It matches all available components and the remaining pattern parts are wildcards
         rule_parts.len() >= pattern_parts.len()
-            || (match_length > 0
-                && pattern_parts[match_length..]
-                    .iter()
-                    .all(|&part| part == "*"))
+            || (match_length > 0 && pattern_parts[match_length..].iter().all(|&part| part == "*"))
     }
 
     /// Compile local variable access chain
-    fn compile_local_var_chain(
-        &mut self,
-        root: &str,
-        chain: &ReferenceChain,
-        span: &Span,
-    ) -> Result<Register> {
+    fn compile_local_var_chain(&mut self, root: &str, chain: &ReferenceChain, span: &Span) -> Result<Register> {
         // Check if it's a local variable first (precedence over rules)
         if let Some(var_reg) = self.lookup_variable(root) {
             if chain.components.is_empty() {
@@ -338,8 +328,7 @@ impl<'a> Compiler<'a> {
         // No rule found; fall back to module-level imports.
         let import_key = format!("{}.{}", &self.current_package, root);
         if let Some(import_expr) = self.policy.inner.imports.get(&import_key) {
-            let import_reg =
-                self.compile_rego_expr_with_span(import_expr, import_expr.span(), false)?;
+            let import_reg = self.compile_rego_expr_with_span(import_expr, import_expr.span(), false)?;
             if chain.components.is_empty() {
                 return Ok(import_reg);
             }
@@ -347,10 +336,7 @@ impl<'a> Compiler<'a> {
         }
 
         // No rule or import found - undefined variable
-        Err(CompilerError::UndefinedVariable {
-            name: root.to_string(),
-        }
-        .at(span))
+        Err(CompilerError::UndefinedVariable { name: root.to_string() }.at(span))
     }
 
     /// Compile chain access using appropriate instructions based on chain length and complexity
@@ -419,10 +405,7 @@ impl<'a> Compiler<'a> {
             };
 
             let params_index = self.program.instruction_data.chained_index_params.len() as u16;
-            self.program
-                .instruction_data
-                .chained_index_params
-                .push(params);
+            self.program.instruction_data.chained_index_params.push(params);
 
             self.emit_instruction(Instruction::ChainedIndex { params_index }, span);
 
@@ -431,11 +414,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile data virtual document lookup for rule-involved data access
-    fn compile_data_virtual_lookup(
-        &mut self,
-        components: &[AccessComponent],
-        span: &Span,
-    ) -> Result<Register> {
+    fn compile_data_virtual_lookup(&mut self, components: &[AccessComponent], span: &Span) -> Result<Register> {
         let dest_reg = self.alloc_register();
         let mut path_components = Vec::new();
 
@@ -457,20 +436,13 @@ impl<'a> Compiler<'a> {
             path_components,
         };
 
-        let params_index = self
-            .program
-            .instruction_data
-            .virtual_data_document_lookup_params
-            .len() as u16;
+        let params_index = self.program.instruction_data.virtual_data_document_lookup_params.len() as u16;
         self.program
             .instruction_data
             .virtual_data_document_lookup_params
             .push(params);
 
-        self.emit_instruction(
-            Instruction::VirtualDataDocumentLookup { params_index },
-            span,
-        );
+        self.emit_instruction(Instruction::VirtualDataDocumentLookup { params_index }, span);
 
         // Set flag indicating runtime recursion check is needed
         self.program.needs_runtime_recursion_check = true;

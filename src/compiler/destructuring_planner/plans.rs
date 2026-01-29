@@ -4,13 +4,13 @@
 
 //! Core data structures used by the destructuring planner.
 
-use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::{
+    collections::BTreeMap,
+    string::{String, ToString},
+    vec::Vec,
+};
 
-use crate::ast::ExprRef;
-use crate::lexer::Span;
-use crate::value::Value;
+use crate::{ast::ExprRef, lexer::Span, value::Value};
 
 /// Strategy for how to destructure an expression.
 #[derive(Debug, Clone)]
@@ -28,9 +28,7 @@ pub enum DestructuringPlan {
     EqualityValue(Value),
 
     /// Destructure an array.
-    Array {
-        element_plans: Vec<DestructuringPlan>,
-    },
+    Array { element_plans: Vec<DestructuringPlan> },
 
     /// Destructure an object.
     Object {
@@ -59,32 +57,26 @@ impl DestructuringPlan {
                     plan.collect_bound_vars(vars);
                 }
             }
-            DestructuringPlan::Ignore
-            | DestructuringPlan::EqualityExpr(_)
-            | DestructuringPlan::EqualityValue(_) => {}
+            DestructuringPlan::Ignore | DestructuringPlan::EqualityExpr(_) | DestructuringPlan::EqualityValue(_) => {}
         }
     }
 
     pub(crate) fn contains_wildcards(&self) -> bool {
         match self {
             DestructuringPlan::Ignore => true,
-            DestructuringPlan::Array { element_plans } => element_plans
-                .iter()
-                .any(DestructuringPlan::contains_wildcards),
+            DestructuringPlan::Array { element_plans } => {
+                element_plans.iter().any(DestructuringPlan::contains_wildcards)
+            }
             DestructuringPlan::Object {
                 field_plans,
                 dynamic_fields,
             } => {
-                field_plans
-                    .values()
-                    .any(DestructuringPlan::contains_wildcards)
-                    || dynamic_fields
-                        .iter()
-                        .any(|(_, plan)| plan.contains_wildcards())
+                field_plans.values().any(DestructuringPlan::contains_wildcards)
+                    || dynamic_fields.iter().any(|(_, plan)| plan.contains_wildcards())
             }
-            DestructuringPlan::Var(_)
-            | DestructuringPlan::EqualityExpr(_)
-            | DestructuringPlan::EqualityValue(_) => false,
+            DestructuringPlan::Var(_) | DestructuringPlan::EqualityExpr(_) | DestructuringPlan::EqualityValue(_) => {
+                false
+            }
         }
     }
 
@@ -97,19 +89,15 @@ impl DestructuringPlan {
     pub(crate) fn introduces_binding(&self) -> bool {
         match self {
             DestructuringPlan::Var(_) | DestructuringPlan::Ignore => true,
-            DestructuringPlan::Array { element_plans } => element_plans
-                .iter()
-                .any(DestructuringPlan::introduces_binding),
+            DestructuringPlan::Array { element_plans } => {
+                element_plans.iter().any(DestructuringPlan::introduces_binding)
+            }
             DestructuringPlan::Object {
                 field_plans,
                 dynamic_fields,
             } => {
-                field_plans
-                    .values()
-                    .any(DestructuringPlan::introduces_binding)
-                    || dynamic_fields
-                        .iter()
-                        .any(|(_, plan)| plan.introduces_binding())
+                field_plans.values().any(DestructuringPlan::introduces_binding)
+                    || dynamic_fields.iter().any(|(_, plan)| plan.introduces_binding())
             }
             DestructuringPlan::EqualityExpr(_) | DestructuringPlan::EqualityValue(_) => false,
         }
@@ -150,10 +138,7 @@ pub enum AssignmentPlan {
     },
 
     /// No variables to bind - simple equality check.
-    EqualityCheck {
-        lhs_expr: ExprRef,
-        rhs_expr: ExprRef,
-    },
+    EqualityCheck { lhs_expr: ExprRef, rhs_expr: ExprRef },
 
     /// No variables to bind and at least one side is a wildcard `_`.
     WildcardMatch {
@@ -166,8 +151,9 @@ pub enum AssignmentPlan {
 impl AssignmentPlan {
     pub(crate) fn bound_vars(&self) -> Vec<String> {
         match self {
-            AssignmentPlan::ColonEquals { lhs_plan, .. }
-            | AssignmentPlan::EqualsBindLeft { lhs_plan, .. } => lhs_plan.bound_vars(),
+            AssignmentPlan::ColonEquals { lhs_plan, .. } | AssignmentPlan::EqualsBindLeft { lhs_plan, .. } => {
+                lhs_plan.bound_vars()
+            }
             AssignmentPlan::EqualsBindRight { rhs_plan, .. } => rhs_plan.bound_vars(),
             AssignmentPlan::EqualsBothSides { element_pairs, .. } => {
                 let mut vars = Vec::new();
@@ -176,9 +162,7 @@ impl AssignmentPlan {
                 }
                 vars
             }
-            AssignmentPlan::EqualityCheck { .. } | AssignmentPlan::WildcardMatch { .. } => {
-                Vec::new()
-            }
+            AssignmentPlan::EqualityCheck { .. } | AssignmentPlan::WildcardMatch { .. } => Vec::new(),
         }
     }
 }
@@ -219,16 +203,10 @@ impl BindingPlan {
     pub fn bound_vars(&self) -> Vec<String> {
         match self {
             BindingPlan::Assignment { plan } => plan.bound_vars(),
-            BindingPlan::LoopIndex {
-                destructuring_plan, ..
-            } => destructuring_plan.bound_vars(),
-            BindingPlan::Parameter {
-                destructuring_plan, ..
-            } => destructuring_plan.bound_vars(),
+            BindingPlan::LoopIndex { destructuring_plan, .. } => destructuring_plan.bound_vars(),
+            BindingPlan::Parameter { destructuring_plan, .. } => destructuring_plan.bound_vars(),
             BindingPlan::SomeIn {
-                key_plan,
-                value_plan,
-                ..
+                key_plan, value_plan, ..
             } => {
                 let mut vars = Vec::new();
                 if let Some(key_destructuring) = key_plan {

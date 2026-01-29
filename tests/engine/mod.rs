@@ -32,18 +32,11 @@ fn extension() -> Result<()> {
 
     // Adding extension twice is error.
     assert!(engine
-        .add_extension(
-            "repeat".to_string(),
-            1,
-            Box::new(|_| { Ok(Value::Undefined) })
-        )
+        .add_extension("repeat".to_string(), 1, Box::new(|_| { Ok(Value::Undefined) }))
         .is_err());
 
     let r = engine.eval_query("data.test.x".to_string(), false)?;
-    assert_eq!(
-        r.result[0].expressions[0].value.as_string()?.as_ref(),
-        "hellohello"
-    );
+    assert_eq!(r.result[0].expressions[0].value.as_string()?.as_ref(), "hellohello");
 
     Ok(())
 }
@@ -92,10 +85,7 @@ fn extension_with_state() -> Result<()> {
     // Both the engines should produce the same value.
     let r = engine.eval_query("data.test.x".to_string(), false)?;
     let r1 = engine1.eval_query("data.test.x".to_string(), false)?;
-    assert_eq!(
-        r.result[0].expressions[0].value,
-        r1.result[0].expressions[0].value
-    );
+    assert_eq!(r.result[0].expressions[0].value, r1.result[0].expressions[0].value);
 
     assert_eq!(r.result[0].expressions[0].value.as_i64()?, 7);
 

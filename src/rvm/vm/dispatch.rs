@@ -1,17 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::instructions::{Instruction, LiteralOrRegister};
-use crate::rvm::program::Program;
-use crate::value::Value;
-use alloc::collections::BTreeSet;
-use alloc::vec::Vec;
+use crate::{
+    rvm::{
+        instructions::{Instruction, LiteralOrRegister},
+        program::Program,
+    },
+    value::Value,
+};
+use alloc::{collections::BTreeSet, vec::Vec};
 use core::mem;
 
-use super::errors::{Result, VmError};
-use super::execution_model::{ExecutionMode, SuspendReason};
-use super::loops::LoopParams;
-use super::machine::RegoVM;
+use super::{
+    errors::{Result, VmError},
+    execution_model::{ExecutionMode, SuspendReason},
+    loops::LoopParams,
+    machine::RegoVM,
+};
 
 pub(super) enum InstructionOutcome {
     Continue,
@@ -30,11 +35,7 @@ impl RegoVM {
         self.execute_load_and_move(program, instruction)
     }
 
-    fn execute_load_and_move(
-        &mut self,
-        program: &Program,
-        instruction: Instruction,
-    ) -> Result<InstructionOutcome> {
+    fn execute_load_and_move(&mut self, program: &Program, instruction: Instruction) -> Result<InstructionOutcome> {
         use Instruction::*;
         match instruction {
             Load { dest, literal_idx } => {
@@ -362,11 +363,7 @@ impl RegoVM {
         }
     }
 
-    fn execute_call_instruction(
-        &mut self,
-        program: &Program,
-        instruction: Instruction,
-    ) -> Result<InstructionOutcome> {
+    fn execute_call_instruction(&mut self, program: &Program, instruction: Instruction) -> Result<InstructionOutcome> {
         use Instruction::*;
         match instruction {
             BuiltinCall { params_index } => {
@@ -375,11 +372,7 @@ impl RegoVM {
             }
             HostAwait { dest, arg, id } => {
                 let argument = self.get_register(arg)?.clone();
-                let identifier = self
-                    .registers
-                    .get(usize::from(id))
-                    .cloned()
-                    .unwrap_or(Value::Undefined);
+                let identifier = self.registers.get(usize::from(id)).cloned().unwrap_or(Value::Undefined);
                 match self.execution_mode {
                     ExecutionMode::RunToCompletion => {
                         let response = self.next_host_await_response(&identifier, dest)?;
@@ -407,10 +400,7 @@ impl RegoVM {
                 self.execute_call_rule(dest, rule_index)?;
                 Ok(InstructionOutcome::Continue)
             }
-            RuleInit {
-                result_reg,
-                rule_index,
-            } => {
+            RuleInit { result_reg, rule_index } => {
                 self.execute_rule_init(result_reg, rule_index)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -451,14 +441,13 @@ impl RegoVM {
                 Ok(InstructionOutcome::Continue)
             }
             ObjectCreate { params_index } => {
-                let params = program
-                    .instruction_data
-                    .get_object_create_params(params_index)
-                    .ok_or(VmError::InvalidObjectCreateParams {
+                let params = program.instruction_data.get_object_create_params(params_index).ok_or(
+                    VmError::InvalidObjectCreateParams {
                         index: params_index,
                         pc: self.pc,
                         available: program.instruction_data.object_create_params.len(),
-                    })?;
+                    },
+                )?;
 
                 let mut any_undefined = false;
 
@@ -499,9 +488,7 @@ impl RegoVM {
 
                         for (key, value) in obj_mut.iter_mut() {
                             if let Some(&(literal_idx, value_reg)) = current_literal_update {
-                                if let Some(literal_key) =
-                                    program.literals.get(usize::from(literal_idx))
-                                {
+                                if let Some(literal_key) = program.literals.get(usize::from(literal_idx)) {
                                     if key == literal_key {
                                         *value = self.get_register(value_reg)?.clone();
                                         current_literal_update = literal_updates.next();
@@ -513,8 +500,7 @@ impl RegoVM {
                         }
 
                         while let Some(&(literal_idx, value_reg)) = current_literal_update {
-                            if let Some(key_value) = program.literals.get(usize::from(literal_idx))
-                            {
+                            if let Some(key_value) = program.literals.get(usize::from(literal_idx)) {
                                 let value_value = self.get_register(value_reg)?.clone();
                                 obj_mut.insert(key_value.clone(), value_value);
                             }
@@ -537,11 +523,7 @@ impl RegoVM {
                 }
                 Ok(InstructionOutcome::Continue)
             }
-            Index {
-                dest,
-                container,
-                key,
-            } => {
+            Index { dest, container, key } => {
                 let key_value = self.get_register(key)?;
                 let container_value = self.get_register(container)?;
                 let result = container_value[key_value].clone();
@@ -591,10 +573,7 @@ impl RegoVM {
                 Ok(InstructionOutcome::Continue)
             }
             ArrayCreate { params_index } => {
-                if let Some(params) = program
-                    .instruction_data
-                    .get_array_create_params(params_index)
-                {
+                if let Some(params) = program.instruction_data.get_array_create_params(params_index) {
                     let mut any_undefined = false;
                     for &reg in params.element_registers() {
                         if matches!(self.get_register(reg)?, Value::Undefined) {
@@ -687,12 +666,8 @@ impl RegoVM {
                 let collection_value = self.get_register(collection)?;
 
                 let result = match *collection_value {
-                    Value::Set(ref set_elements) => {
-                        Value::Bool(set_elements.contains(value_to_check))
-                    }
-                    Value::Array(ref array_items) => {
-                        Value::Bool(array_items.contains(value_to_check))
-                    }
+                    Value::Set(ref set_elements) => Value::Bool(set_elements.contains(value_to_check)),
+                    Value::Array(ref array_items) => Value::Bool(array_items.contains(value_to_check)),
                     Value::Object(ref object_fields) => Value::Bool(
                         object_fields.contains_key(value_to_check)
                             || object_fields.values().any(|v| v == value_to_check),
@@ -720,24 +695,21 @@ impl RegoVM {
         }
     }
 
-    fn execute_loop_instruction(
-        &mut self,
-        program: &Program,
-        instruction: Instruction,
-    ) -> Result<InstructionOutcome> {
+    fn execute_loop_instruction(&mut self, program: &Program, instruction: Instruction) -> Result<InstructionOutcome> {
         use Instruction::*;
         match instruction {
             LoopStart { params_index } => {
                 let loop_params_len = program.instruction_data.loop_params.len();
 
-                let loop_params = program
-                    .instruction_data
-                    .get_loop_params(params_index)
-                    .ok_or(VmError::InvalidLoopParams {
-                        index: params_index,
-                        pc: self.pc,
-                        available: loop_params_len,
-                    })?;
+                let loop_params =
+                    program
+                        .instruction_data
+                        .get_loop_params(params_index)
+                        .ok_or(VmError::InvalidLoopParams {
+                            index: params_index,
+                            pc: self.pc,
+                            available: loop_params_len,
+                        })?;
                 let mode = loop_params.mode;
                 let params = LoopParams {
                     collection: loop_params.collection,
@@ -750,10 +722,7 @@ impl RegoVM {
                 self.execute_loop_start(&mode, params)?;
                 Ok(InstructionOutcome::Continue)
             }
-            LoopNext {
-                body_start,
-                loop_end,
-            } => {
+            LoopNext { body_start, loop_end } => {
                 self.execute_loop_next(body_start, loop_end)?;
                 Ok(InstructionOutcome::Continue)
             }
@@ -773,14 +742,13 @@ impl RegoVM {
         use Instruction::*;
         match instruction {
             ChainedIndex { params_index } => {
-                let params = program
-                    .instruction_data
-                    .get_chained_index_params(params_index)
-                    .ok_or(VmError::InvalidChainedIndexParams {
+                let params = program.instruction_data.get_chained_index_params(params_index).ok_or(
+                    VmError::InvalidChainedIndexParams {
                         index: params_index,
                         pc: self.pc,
                         available: program.instruction_data.chained_index_params.len(),
-                    })?;
+                    },
+                )?;
 
                 let mut current_value = self.get_register(params.root)?.clone();
 

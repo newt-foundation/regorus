@@ -10,11 +10,13 @@
 //    where operands are constrained by MAX_COL and file size/line limits
 // 6. Defensive saturating_sub used for subtractions that could theoretically underflow
 use crate::*;
-use core::cmp;
-use core::fmt::{self, Debug, Formatter};
-use core::iter::Peekable;
-use core::ops::Range;
-use core::str::CharIndices;
+use core::{
+    cmp,
+    fmt::{self, Debug, Formatter},
+    iter::Peekable,
+    ops::Range,
+    str::CharIndices,
+};
 
 use crate::Value;
 
@@ -134,10 +136,7 @@ impl SourceStr {
     pub fn text(&self) -> &str {
         // Use safe slicing to avoid panics on malformed spans
         span_range(self.start, self.end).map_or("<invalid-span>", |range| {
-            self.source
-                .contents()
-                .get(range)
-                .unwrap_or("<invalid-span>")
+            self.source.contents().get(range).unwrap_or("<invalid-span>")
         })
     }
 
@@ -220,11 +219,7 @@ impl Source {
             check_memory_limit()?;
         }
         Ok(Self {
-            src: Rc::new(SourceInternal {
-                file,
-                contents,
-                lines,
-            }),
+            src: Rc::new(SourceInternal { file, contents, lines }),
         })
     }
 
@@ -303,10 +298,7 @@ impl Span {
     pub fn text(&self) -> &str {
         // Use safe slicing to avoid panics on malformed spans
         span_range(self.start, self.end).map_or("<invalid-span>", |range| {
-            self.source
-                .contents()
-                .get(range)
-                .unwrap_or("<invalid-span>")
+            self.source.contents().get(range).unwrap_or("<invalid-span>")
         })
     }
 
@@ -439,27 +431,23 @@ impl<'source> Lexer<'source> {
 
     #[inline]
     fn advance_col(&mut self, delta: u32) -> Result<()> {
-        let new_col = self
-            .col
-            .checked_add(delta)
-            .filter(|&c| c <= MAX_COL)
-            .ok_or_else(|| {
-                self.source.error(
-                    self.line,
-                    self.col,
-                    &format!("line exceeds maximum column width of {MAX_COL}"),
-                )
-            })?;
+        let new_col = self.col.checked_add(delta).filter(|&c| c <= MAX_COL).ok_or_else(|| {
+            self.source.error(
+                self.line,
+                self.col,
+                &format!("line exceeds maximum column width of {MAX_COL}"),
+            )
+        })?;
         self.col = new_col;
         Ok(())
     }
 
     #[inline]
     fn advance_line(&mut self, delta: u32) -> Result<()> {
-        self.line = self.line.checked_add(delta).ok_or_else(|| {
-            self.source
-                .error(self.line, self.col, "line number overflow")
-        })?;
+        self.line = self
+            .line
+            .checked_add(delta)
+            .ok_or_else(|| self.source.error(self.line, self.col, "line number overflow"))?;
         Ok(())
     }
 
@@ -563,11 +551,8 @@ impl<'source> Lexer<'source> {
 
                 bail!(
                     "{} {}",
-                    self.source.error(
-                        self.line,
-                        col,
-                        "invalid number. serde_json cannot parse number:"
-                    ),
+                    self.source
+                        .error(self.line, col, "invalid number. serde_json cannot parse number:"),
                     msg
                 )
             }
@@ -656,38 +641,22 @@ impl<'source> Lexer<'source> {
                                 let rel = usize_to_u32(hex_offset.saturating_sub(start))?;
                                 let cursor_col = self.col.saturating_add(rel);
                                 if !hex_ch.is_ascii_hexdigit() {
-                                    return Err(self.source.error(
-                                        line,
-                                        cursor_col,
-                                        "invalid hex escape sequence",
-                                    ));
+                                    return Err(self.source.error(line, cursor_col, "invalid hex escape sequence"));
                                 }
                                 self.iter.next();
                             }
                         }
                         _ => {
-                            let cursor_col = self
-                                .col
-                                .saturating_add(usize_to_u32(offset.saturating_sub(start))?);
-                            return Err(self.source.error(
-                                line,
-                                cursor_col,
-                                "invalid escape sequence",
-                            ));
+                            let cursor_col = self.col.saturating_add(usize_to_u32(offset.saturating_sub(start))?);
+                            return Err(self.source.error(line, cursor_col, "invalid escape sequence"));
                         }
                     }
                 }
                 _ => {
                     // check for valid json chars
-                    let cursor_col = self
-                        .col
-                        .saturating_add(usize_to_u32(offset.saturating_sub(start))?);
+                    let cursor_col = self.col.saturating_add(usize_to_u32(offset.saturating_sub(start))?);
                     if !('\u{0020}'..='\u{10FFFF}').contains(&ch) {
-                        return Err(self.source.error(
-                            line,
-                            cursor_col,
-                            "invalid character in string",
-                        ));
+                        return Err(self.source.error(line, cursor_col, "invalid character in string"));
                     }
                     self.iter.next();
                 }
@@ -721,8 +690,7 @@ impl<'source> Lexer<'source> {
                 let msg = serde_msg;
                 bail!(
                     "{} {}",
-                    self.source
-                        .error(self.line, col, "serde_json cannot parse string:"),
+                    self.source.error(self.line, col, "serde_json cannot parse string:"),
                     msg
                 )
             }
@@ -750,9 +718,7 @@ impl<'source> Lexer<'source> {
         let (start, _) = self.peek();
         loop {
             let (offset, ch) = self.peek();
-            let cursor_col = self
-                .col
-                .saturating_add(usize_to_u32(offset.saturating_sub(start))?);
+            let cursor_col = self.col.saturating_add(usize_to_u32(offset.saturating_sub(start))?);
             match ch {
                 '\'' | '\x00' => {
                     break;
@@ -764,26 +730,14 @@ impl<'source> Lexer<'source> {
                     match escape_ch {
                         // Basic escape sequences for single-quoted strings
                         '\'' | '\\' | 'n' | 'r' | 't' => (),
-                        _ => {
-                            return Err(self.source.error(
-                                line,
-                                cursor_col,
-                                "invalid escape sequence",
-                            ))
-                        }
+                        _ => return Err(self.source.error(line, cursor_col, "invalid escape sequence")),
                     }
                 }
                 _ => {
                     // check for valid chars
-                    let inner_cursor_col = self
-                        .col
-                        .saturating_add(usize_to_u32(offset.saturating_sub(start))?);
+                    let inner_cursor_col = self.col.saturating_add(usize_to_u32(offset.saturating_sub(start))?);
                     if !('\u{0020}'..='\u{10FFFF}').contains(&ch) {
-                        return Err(self.source.error(
-                            line,
-                            inner_cursor_col,
-                            "invalid character in string",
-                        ));
+                        return Err(self.source.error(line, inner_cursor_col, "invalid character in string"));
                     }
                     self.iter.next();
                 }
@@ -835,11 +789,7 @@ impl<'source> Lexer<'source> {
                 '\t' => self.advance_col(4)?,
                 '\r' => {
                     if self.peekahead(1).1 != '\n' {
-                        return Err(self.source.error(
-                            self.line,
-                            self.col,
-                            "\\r must be followed by \\n",
-                        ));
+                        return Err(self.source.error(self.line, self.col, "\\r must be followed by \\n"));
                     }
                 }
                 '\n' => {

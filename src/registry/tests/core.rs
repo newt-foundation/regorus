@@ -148,14 +148,16 @@ fn test_error_display() {
         registry: "test".into(),
     };
     let invalid_error_message = format!("{invalid_error}");
-    assert_eq!(invalid_error_message, "test registration failed: The name ' ' is invalid (empty or whitespace-only names are not allowed).");
+    assert_eq!(
+        invalid_error_message,
+        "test registration failed: The name ' ' is invalid (empty or whitespace-only names are not allowed)."
+    );
 }
 
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_access() {
-    use std::sync::Barrier;
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     // Create a fresh registry for this test to avoid interference
     let test_registry = Rc::new(SchemaRegistry::new("TestSchemaRegistry"));
@@ -193,8 +195,7 @@ fn test_concurrent_access() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_duplicate_registration() {
-    use std::sync::Barrier;
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     // Create a fresh registry for this test to avoid interference
     let test_registry = Rc::new(SchemaRegistry::new("TestSchemaRegistry"));
@@ -248,10 +249,7 @@ fn test_empty_schema_name() {
     // Empty string as schema name should fail
     let result = registry.register("", schema);
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        SchemaRegistryError::InvalidName { .. }
-    ));
+    assert!(matches!(result.unwrap_err(), SchemaRegistryError::InvalidName { .. }));
     assert!(!registry.contains(""));
     assert_eq!(registry.len(), 0);
     assert!(registry.is_empty());
@@ -274,10 +272,7 @@ fn test_unicode_schema_names() {
 
     for name in &unicode_names {
         let result = registry.register(*name, schema.clone());
-        assert!(
-            result.is_ok(),
-            "Failed to register schema with name: {name}"
-        );
+        assert!(result.is_ok(), "Failed to register schema with name: {name}");
         assert!(registry.contains(name));
     }
 
@@ -334,10 +329,7 @@ fn test_special_character_schema_names() {
 
     for name in &special_names {
         let result = registry.register(*name, schema.clone());
-        assert!(
-            result.is_ok(),
-            "Failed to register schema with name: {name}"
-        );
+        assert!(result.is_ok(), "Failed to register schema with name: {name}");
         assert!(registry.contains(name));
     }
 
@@ -361,14 +353,8 @@ fn test_whitespace_only_names() {
 
     for name in &whitespace_names {
         let result = registry.register(*name, schema.clone());
-        assert!(
-            result.is_err(),
-            "Expected error for whitespace name: {name:?}"
-        );
-        assert!(matches!(
-            result.unwrap_err(),
-            SchemaRegistryError::InvalidName { .. }
-        ));
+        assert!(result.is_err(), "Expected error for whitespace name: {name:?}");
+        assert!(matches!(result.unwrap_err(), SchemaRegistryError::InvalidName { .. }));
         assert!(!registry.contains(name));
     }
 
@@ -455,10 +441,7 @@ fn test_case_sensitive_names() {
 
     for name in &case_variants {
         let result = registry.register(*name, schema.clone());
-        assert!(
-            result.is_ok(),
-            "Failed to register schema with name: {name}"
-        );
+        assert!(result.is_ok(), "Failed to register schema with name: {name}");
     }
 
     assert_eq!(registry.len(), case_variants.len());

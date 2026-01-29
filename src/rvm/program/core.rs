@@ -1,18 +1,21 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::format;
-use alloc::string::{String, ToString as _};
-use alloc::vec::Vec;
+use alloc::{
+    format,
+    string::{String, ToString as _},
+    vec::Vec,
+};
 use anyhow::Result as AnyResult;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::types::{BuiltinInfo, ProgramMetadata, RuleInfo, SourceFile, SpanInfo};
-use crate::builtins::BuiltinFcn;
-use crate::rvm::instructions::InstructionData;
-use crate::rvm::Instruction;
-use crate::value::Value;
+use crate::{
+    builtins::BuiltinFcn,
+    rvm::{instructions::InstructionData, Instruction},
+    value::Value,
+};
 
 /// Complete compiled program containing all execution artifacts
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,11 +199,7 @@ impl Program {
         }
 
         for instr in &self.instructions {
-            if let &crate::rvm::Instruction::LoopNext {
-                body_start,
-                loop_end,
-            } = instr
-            {
+            if let &crate::rvm::Instruction::LoopNext { body_start, loop_end } = instr {
                 let body_end = core::cmp::max(body_start, loop_end);
                 if usize::from(body_end) > Self::MAX_INSTRUCTIONS {
                     return Err("LoopNext offsets exceed supported instruction range".to_string());
@@ -233,18 +232,12 @@ impl Program {
     }
 
     /// Add builtin call parameters and return the index
-    pub fn add_builtin_call_params(
-        &mut self,
-        params: crate::rvm::instructions::BuiltinCallParams,
-    ) -> u16 {
+    pub fn add_builtin_call_params(&mut self, params: crate::rvm::instructions::BuiltinCallParams) -> u16 {
         self.instruction_data.add_builtin_call_params(params)
     }
 
     /// Add function call parameters and return the index
-    pub fn add_function_call_params(
-        &mut self,
-        params: crate::rvm::instructions::FunctionCallParams,
-    ) -> u16 {
+    pub fn add_function_call_params(&mut self, params: crate::rvm::instructions::FunctionCallParams) -> u16 {
         self.instruction_data.add_function_call_params(params)
     }
 
@@ -275,10 +268,7 @@ impl Program {
     where
         F: FnOnce(&mut crate::rvm::instructions::ComprehensionBeginParams),
     {
-        if let Some(params) = self
-            .instruction_data
-            .get_comprehension_begin_params_mut(params_index)
-        {
+        if let Some(params) = self.instruction_data.get_comprehension_begin_params_mut(params_index) {
             updater(params);
         }
     }
@@ -352,17 +342,13 @@ impl Program {
     /// Returns an error if any required builtin is missing
     pub fn initialize_resolved_builtins(&mut self) -> AnyResult<()> {
         self.resolved_builtins.clear();
-        self.resolved_builtins
-            .reserve(self.builtin_info_table.len());
+        self.resolved_builtins.reserve(self.builtin_info_table.len());
 
         for builtin_info in &self.builtin_info_table {
             if let Some(&builtin_fcn) = crate::builtins::BUILTINS.get(builtin_info.name.as_str()) {
                 self.resolved_builtins.push(builtin_fcn);
             } else {
-                return Err(anyhow::anyhow!(
-                    "Missing builtin function: {}",
-                    builtin_info.name
-                ));
+                return Err(anyhow::anyhow!("Missing builtin function: {}", builtin_info.name));
             }
         }
 

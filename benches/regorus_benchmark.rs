@@ -15,9 +15,7 @@ fn engine_with_policy(policy: &str) -> Engine {
 
 fn eval_principal(engine: &mut Engine) {
     engine.set_input(black_box(json!({"principal": "admin"}).into()));
-    let result = engine
-        .eval_rule(black_box("data.bench.allow".to_string()))
-        .unwrap();
+    let result = engine.eval_rule(black_box("data.bench.allow".to_string())).unwrap();
     assert_eq!(result, true.into());
 }
 
@@ -40,9 +38,7 @@ fn allow_with_simple_equality(c: &mut Criterion) {
             allow if input.principal == data.allowed_principal
             "#,
         );
-        engine
-            .add_data(json!({"allowed_principal": "admin"}).into())
-            .unwrap();
+        engine.add_data(json!({"allowed_principal": "admin"}).into()).unwrap();
 
         b.iter(|| eval_principal(&mut engine))
     });
@@ -108,19 +104,13 @@ fn clone(c: &mut Criterion) {
 
     let mut engine = Engine::new();
     engine.set_rego_v0(true);
-    engine
-        .add_policy_from_file("tests/aci/framework.rego")
-        .unwrap();
+    engine.add_policy_from_file("tests/aci/framework.rego").unwrap();
     engine.add_policy_from_file("tests/aci/api.rego").unwrap();
-    engine
-        .add_policy_from_file("tests/aci/policy.rego")
-        .unwrap();
+    engine.add_policy_from_file("tests/aci/policy.rego").unwrap();
     engine
         .add_data(Value::from_json_file("tests/aci/data.json").expect("failed to load data.json"))
         .expect("failed to add data");
-    engine.set_input(
-        Value::from_json_file("tests/aci/input.json").expect("failed to load input.json"),
-    );
+    engine.set_input(Value::from_json_file("tests/aci/input.json").expect("failed to load input.json"));
 
     // An engine without preparation will not have processed fields populated.
     c.bench_function("clone: engine with aci policies", |b| {
@@ -159,12 +149,9 @@ fn aci_policy_eval(c: &mut Criterion) {
                 .add_policy_from_file("tests/aci/policy.rego")
                 .expect("failed to add policy.rego");
             engine
-                .add_data(
-                    Value::from_json_file("tests/aci/data.json").expect("failed to load data.json"),
-                )
+                .add_data(Value::from_json_file("tests/aci/data.json").expect("failed to load data.json"))
                 .expect("failed to add data");
-            let input =
-                Value::from_json_file("tests/aci/input.json").expect("failed to load input.json");
+            let input = Value::from_json_file("tests/aci/input.json").expect("failed to load input.json");
             engine.set_input(input.clone());
             engine.eval_rule(rule.to_string()).unwrap();
             b.iter(|| {

@@ -8,16 +8,21 @@
 )]
 
 use super::{Compiler, CompilerError, Result};
-use crate::interpreter::Interpreter;
-use crate::rvm::program::{Program, RuleType, SpanInfo};
-use crate::rvm::Instruction;
-use crate::Rc;
-use crate::Value;
-use alloc::collections::BTreeMap;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
+use crate::{
+    interpreter::Interpreter,
+    rvm::{
+        program::{Program, RuleType, SpanInfo},
+        Instruction,
+    },
+    Rc, Value,
+};
+use alloc::{
+    collections::BTreeMap,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use anyhow::anyhow;
 
 impl<'a> Compiler<'a> {
@@ -38,8 +43,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn finish(mut self) -> Result<Program> {
         self.program.main_entry_point = 0;
 
-        self.program.max_rule_window_size =
-            self.rule_num_registers.iter().cloned().max().unwrap_or(0);
+        self.program.max_rule_window_size = self.rule_num_registers.iter().cloned().max().unwrap_or(0);
         self.program.dispatch_window_size = self.register_counter;
 
         let mut rule_infos_map = BTreeMap::new();
@@ -71,14 +75,12 @@ impl<'a> Compiler<'a> {
 
             let mut rule_info = match function_param_count {
                 Some(param_count) => {
-                    let definition_params =
-                        &self.rule_definition_function_params[rule_index as usize];
-                    let param_names =
-                        if let Some(Some(first_def_params)) = definition_params.first() {
-                            first_def_params.clone()
-                        } else {
-                            (0..*param_count).map(|i| format!("param_{}", i)).collect()
-                        };
+                    let definition_params = &self.rule_definition_function_params[rule_index as usize];
+                    let param_names = if let Some(Some(first_def_params)) = definition_params.first() {
+                        first_def_params.clone()
+                    } else {
+                        (0..*param_count).map(|i| format!("param_{}", i)).collect()
+                    };
 
                     crate::rvm::program::RuleInfo::new_function(
                         rule_path.clone(),

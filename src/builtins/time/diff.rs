@@ -49,8 +49,8 @@ pub fn diff_between_datetimes(
         day -= 1;
     }
     if day < 0 {
-        let days_in_month = days_in_month(datetime1.year(), datetime1.month())
-            .ok_or(anyhow!("Could not convert `ns1` to datetime"))?;
+        let days_in_month =
+            days_in_month(datetime1.year(), datetime1.month()).ok_or(anyhow!("Could not convert `ns1` to datetime"))?;
         day += days_in_month as i32;
         month -= 1;
     }

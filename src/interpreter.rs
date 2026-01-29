@@ -2,34 +2,34 @@
 // Licensed under the MIT License.
 #![allow(clippy::print_stderr, clippy::pattern_type_mismatch)]
 
-use crate::ast::*;
-use crate::builtins::{self, BuiltinFcn};
-use crate::compiled_policy::CompiledPolicyData;
 #[cfg(feature = "azure_policy")]
 use crate::compiled_policy::TargetInfo;
-use crate::compiler::destructuring_planner::{
-    AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide,
-};
-use crate::compiler::hoist::{HoistedLoop, LoopType};
-use crate::lexer::*;
-use crate::lookup::Lookup;
-use crate::parser::Parser;
-use crate::scheduler::*;
-use crate::utils::limits::{monotonic_now, ExecutionTimer, ExecutionTimerConfig};
 #[cfg(feature = "std")]
 use crate::utils::*;
 #[cfg(not(feature = "std"))]
 use crate::utils::{get_extra_arg, get_path_string, get_root_var, FunctionTable};
-use crate::value::*;
-use crate::*;
-use crate::{Expression, Extension, Location, QueryResult, QueryResults};
+use crate::{
+    ast::*,
+    builtins::{self, BuiltinFcn},
+    compiled_policy::CompiledPolicyData,
+    compiler::{
+        destructuring_planner::{AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide},
+        hoist::{HoistedLoop, LoopType},
+    },
+    lexer::*,
+    lookup::Lookup,
+    parser::Parser,
+    scheduler::*,
+    utils::limits::{monotonic_now, ExecutionTimer, ExecutionTimerConfig},
+    value::*,
+    Expression, Extension, Location, QueryResult, QueryResults, *,
+};
 
 #[cfg(feature = "coverage")]
 use crate::query::traversal::traverse;
 
 use crate::Rc;
-use alloc::collections::btree_map::Entry as BTreeMapEntry;
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{btree_map::Entry as BTreeMapEntry, BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
 
@@ -270,10 +270,7 @@ impl Interpreter {
 
             extensions: compiled_policy.extensions.clone(),
             compiled_policy: compiled_policy.clone(),
-            init_data: compiled_policy
-                .data
-                .clone()
-                .unwrap_or_else(Value::new_object),
+            init_data: compiled_policy.data.clone().unwrap_or_else(Value::new_object),
             execution_timer: ExecutionTimer::new(None),
         }
     }
@@ -473,9 +470,7 @@ impl Interpreter {
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
 
                 return match binding_plan.cloned() {
-                    Some(BindingPlan::Parameter {
-                        destructuring_plan, ..
-                    }) => Ok(Some(destructuring_plan)),
+                    Some(BindingPlan::Parameter { destructuring_plan, .. }) => Ok(Some(destructuring_plan)),
                     Some(other_plan) => bail!(
                         "internal error: expected Parameter for walk output parameter, got {:?}",
                         other_plan
@@ -491,8 +486,7 @@ impl Interpreter {
     fn ensure_loop_var_values_capacity(&mut self) {
         for (module_idx, module) in self.compiled_policy.modules.iter().enumerate() {
             if let Ok(idx_u32) = u32::try_from(module_idx) {
-                self.loop_var_values
-                    .ensure_capacity(idx_u32, module.num_expressions);
+                self.loop_var_values.ensure_capacity(idx_u32, module.num_expressions);
             }
         }
         if let Some(query_module) = &self.query_module {
@@ -615,12 +609,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_bool_expr(
-        &mut self,
-        op: &BoolOp,
-        lhs_expr: &ExprRef,
-        rhs_expr: &ExprRef,
-    ) -> Result<Value> {
+    fn eval_bool_expr(&mut self, op: &BoolOp, lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<Value> {
         let lhs = self.eval_expr(lhs_expr)?;
         let rhs = self.eval_expr(rhs_expr)?;
 
@@ -645,13 +634,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_arith_expr(
-        &mut self,
-        span: &Span,
-        op: &ArithOp,
-        lhs: &ExprRef,
-        rhs: &ExprRef,
-    ) -> Result<Value> {
+    fn eval_arith_expr(&mut self, span: &Span, op: &ArithOp, lhs: &ExprRef, rhs: &ExprRef) -> Result<Value> {
         let lhs_value = self.eval_expr(lhs)?;
         let rhs_value = self.eval_expr(rhs)?;
 
@@ -739,11 +722,7 @@ impl Interpreter {
     }
 
     /// Execute a destructuring plan against a value, binding variables as needed
-    pub fn execute_destructuring_plan(
-        &mut self,
-        plan: &DestructuringPlan,
-        value: &Value,
-    ) -> Result<Value> {
+    pub fn execute_destructuring_plan(&mut self, plan: &DestructuringPlan, value: &Value) -> Result<Value> {
         self.check_execution_time()?;
         if value == &Value::Undefined {
             return Ok(Value::Undefined);
@@ -786,9 +765,7 @@ impl Interpreter {
                             return Ok(Value::Undefined);
                         };
 
-                        if self.execute_destructuring_plan(element_plan, element)?
-                            != Value::from(true)
-                        {
+                        if self.execute_destructuring_plan(element_plan, element)? != Value::from(true) {
                             return Ok(Value::Undefined);
                         }
                     }
@@ -807,9 +784,7 @@ impl Interpreter {
                     // Check that all required fields are present and match
                     for (key, field_plan) in field_plans {
                         if let Some(field_value) = obj.get(key) {
-                            if self.execute_destructuring_plan(field_plan, field_value)?
-                                != Value::from(true)
-                            {
+                            if self.execute_destructuring_plan(field_plan, field_value)? != Value::from(true) {
                                 return Ok(Value::Undefined);
                             }
                         } else {
@@ -825,9 +800,7 @@ impl Interpreter {
                             }
 
                             if let Some(field_value) = obj.get(&key_value) {
-                                if self.execute_destructuring_plan(field_plan, field_value)?
-                                    != Value::from(true)
-                                {
+                                if self.execute_destructuring_plan(field_plan, field_value)? != Value::from(true) {
                                     return Ok(Value::Undefined);
                                 }
                             } else {
@@ -955,9 +928,7 @@ impl Interpreter {
             .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
 
         let Some(BindingPlan::SomeIn {
-            key_plan,
-            value_plan,
-            ..
+            key_plan, value_plan, ..
         }) = binding_plan.cloned()
         else {
             bail!("internal error: missing binding plan for some..in expression");
@@ -969,16 +940,13 @@ impl Interpreter {
                     *self.current_scope_mut()? = scope_saved.clone();
 
                     let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, &Value::from(idx))?
-                            == Value::from(true)
+                        self.execute_destructuring_plan(key_plan, &Value::from(idx))? == Value::from(true)
                     } else {
                         true
                     };
 
                     // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                    success = success && self.execute_destructuring_plan(&value_plan, value)? == Value::from(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1012,9 +980,7 @@ impl Interpreter {
                     };
 
                     // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                    success = success && self.execute_destructuring_plan(&value_plan, value)? == Value::from(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1049,9 +1015,7 @@ impl Interpreter {
                     };
 
                     // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
+                    success = success && self.execute_destructuring_plan(&value_plan, value)? == Value::from(true);
 
                     if !success {
                         *self.current_scope_mut()? = scope_saved.clone();
@@ -1076,9 +1040,9 @@ impl Interpreter {
             }
             Value::Undefined => (),
             v => {
-                bail!(collection.span().error(
-                    format!("`some .. in collection` expects array/set/object. Got `{v}`").as_str()
-                ))
+                bail!(collection
+                    .span()
+                    .error(format!("`some .. in collection` expects array/set/object. Got `{v}`").as_str()))
             }
         }
 
@@ -1125,9 +1089,7 @@ impl Interpreter {
                 if let Some(ctx) = self.contexts.last_mut() {
                     if let Some(result) = &mut ctx.result {
                         if value != Value::Undefined {
-                            result
-                                .expressions
-                                .push(Self::make_expression_result(span, &value));
+                            result.expressions.push(Self::make_expression_result(span, &value));
                         } else {
                             result.bindings = Value::new_object();
                             result.expressions.clear();
@@ -1240,8 +1202,7 @@ impl Interpreter {
             let rule_values = self.rule_values.clone();
 
             self.processed.clear();
-            let processed_paths =
-                core::mem::replace(&mut self.processed_paths, Value::new_object());
+            let processed_paths = core::mem::replace(&mut self.processed_paths, Value::new_object());
             self.rule_values.clear();
 
             let mut skip_exec = false;
@@ -1251,8 +1212,8 @@ impl Interpreter {
                 let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
                 let mut target = path.join(".");
 
-                let mut target_is_function = self.lookup_function_by_name(&target).is_some()
-                    || Self::is_builtin(wm.refr.span(), &target);
+                let mut target_is_function =
+                    self.lookup_function_by_name(&target).is_some() || Self::is_builtin(wm.refr.span(), &target);
 
                 if !target_is_function
                     && !target.starts_with("data.")
@@ -1260,9 +1221,7 @@ impl Interpreter {
                     && target != "input"
                 {
                     // target must be a function.
-                    if self.lookup_function_by_name(&target).is_none()
-                        && !Self::is_builtin(wm.refr.span(), &target)
-                    {
+                    if self.lookup_function_by_name(&target).is_none() && !Self::is_builtin(wm.refr.span(), &target) {
                         // Prefix target with current module path.
                         target = format!("{}.{}", self.current_module_path, target);
                         if self.lookup_function_by_name(&target).is_none() {
@@ -1276,14 +1235,12 @@ impl Interpreter {
                     match self.eval_expr(&wm.r#as) {
                         Ok(v) if v != Value::Undefined => {
                             // Function replaced by value.
-                            self.with_functions
-                                .insert(target, FunctionModifier::Value(v));
+                            self.with_functions.insert(target, FunctionModifier::Value(v));
                         }
                         _ => {
                             // Function replaced by another function.
                             // Lookup by with current module path prefixed.
-                            let mut function_path =
-                                get_path_string(&wm.r#as, Some(&self.current_module_path))?;
+                            let mut function_path = get_path_string(&wm.r#as, Some(&self.current_module_path))?;
                             if self.lookup_function_by_name(&function_path).is_none() {
                                 // Lookup without current module path prefixed.
                                 function_path = get_path_string(&wm.r#as, None)?;
@@ -1384,11 +1341,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_stmts_in_loop(
-        &mut self,
-        stmts: &[&LiteralStmt],
-        loops: &[HoistedLoop],
-    ) -> Result<bool> {
+    fn eval_stmts_in_loop(&mut self, stmts: &[&LiteralStmt], loops: &[HoistedLoop]) -> Result<bool> {
         self.memory_check()?;
         self.check_execution_time()?;
         if loops.is_empty() {
@@ -1419,10 +1372,7 @@ impl Interpreter {
             let (saved_state, _) = self.apply_with_modifiers(first_stmt)?;
 
             let collection_expr = Self::loop_collection_expr(loop_info).clone();
-            let loop_value = if let Expr::Call {
-                span, fcn, params, ..
-            } = collection_expr.as_ref()
-            {
+            let loop_value = if let Expr::Call { span, fcn, params, .. } = collection_expr.as_ref() {
                 // Handle walk(obj, output_param)
                 let extra_arg = get_extra_arg(
                     &collection_expr,
@@ -1463,11 +1413,8 @@ impl Interpreter {
                             self.memory_check()?;
                             self.set_loop_var_value(loop_target_expr, item.clone())?;
 
-                            if self.execute_destructuring_plan(&walk_plan, item)?
-                                == Value::from(true)
-                            {
-                                walk_result =
-                                    self.eval_stmts_in_loop(stmts, loop_tail)? || walk_result;
+                            if self.execute_destructuring_plan(&walk_plan, item)? == Value::from(true) {
+                                walk_result = self.eval_stmts_in_loop(stmts, loop_tail)? || walk_result;
                             }
 
                             Self::clear_scope(self.current_scope_mut()?);
@@ -1482,8 +1429,7 @@ impl Interpreter {
                     Value::Undefined => (),
                     other => {
                         let span = Self::loop_span(loop_info);
-                        bail!(span
-                            .error(format!("walk expected array result, got `{other}`").as_str()));
+                        bail!(span.error(format!("walk expected array result, got `{other}`").as_str()));
                     }
                 }
 
@@ -1493,10 +1439,7 @@ impl Interpreter {
             }
 
             let index_expr = Self::loop_index_expr(loop_info);
-            if let Some(Expr::Var {
-                span: index_var, ..
-            }) = index_expr.map(|r| r.as_ref())
-            {
+            if let Some(Expr::Var { span: index_var, .. }) = index_expr.map(|r| r.as_ref()) {
                 if let Some(idx) = self.lookup_local_var(&index_var.source_str()) {
                     if loop_value[&idx] != Value::Undefined {
                         result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
@@ -1518,11 +1461,12 @@ impl Interpreter {
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
 
                 match plan.cloned() {
-                    Some(BindingPlan::LoopIndex {
-                        destructuring_plan, ..
-                    }) => destructuring_plan,
+                    Some(BindingPlan::LoopIndex { destructuring_plan, .. }) => destructuring_plan,
                     Some(other_plan) => {
-                        bail!("internal error: expected LoopIndex for loop index expression, got {:?}", other_plan);
+                        bail!(
+                            "internal error: expected LoopIndex for loop index expression, got {:?}",
+                            other_plan
+                        );
                     }
                     None => {
                         bail!("internal error: no binding plan found for loop index expression");
@@ -1543,9 +1487,7 @@ impl Interpreter {
                         self.memory_check()?;
                         self.set_loop_var_value(loop_target_expr, v.clone())?;
 
-                        if self.execute_destructuring_plan(&index_plan, &Value::from(idx))?
-                            == Value::from(true)
-                        {
+                        if self.execute_destructuring_plan(&index_plan, &Value::from(idx))? == Value::from(true) {
                             result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
                         }
 
@@ -1650,13 +1592,7 @@ impl Interpreter {
         Ok(comps)
     }
 
-    fn update_rule_value(
-        &mut self,
-        span: &Span,
-        path: Vec<Value>,
-        mut value: Value,
-        is_set: bool,
-    ) -> Result<()> {
+    fn update_rule_value(&mut self, span: &Span, path: Vec<Value>, mut value: Value, is_set: bool) -> Result<()> {
         // If rule's value already exists in initial document, prefer it.
         {
             let mut init_obj = &self.init_data;
@@ -1702,8 +1638,7 @@ impl Interpreter {
                         }
                         BTreeMapEntry::Occupied(o) => {
                             if o.get() != &value && value != Value::Undefined {
-                                bail!(span
-                                    .error("complete rules should not produce multiple outputs"))
+                                bail!(span.error("complete rules should not produce multiple outputs"))
                             }
                         }
                     }
@@ -1739,11 +1674,7 @@ impl Interpreter {
     fn is_simple_literal(expr: &Ref<Expr>) -> Result<bool> {
         Ok(matches!(
             expr.as_ref(),
-            Expr::String { .. }
-                | Expr::RawString { .. }
-                | Expr::Bool { .. }
-                | Expr::Null { .. }
-                | Expr::Number { .. }
+            Expr::String { .. } | Expr::RawString { .. } | Expr::Bool { .. } | Expr::Null { .. } | Expr::Number { .. }
         ))
     }
 
@@ -1831,17 +1762,13 @@ impl Interpreter {
                 }
 
                 // Non-set rule.
-                match ctx_mut
-                    .rule_value
-                    .as_object_mut()?
-                    .entry(Value::from_array(comps))
-                {
+                match ctx_mut.rule_value.as_object_mut()?.entry(Value::from_array(comps)) {
                     BTreeMapEntry::Vacant(v) => {
                         v.insert(output);
                     }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => bail!(rule_ref
-                        .span()
-                        .error("rules must not produce multiple outputs")),
+                    BTreeMapEntry::Occupied(o) if o.get() != &output => {
+                        bail!(rule_ref.span().error("rules must not produce multiple outputs"))
+                    }
                     _ => {
                         // Rule produced same value.
                     }
@@ -1865,10 +1792,10 @@ impl Interpreter {
                                     span.line,
                                     span.col,
                                     format!(
-					"value for key `{}` generated multiple times: `{}` and `{}`",
-					serde_json::to_string_pretty(&key).map_err(anyhow::Error::msg)?,
-					serde_json::to_string_pretty(&pv).map_err(anyhow::Error::msg)?,
-					serde_json::to_string_pretty(&value).map_err(anyhow::Error::msg)?,
+                                        "value for key `{}` generated multiple times: `{}` and `{}`",
+                                        serde_json::to_string_pretty(&key).map_err(anyhow::Error::msg)?,
+                                        serde_json::to_string_pretty(&pv).map_err(anyhow::Error::msg)?,
+                                        serde_json::to_string_pretty(&value).map_err(anyhow::Error::msg)?,
                                     )
                                     .as_str(),
                                 ));
@@ -1964,9 +1891,7 @@ impl Interpreter {
             }
             _ => {
                 let span = Self::loop_span(loop_info);
-                return Err(span
-                    .source
-                    .error(span.line, span.col, "item cannot be indexed"));
+                return Err(span.source.error(span.line, span.col, "item cannot be indexed"));
             }
         }
         self.remove_loop_var_value(loop_target_expr);
@@ -2076,10 +2001,7 @@ impl Interpreter {
                 return self.eval_stmts_in_loop(remaining, &loop_exprs[..]);
             }
 
-            let tail = idx
-                .checked_add(1)
-                .and_then(|n| stmts.get(n..))
-                .unwrap_or(&[]);
+            let tail = idx.checked_add(1).and_then(|n| stmts.get(n..)).unwrap_or(&[]);
 
             eval_success = self.eval_stmt(stmt, tail)?;
 
@@ -2143,9 +2065,7 @@ impl Interpreter {
                     Some(schedule) => Some(&schedule.order),
                     None => {
                         if self.query_schedule.is_some() {
-                            bail!(query
-                                .span
-                                .error("statements not scheduled in query {query:?}"));
+                            bail!(query.span.error("statements not scheduled in query {query:?}"));
                         }
                         None
                     }
@@ -2164,9 +2084,7 @@ impl Interpreter {
                     Some(schedule) => Some(&schedule.order),
                     None => {
                         if self.compiled_policy.schedule.is_some() {
-                            bail!(query
-                                .span
-                                .error("statements not scheduled in query {query:?}"));
+                            bail!(query.span.error("statements not scheduled in query {query:?}"));
                         }
                         None
                     }
@@ -2189,10 +2107,7 @@ impl Interpreter {
                 for idx in order {
                     let stmt_idx = usize::from(*idx);
                     let stmt = query.stmts.get(stmt_idx).ok_or_else(|| {
-                        let msg = format!(
-                            "invalid schedule index {stmt_idx} for {} statements",
-                            stmts_len
-                        );
+                        let msg = format!("invalid schedule index {stmt_idx} for {} statements", stmts_len);
                         query.span.error(msg.as_str())
                     })?;
                     ordered.push(stmt);
@@ -2261,12 +2176,7 @@ impl Interpreter {
         Ok(Value::from_set(set))
     }
 
-    fn eval_membership(
-        &mut self,
-        key: &Option<ExprRef>,
-        value: &ExprRef,
-        collection: &ExprRef,
-    ) -> Result<Value> {
+    fn eval_membership(&mut self, key: &Option<ExprRef>, value: &ExprRef, collection: &ExprRef) -> Result<Value> {
         self.check_execution_time()?;
         let value = self.eval_expr(value)?;
         let collection = self.eval_expr(collection)?;
@@ -2341,12 +2251,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_object_compr(
-        &mut self,
-        key: &ExprRef,
-        value: &ExprRef,
-        query: &Ref<Query>,
-    ) -> Result<Value> {
+    fn eval_object_compr(&mut self, key: &ExprRef, value: &ExprRef, query: &Ref<Query>) -> Result<Value> {
         self.check_execution_time()?;
         // Push new context
         self.contexts.push(Context {
@@ -2398,12 +2303,7 @@ impl Interpreter {
             }
         }
 
-        let v = match builtin.0(
-            span,
-            params,
-            &args[..],
-            self.compiled_policy.strict_builtin_errors,
-        ) {
+        let v = match builtin.0(span, params, &args[..], self.compiled_policy.strict_builtin_errors) {
             Ok(v) => v,
             // Ignore errors if we are not evaluating in strict mode.
             Err(_) if !self.compiled_policy.strict_builtin_errors => return Ok(Value::Undefined),
@@ -2506,8 +2406,7 @@ impl Interpreter {
 
         if self.gather_prints {
             // Prefix location information.
-            self.prints
-                .push(format!("{}:{}: {msg}", span.source.file(), span.line));
+            self.prints.push(format!("{}:{}: {msg}", span.source.file(), span.line));
         }
 
         // Print to stderr only if not gathering.
@@ -2519,13 +2418,7 @@ impl Interpreter {
         Ok(Value::Bool(true))
     }
 
-    fn eval_call_impl(
-        &mut self,
-        span: &Span,
-        expr: &ExprRef,
-        fcn: &ExprRef,
-        params: &[ExprRef],
-    ) -> Result<Value> {
+    fn eval_call_impl(&mut self, span: &Span, expr: &ExprRef, fcn: &ExprRef, params: &[ExprRef]) -> Result<Value> {
         self.check_execution_time()?;
         // Return generated values of walk builtin.
         if let Some(v) = self.get_loop_var_value(expr)? {
@@ -2569,10 +2462,7 @@ impl Interpreter {
         let (fcns_rules, fcn_module) = match self.lookup_function_by_name(&selected_fcn_path) {
             Some((fcns, m)) => (fcns, Some(m.clone())),
             _ => {
-                if self
-                    .compiled_policy
-                    .default_rules
-                    .contains_key(&selected_fcn_path)
+                if self.compiled_policy.default_rules.contains_key(&selected_fcn_path)
                     || self
                         .compiled_policy
                         .default_rules
@@ -2590,21 +2480,13 @@ impl Interpreter {
                 }
                 // Look up builtin function.
                 else if let Some(builtin) = Self::lookup_builtin(span, &selected_fcn_path)? {
-                    let r = self.eval_builtin_call(
-                        span,
-                        &selected_fcn_path.clone(),
-                        *builtin,
-                        params,
-                        param_values,
-                    );
+                    let r = self.eval_builtin_call(span, &selected_fcn_path.clone(), *builtin, params, param_values);
                     if let Some(with_functions) = with_functions_saved {
                         self.with_functions = with_functions;
                     }
                     return r;
                 } else {
-                    bail!(
-                        span.error(format!("could not find function {selected_fcn_path}").as_str())
-                    );
+                    bail!(span.error(format!("could not find function {selected_fcn_path}").as_str()));
                 }
             }
         };
@@ -2681,10 +2563,7 @@ impl Interpreter {
                     .get(idx)
                     .ok_or_else(|| anyhow!("internal error: missing param value"))?;
 
-                let binding_success = if let Some(BindingPlan::Parameter {
-                    destructuring_plan,
-                    ..
-                }) = self
+                let binding_success = if let Some(BindingPlan::Parameter { destructuring_plan, .. }) = self
                     .compiled_policy
                     .loop_hoisting_table
                     .get_expr_binding_plan(module_idx, expr_idx)
@@ -2692,14 +2571,10 @@ impl Interpreter {
                     .cloned()
                 {
                     // Execute the destructuring plan with the parameter value
-                    self.execute_destructuring_plan(&destructuring_plan, param_value)?
-                        == Value::from(true)
+                    self.execute_destructuring_plan(&destructuring_plan, param_value)? == Value::from(true)
                 } else {
                     // Raise error if binding plan is not found
-                    return Err(span.error(&format!(
-                        "binding plan not found for parameter {}",
-                        a.span().text()
-                    )));
+                    return Err(span.error(&format!("binding plan not found for parameter {}", a.span().text())));
                 };
 
                 if !binding_success {
@@ -2774,19 +2649,11 @@ impl Interpreter {
             if errors.is_empty() {
                 // Check if any default rules can be evaluated.
                 // TODO: with mod
-                let rules = match self
-                    .compiled_policy
-                    .default_rules
-                    .get(&selected_fcn_path)
-                    .cloned()
-                {
+                let rules = match self.compiled_policy.default_rules.get(&selected_fcn_path).cloned() {
                     Some(rules) => Some(rules),
                     None => {
                         let alt_fcn_path = get_path_string(fcn, Some(&self.current_module_path))?;
-                        self.compiled_policy
-                            .default_rules
-                            .get(&alt_fcn_path)
-                            .cloned()
+                        self.compiled_policy.default_rules.get(&alt_fcn_path).cloned()
                     }
                 };
 
@@ -2854,9 +2721,7 @@ impl Interpreter {
             if allow_return_arg {
                 let module_idx = self.current_module_index;
                 let expr_idx = last_param.as_ref().eidx();
-                if let Some(BindingPlan::Parameter {
-                    destructuring_plan, ..
-                }) = self
+                if let Some(BindingPlan::Parameter { destructuring_plan, .. }) = self
                     .compiled_policy
                     .loop_hoisting_table
                     .get_expr_binding_plan(module_idx, expr_idx)
@@ -2904,13 +2769,10 @@ impl Interpreter {
                 .get(path.len()..)
                 .is_some_and(|suffix| suffix.starts_with('.'));
 
-            if module_path_str.starts_with(&path)
-                && (module_path_str.len() == path.len() || has_dot_after_prefix)
-            {
+            if module_path_str.starts_with(&path) && (module_path_str.len() == path.len() || has_dot_after_prefix) {
                 // Ensure that the module is created.
                 let module_path_components = Parser::get_path_ref_components(&module.package.refr)?;
-                let module_path_components: Vec<&str> =
-                    module_path_components.iter().map(|s| s.text()).collect();
+                let module_path_components: Vec<&str> = module_path_components.iter().map(|s| s.text()).collect();
                 let vref = Self::make_or_get_value_mut(&mut self.data, &module_path_components)?;
                 if *vref == Value::Undefined {
                     *vref = Value::new_object();
@@ -3043,10 +2905,7 @@ impl Interpreter {
                 let prefix = fields.iter().take(i).copied().collect::<Vec<_>>();
                 let prefix_path = format!("data.{}", prefix.join("."));
                 if self.compiled_policy.rules.contains_key(&prefix_path)
-                    || self
-                        .compiled_policy
-                        .default_rules
-                        .contains_key(&prefix_path)
+                    || self.compiled_policy.default_rules.contains_key(&prefix_path)
                 {
                     self.ensure_rule_evaluated(prefix_path)?;
                     break;
@@ -3103,10 +2962,7 @@ impl Interpreter {
 
             if !found {
                 if let Some(imported_var) = self.compiled_policy.imports.get(&rule_path).cloned() {
-                    return Ok(Self::get_value_chained(
-                        self.eval_expr(&imported_var)?,
-                        fields,
-                    ));
+                    return Ok(Self::get_value_chained(self.eval_expr(&imported_var)?, fields));
                 }
             }
 
@@ -3151,9 +3007,7 @@ impl Interpreter {
         }
 
         match expr.as_ref() {
-            Expr::Null { value: v, .. }
-            | Expr::Bool { value: v, .. }
-            | Expr::Number { value: v, .. } => Ok(v.clone()),
+            Expr::Null { value: v, .. } | Expr::Bool { value: v, .. } | Expr::Number { value: v, .. } => Ok(v.clone()),
             // TODO: Handle string vs rawstring
             Expr::String { value: v, .. } => Ok(v.clone()),
             Expr::RawString { value: v, .. } => Ok(v.clone()),
@@ -3190,10 +3044,7 @@ impl Interpreter {
             Expr::BinExpr { op, lhs, rhs, .. } => self.eval_bin_expr(op, lhs, rhs),
             Expr::BoolExpr { op, lhs, rhs, .. } => self.eval_bool_expr(op, lhs, rhs),
             Expr::Membership {
-                key,
-                value,
-                collection,
-                ..
+                key, value, collection, ..
             } => self.eval_membership(key, value, collection),
 
             #[cfg(feature = "rego-extensions")]
@@ -3212,13 +3063,9 @@ impl Interpreter {
 
             // Comprehensions
             Expr::ArrayCompr { term, query, .. } => self.eval_array_compr(term, query),
-            Expr::ObjectCompr {
-                key, value, query, ..
-            } => self.eval_object_compr(key, value, query),
+            Expr::ObjectCompr { key, value, query, .. } => self.eval_object_compr(key, value, query),
             Expr::SetCompr { term, query, .. } => self.eval_set_compr(term, query),
-            Expr::UnaryExpr {
-                span, expr: uexpr, ..
-            } => match uexpr.as_ref() {
+            Expr::UnaryExpr { span, expr: uexpr, .. } => match uexpr.as_ref() {
                 Expr::Number { .. } if !uexpr.span().text().starts_with('-') => {
                     builtins::numbers::arithmetic_operation(
                         span,
@@ -3230,13 +3077,9 @@ impl Interpreter {
                         self.compiled_policy.strict_builtin_errors,
                     )
                 }
-                _ => bail!(expr
-                    .span()
-                    .error("unary - can only be used with numeric literals")),
+                _ => bail!(expr.span().error("unary - can only be used with numeric literals")),
             },
-            Expr::Call {
-                span, fcn, params, ..
-            } => self.eval_call(span, expr, fcn, params, None, false),
+            Expr::Call { span, fcn, params, .. } => self.eval_call(span, expr, fcn, params, None, false),
         }
     }
 
@@ -3247,9 +3090,7 @@ impl Interpreter {
             RuleHead::Compr { refr, assign, .. } => {
                 let output_expr = assign.as_ref().map(|assign| assign.value.clone());
                 let (refr, key_expr, value) = match refr.as_ref() {
-                    Expr::RefBrack { refr, index, .. } => {
-                        (refr, Some(index.clone()), Value::new_object())
-                    }
+                    Expr::RefBrack { refr, index, .. } => (refr, Some(index.clone()), Value::new_object()),
                     _ => (refr, None, Value::new_array()),
                 };
 
@@ -3293,12 +3134,7 @@ impl Interpreter {
         bail!("internal error: could not find module for rule");
     }
 
-    fn eval_rule_bodies(
-        &mut self,
-        ctx: Context,
-        span: &Span,
-        bodies: &[RuleBody],
-    ) -> Result<Value> {
+    fn eval_rule_bodies(&mut self, ctx: Context, span: &Span, bodies: &[RuleBody]) -> Result<Value> {
         self.check_execution_time()?;
         let n_scopes = self.scopes.len();
         let result = if bodies.is_empty() {
@@ -3456,14 +3292,10 @@ impl Interpreter {
         Ok(comps.join("."))
     }
 
-    pub fn set_current_module(
-        &mut self,
-        module: Option<Ref<Module>>,
-    ) -> Result<Option<Ref<Module>>> {
+    pub fn set_current_module(&mut self, module: Option<Ref<Module>>) -> Result<Option<Ref<Module>>> {
         let previous_module = self.module.clone();
         if let Some(new_module) = &module {
-            self.current_module_path =
-                Self::get_path_string(&new_module.package.refr, Some("data"))?;
+            self.current_module_path = Self::get_path_string(&new_module.package.refr, Some("data"))?;
             self.current_module_index = self.find_module_index(new_module);
         }
         self.module = module;
@@ -3492,9 +3324,7 @@ impl Interpreter {
     const fn get_rule_refr(rule: &Rule) -> &ExprRef {
         match rule {
             Rule::Spec { head, .. } => match &head {
-                RuleHead::Compr { refr, .. }
-                | RuleHead::Set { refr, .. }
-                | RuleHead::Func { refr, .. } => refr,
+                RuleHead::Compr { refr, .. } | RuleHead::Set { refr, .. } | RuleHead::Func { refr, .. } => refr,
             },
             Rule::Default { refr, .. } => refr,
         }
@@ -3504,9 +3334,7 @@ impl Interpreter {
         use Expr::*;
         let (kind, span) = match expr.as_ref() {
             // Scalars are supported
-            String { .. } | RawString { .. } | Number { .. } | Bool { .. } | Null { .. } => {
-                return Ok(())
-            }
+            String { .. } | RawString { .. } | Number { .. } | Bool { .. } | Null { .. } => return Ok(()),
 
             // Uminus of number is treated as a single expression,
             UnaryExpr { expr, .. } if matches!(expr.as_ref(), Number { .. }) => return Ok(()),
@@ -3668,13 +3496,7 @@ impl Interpreter {
         bail!("Could not find default rule for path: {}", rule_path);
     }
 
-    fn update_data(
-        &mut self,
-        span: &Span,
-        _refr: &Expr,
-        path: &[&str],
-        value: Value,
-    ) -> Result<()> {
+    fn update_data(&mut self, span: &Span, _refr: &Expr, path: &[&str], value: Value) -> Result<()> {
         if value == Value::Undefined {
             return Ok(());
         }
@@ -3688,13 +3510,7 @@ impl Interpreter {
         }
     }
 
-    fn check_rule_path(
-        &mut self,
-        refr: &ExprRef,
-        path: &[Value],
-        value: &Value,
-        is_set: bool,
-    ) -> Result<()> {
+    fn check_rule_path(&mut self, refr: &ExprRef, path: &[Value], value: &Value, is_set: bool) -> Result<()> {
         // TODO: can copying of path be avoided below?
         let range = self.rule_values.range((Unbounded, Included(path.to_vec())));
 
@@ -3718,8 +3534,7 @@ impl Interpreter {
                 r.span().message("", "defined here")
             )));
         }
-        self.rule_values
-            .insert(path.to_vec(), (value.clone(), refr.clone()));
+        self.rule_values.insert(path.to_vec(), (value.clone(), refr.clone()));
 
         Ok(())
     }
@@ -3746,12 +3561,7 @@ impl Interpreter {
                                 let mut full_path = package_components.clone();
                                 full_path.append(&mut path.as_array()?.clone());
                                 self.check_rule_path(refr, &full_path, value_in_map, is_set)?;
-                                self.update_rule_value(
-                                    span,
-                                    full_path,
-                                    value_in_map.clone(),
-                                    is_set,
-                                )?;
+                                self.update_rule_value(span, full_path, value_in_map.clone(), is_set)?;
                             }
                         } else if is_set {
                             if let Ok(mut comps) = self.eval_rule_ref(refr) {
@@ -3765,22 +3575,14 @@ impl Interpreter {
                                 if let Ok(mut comps) = self.eval_rule_ref(refr) {
                                     let mut full_path = package_components;
                                     full_path.append(&mut comps);
-                                    self.update_rule_value(
-                                        span,
-                                        full_path,
-                                        Value::Undefined,
-                                        false,
-                                    )?;
+                                    self.update_rule_value(span, full_path, Value::Undefined, false)?;
                                 }
                             }
                         }
                         self.processed.insert(rule.clone());
                     }
-                    RuleHead::Func {
-                        refr, args, assign, ..
-                    } => {
-                        let mut path =
-                            Parser::get_path_ref_components(&self.current_module()?.package.refr)?;
+                    RuleHead::Func { refr, args, assign, .. } => {
+                        let mut path = Parser::get_path_ref_components(&self.current_module()?.package.refr)?;
 
                         Parser::get_path_ref_components_into(refr, &mut path)?;
                         let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
@@ -3832,11 +3634,7 @@ impl Interpreter {
             for r in &self.active_rules {
                 let refr = Self::get_rule_refr(r);
                 let span = refr.span();
-                msg.push_str(
-                    span.source
-                        .message(span.line, span.col, "depends on", "")
-                        .as_str(),
-                );
+                msg.push_str(span.source.message(span.line, span.col, "depends on", "").as_str());
             }
             msg.push_str("cyclic evaluation");
             self.active_rules.pop();
@@ -3896,8 +3694,7 @@ impl Interpreter {
         // For user queries, set the module index to match the schedule
         // Query snippets are scheduled as if they're in a module at the end
         let prev_module_index = self.current_module_index;
-        let compiled_modules_len =
-            u32::try_from(self.compiled_policy.modules.len()).unwrap_or(u32::MAX);
+        let compiled_modules_len = u32::try_from(self.compiled_policy.modules.len()).unwrap_or(u32::MAX);
         self.current_module_index = compiled_modules_len;
 
         self.ensure_loop_var_values_capacity();
@@ -3955,11 +3752,7 @@ impl Interpreter {
                         }
                     }
 
-                    if !invalid
-                        && !ordered_expressions
-                            .iter()
-                            .any(|v| v.value == Value::Undefined)
-                    {
+                    if !invalid && !ordered_expressions.iter().any(|v| v.value == Value::Undefined) {
                         result.expressions = ordered_expressions;
                     }
                 }
@@ -3974,8 +3767,7 @@ impl Interpreter {
 
         if let Some(r) = results.result.last() {
             if matches!(&r.bindings, Value::Object(obj) if obj.is_empty())
-                && (r.expressions.len() > 1
-                    && r.expressions.iter().any(|e| e.value == Value::Bool(false)))
+                && (r.expressions.len() > 1 && r.expressions.iter().any(|e| e.value == Value::Bool(false)))
             {
                 results = QueryResults::default();
             }
@@ -4043,12 +3835,7 @@ impl Interpreter {
                 prefix_path.append(&mut components);
                 let prefix_path: Vec<&str> = prefix_path.iter().map(|s| s.as_ref()).collect();
                 if Self::get_value_chained(self.data.clone(), &prefix_path) == Value::Undefined {
-                    self.update_data(
-                        rule_refr.span(),
-                        rule_refr,
-                        &prefix_path,
-                        Value::new_object(),
-                    )?;
+                    self.update_data(rule_refr.span(), rule_refr, &prefix_path, Value::new_object())?;
                 }
             }
         }
@@ -4087,12 +3874,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn record_default_rule(
-        &mut self,
-        refr: &Ref<Expr>,
-        rule: &Ref<Rule>,
-        index: Option<String>,
-    ) -> Result<()> {
+    fn record_default_rule(&mut self, refr: &Ref<Expr>, rule: &Ref<Rule>, index: Option<String>) -> Result<()> {
         let comps = Parser::get_path_ref_components(refr)?;
         let comps: Vec<&str> = comps.iter().map(|s| s.text()).collect();
         for (idx, comp_idx) in (0..comps.len()).enumerate() {
@@ -4116,7 +3898,9 @@ impl Interpreter {
                         for (_, i) in o.get() {
                             if let (Some(old), Some(new)) = (i, &index) {
                                 if old == new {
-                                    bail!(refr.span().error("multiple default rules for the variable with the same index"));
+                                    bail!(refr
+                                        .span()
+                                        .error("multiple default rules for the variable with the same index"));
                                 }
                             } else if index.is_some() || i.is_some() {
                                 bail!(refr.span().error("conflict type with the default rules"));
@@ -4151,10 +3935,7 @@ impl Interpreter {
                             #[cfg(feature = "std")]
                             std::eprintln!(
                                 "{}",
-                                import
-                                    .refr
-                                    .span()
-                                    .message("warning", "redundant import of `input`")
+                                import.refr.span().message("warning", "redundant import of `input`")
                             );
                             continue;
                         }
@@ -4162,10 +3943,7 @@ impl Interpreter {
                     },
                 };
                 if target.is_empty() {
-                    bail!(import
-                        .refr
-                        .span()
-                        .message("warning", "invalid ref in import"));
+                    bail!(import.refr.span().message("warning", "invalid ref in import"));
                 }
                 self.compiled_policy_mut()
                     .imports
@@ -4185,11 +3963,7 @@ impl Interpreter {
                     // Adjust refr to ensure simple ref.
                     // TODO: refactor.
                     let refr = match refr.as_ref() {
-                        Expr::RefBrack { index, .. }
-                            if matches!(index.as_ref(), Expr::String { .. }) =>
-                        {
-                            refr
-                        }
+                        Expr::RefBrack { index, .. } if matches!(index.as_ref(), Expr::String { .. }) => refr,
                         Expr::RefBrack { refr, .. } => refr,
                         _ => refr,
                     };
@@ -4221,12 +3995,7 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn add_extension(
-        &mut self,
-        path: String,
-        nargs: u8,
-        extension: Box<dyn Extension>,
-    ) -> Result<()> {
+    pub fn add_extension(&mut self, path: String, nargs: u8, extension: Box<dyn Extension>) -> Result<()> {
         if let MapEntry::Vacant(v) = self.extensions.entry(path) {
             v.insert((nargs, Rc::new(extension)));
             Ok(())
@@ -4246,9 +4015,7 @@ impl Interpreter {
             // TODO: with mods
             match &stmt.literal {
                 Literal::SomeVars { .. } => (),
-                Literal::SomeIn {
-                    value, collection, ..
-                } => {
+                Literal::SomeIn { value, collection, .. } => {
                     self.gather_coverage_in_expr(value, covered, file)?;
                     self.gather_coverage_in_expr(collection, covered, file)?;
                 }

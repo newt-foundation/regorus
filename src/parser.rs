@@ -14,11 +14,7 @@
 )]
 #![allow(missing_debug_implementations)] // parser types are internal
 
-use crate::ast::*;
-use crate::lexer::*;
-use crate::number::*;
-use crate::value::*;
-use crate::*;
+use crate::{ast::*, lexer::*, number::*, value::*, *};
 
 use alloc::collections::BTreeMap;
 use core::str::FromStr;
@@ -130,10 +126,10 @@ impl<'source> Parser<'source> {
         if self.expr_depth > self.max_expr_depth {
             self.expr_depth = current_depth.saturating_sub(1);
             self.expr_depth_overflow = true;
-            bail!(self.tok.1.error(&format!(
-                "expression nesting too deep (>{})",
-                self.max_expr_depth
-            )));
+            bail!(self
+                .tok
+                .1
+                .error(&format!("expression nesting too deep (>{})", self.max_expr_depth)));
         }
 
         let res = f(self);
@@ -164,14 +160,11 @@ impl<'source> Parser<'source> {
         #[cfg(feature = "std")]
         {
             let kw = self.token_text();
-            let msg = format!(
-                "`{kw}` will be treated as identifier due to missing `import future.keywords.{kw}`"
-            );
+            let msg = format!("`{kw}` will be treated as identifier due to missing `import future.keywords.{kw}`");
 
             std::eprintln!(
                 "{}",
-                self.source
-                    .message(self.tok.1.line, self.tok.1.col, "warning", &msg)
+                self.source.message(self.tok.1.line, self.tok.1.col, "warning", &msg)
             );
         }
     }
@@ -234,9 +227,7 @@ impl<'source> Parser<'source> {
     fn handle_import_future_keywords(&mut self, comps: &[Span]) -> Result<bool> {
         if comps.len() >= 2 && comps[0].text() == "future" && comps[1].text() == "keywords" {
             match comps.len().saturating_sub(2) {
-                1 if comps.len() >= 3 => {
-                    self.set_future_keyword(comps[2].text(), &Some(comps[2].clone()))?
-                }
+                1 if comps.len() >= 3 => self.set_future_keyword(comps[2].text(), &Some(comps[2].clone()))?,
                 0 => {
                     let span = &comps[1];
                     for kw in FUTURE_KEYWORDS.iter() {
@@ -245,11 +236,9 @@ impl<'source> Parser<'source> {
                 }
                 _ if comps.len() >= 4 => {
                     let s = &comps[3];
-                    return Err(self.source.error(
-                        s.line,
-                        s.col.saturating_sub(1),
-                        "invalid future keyword",
-                    ));
+                    return Err(self
+                        .source
+                        .error(s.line, s.col.saturating_sub(1), "invalid future keyword"));
                 }
                 _ => {
                     let s = &comps[1];
@@ -267,12 +256,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    pub fn parse_future_keyword(
-        &mut self,
-        kw: &str,
-        is_optional: bool,
-        context: &str,
-    ) -> Result<()> {
+    pub fn parse_future_keyword(&mut self, kw: &str, is_optional: bool, context: &str) -> Result<()> {
         if self.token_text() == kw {
             match &self.future_keywords.get(kw) {
                 Some(_) => self.next_token(),
@@ -293,16 +277,7 @@ impl<'source> Parser<'source> {
     fn is_keyword(&self, ident: &str) -> bool {
         matches!(
             ident,
-            "as" | "default"
-                | "else"
-                | "false"
-                | "import"
-                | "package"
-                | "not"
-                | "null"
-                | "some"
-                | "true"
-                | "with"
+            "as" | "default" | "else" | "false" | "import" | "package" | "not" | "null" | "some" | "true" | "with"
         )
     }
 
@@ -365,8 +340,7 @@ impl<'source> Parser<'source> {
         let node = match &self.tok.0 {
             TokenKind::Number => self.read_number(span)?,
             TokenKind::String => {
-                let v = match serde_json::from_str::<Value>(format!("\"{}\"", span.text()).as_str())
-                {
+                let v = match serde_json::from_str::<Value>(format!("\"{}\"", span.text()).as_str()) {
                     Ok(v) => v,
                     Err(e) => bail!(span.error(format!("invalid string literal. {e}").as_str())),
                 };
@@ -411,11 +385,9 @@ impl<'source> Parser<'source> {
                 }
             },
             _ => {
-                return Err(self.source.error(
-                    self.tok.1.line,
-                    self.tok.1.col,
-                    "expecting expression",
-                ))
+                return Err(self
+                    .source
+                    .error(self.tok.1.line, self.tok.1.col, "expecting expression"))
             }
         };
         self.next_token()?;
@@ -747,11 +719,8 @@ impl<'source> Parser<'source> {
                     if field.start != sep_pos + 1 {
                         bail!(
                             "{}",
-                            self.source.error(
-                                field.line,
-                                field.col - 1,
-                                "invalid whitespace between . and identifier"
-                            )
+                            self.source
+                                .error(field.line, field.col - 1, "invalid whitespace between . and identifier")
                         );
                     }
                     let fieldv = Value::from(field.text());
@@ -955,12 +924,7 @@ impl<'source> Parser<'source> {
         Ok(expr)
     }
 
-    fn parse_membership_tail(
-        &mut self,
-        start: u32,
-        mut expr1: Expr,
-        mut expr2: Option<Expr>,
-    ) -> Result<Expr> {
+    fn parse_membership_tail(&mut self, start: u32, mut expr1: Expr, mut expr2: Option<Expr>) -> Result<Expr> {
         loop {
             let mut span = self.tok.1.clone();
             span.start = start;
@@ -1207,9 +1171,7 @@ impl<'source> Parser<'source> {
                     span.text()
                 ));
             }
-            return Err(anyhow!(
-                "invalid some-decl: expected `in` after variable names"
-            ));
+            return Err(anyhow!("invalid some-decl: expected `in` after variable names"));
         }
 
         let (key, value) = match refs.len() {
@@ -1218,9 +1180,7 @@ impl<'source> Parser<'source> {
             _ => {
                 // We always parse at least one identifier before `in`; guard defensively.
                 // parse_ident rejects `in` when no vars are present, so this is effectively unreachable.
-                return Err(anyhow!(
-                    "invalid some-decl: expected variable names before `in`"
-                ));
+                return Err(anyhow!("invalid some-decl: expected variable names before `in`"));
             }
         };
 
@@ -1294,13 +1254,7 @@ impl<'source> Parser<'source> {
                 // Treat { 1 | 1 } as a comprehension instead of a
                 // set of 1 element.
                 if let Literal::Expr { expr: e, .. } = &stmt.literal {
-                    if matches!(
-                        e.as_ref(),
-                        Expr::BinExpr {
-                            op: BinOp::Union,
-                            ..
-                        }
-                    ) {
+                    if matches!(e.as_ref(), Expr::BinExpr { op: BinOp::Union, .. }) {
                         *self = state;
                         bail!("try parse as comprehension");
                     }
@@ -1375,11 +1329,7 @@ impl<'source> Parser<'source> {
 
         let expr = Ref::new(self.parse_expr()?);
         span.end = self.end;
-        Ok(Some(RuleAssign {
-            span,
-            op,
-            value: expr,
-        }))
+        Ok(Some(RuleAssign { span, op, value: expr }))
     }
 
     fn span_and_value(s: Span) -> (Span, Value) {
@@ -1422,11 +1372,8 @@ impl<'source> Parser<'source> {
                     if field.start != sep_pos + 1 {
                         bail!(
                             "{}",
-                            self.source.error(
-                                field.line,
-                                field.col - 1,
-                                "invalid whitespace between . and identifier"
-                            )
+                            self.source
+                                .error(field.line, field.col - 1, "invalid whitespace between . and identifier")
                         );
                     }
                     refr = Expr::RefDot {
@@ -1448,11 +1395,7 @@ impl<'source> Parser<'source> {
                             }
                         }
                         _ => {
-                            return Err(self.source.error(
-                                self.tok.1.line,
-                                self.tok.1.col,
-                                "expected string",
-                            ));
+                            return Err(self.source.error(self.tok.1.line, self.tok.1.col, "expected string"));
                         }
                     };
                     self.next_token()?;
@@ -1493,11 +1436,9 @@ impl<'source> Parser<'source> {
                 eidx: self.next_eidx(),
             }
         } else {
-            return Err(self.source.error(
-                span.line,
-                span.col,
-                "expecting identifier. Failed to parse rule-ref.",
-            ));
+            return Err(self
+                .source
+                .error(span.line, span.col, "expecting identifier. Failed to parse rule-ref."));
         };
 
         loop {
@@ -1525,11 +1466,8 @@ impl<'source> Parser<'source> {
                     if field.start != sep_pos + 1 {
                         bail!(
                             "{}",
-                            self.source.error(
-                                field.line,
-                                field.col - 1,
-                                "invalid whitespace between . and identifier"
-                            )
+                            self.source
+                                .error(field.line, field.col - 1, "invalid whitespace between . and identifier")
                         );
                     }
                     term = Expr::RefDot {
@@ -1609,13 +1547,11 @@ impl<'source> Parser<'source> {
                 span.end = self.end;
 
                 // Determine whether to create a set or a compr
-                let is_set_follower = !self.is_keyword(self.token_text())
-                    && !self.is_imported_future_keyword(self.token_text());
+                let is_set_follower =
+                    !self.is_keyword(self.token_text()) && !self.is_imported_future_keyword(self.token_text());
                 if assign.is_none() && is_set_follower {
                     match rule_ref.as_ref() {
-                        Expr::RefBrack { refr, index, .. }
-                            if matches!(refr.as_ref(), Expr::Var { .. }) =>
-                        {
+                        Expr::RefBrack { refr, index, .. } if matches!(refr.as_ref(), Expr::Var { .. }) => {
                             // Adjust the expression counter since we are discarding the RefBrack expression.
                             self.eidx -= 1;
                             return Ok(RuleHead::Set {
@@ -1687,11 +1623,7 @@ impl<'source> Parser<'source> {
                 self.next_token()?;
                 let query = Ref::new(self.parse_query_or_literal_stmt()?);
                 span.end = self.end;
-                bodies.push(RuleBody {
-                    span,
-                    assign,
-                    query,
-                });
+                bodies.push(RuleBody { span, assign, query });
                 // Guard rule body accumulation against allocator limits.
                 check_memory_limit()?;
                 true
@@ -1707,11 +1639,7 @@ impl<'source> Parser<'source> {
                 self.next_token()?;
                 let query = Ref::new(self.parse_query(span.clone(), "}")?);
                 span.end = self.end;
-                bodies.push(RuleBody {
-                    span,
-                    assign,
-                    query,
-                });
+                bodies.push(RuleBody { span, assign, query });
                 // Guard rule body accumulation against allocator limits.
                 check_memory_limit()?;
                 true
@@ -1751,11 +1679,9 @@ impl<'source> Parser<'source> {
 
             match self.token_text() {
                 "{" => {
-                    return Err(self.source.error(
-                        self.tok.1.line,
-                        self.tok.1.col,
-                        "expected `else` keyword",
-                    ))
+                    return Err(self
+                        .source
+                        .error(self.tok.1.line, self.tok.1.col, "expected `else` keyword"))
                 }
                 "else" => self.next_token()?,
                 _ => break,
@@ -1768,11 +1694,7 @@ impl<'source> Parser<'source> {
                     self.next_token()?;
                     let query = Ref::new(self.parse_query_or_literal_stmt()?);
                     span.end = self.end;
-                    bodies.push(RuleBody {
-                        span,
-                        assign,
-                        query,
-                    });
+                    bodies.push(RuleBody { span, assign, query });
                     // Guard rule body accumulation against allocator limits.
                     check_memory_limit()?;
                 }
@@ -1783,11 +1705,7 @@ impl<'source> Parser<'source> {
                     self.next_token()?;
                     let query = Ref::new(self.parse_query(span.clone(), "}")?);
                     span.end = self.end;
-                    bodies.push(RuleBody {
-                        span,
-                        assign,
-                        query,
-                    });
+                    bodies.push(RuleBody { span, assign, query });
                     // Guard rule body accumulation against allocator limits.
                     check_memory_limit()?;
                 }
@@ -1810,11 +1728,7 @@ impl<'source> Parser<'source> {
                         qidx: self.next_qidx(),
                     });
                     span.end = self.end;
-                    bodies.push(RuleBody {
-                        span,
-                        assign,
-                        query,
-                    });
+                    bodies.push(RuleBody { span, assign, query });
                     // Guard rule body accumulation against allocator limits.
                     check_memory_limit()?;
                     break;
@@ -1905,9 +1819,7 @@ impl<'source> Parser<'source> {
 
         if self.rego_v1 && bodies.is_empty() {
             match &head {
-                RuleHead::Compr { assign, .. } | RuleHead::Func { assign, .. }
-                    if assign.is_none() =>
-                {
+                RuleHead::Compr { assign, .. } | RuleHead::Func { assign, .. } if assign.is_none() => {
                     bail!(span.error("rule must have a body or assignment"));
                 }
                 RuleHead::Set { refr, key, .. } if key.is_none() => {
@@ -1962,12 +1874,8 @@ impl<'source> Parser<'source> {
                     import.span.col,
                     format!(
                         "import shadows following import defined earlier:{}",
-                        self.source.message(
-                            imp.span.line,
-                            imp.span.col,
-                            "",
-                            "this import is shadowed"
-                        )
+                        self.source
+                            .message(imp.span.line, imp.span.col, "", "this import is shadowed")
                     )
                     .as_str(),
                 ));
@@ -1997,13 +1905,12 @@ impl<'source> Parser<'source> {
                 ));
             }
 
-            let is_future_kw =
-                if comps.len() == 2 && comps[0].text() == "rego" && comps[1].text() == "v1" {
-                    self.turn_on_rego_v1(&Some(span.clone()))?;
-                    true
-                } else {
-                    self.handle_import_future_keywords(&comps)?
-                };
+            let is_future_kw = if comps.len() == 2 && comps[0].text() == "rego" && comps[1].text() == "v1" {
+                self.turn_on_rego_v1(&Some(span.clone()))?;
+                true
+            } else {
+                self.handle_import_future_keywords(&comps)?
+            };
 
             let var = if self.token_text() == "as" {
                 if is_future_kw {
@@ -2017,11 +1924,7 @@ impl<'source> Parser<'source> {
                 self.next_token()?;
                 let var = self.parse_var()?;
                 if var.text() == "_" {
-                    return Err(self.source.error(
-                        var.line,
-                        var.col,
-                        "`_` cannot be used as alias",
-                    ));
+                    return Err(self.source.error(var.line, var.col, "`_` cannot be used as alias"));
                 }
                 Some(var)
             } else {
@@ -2031,14 +1934,7 @@ impl<'source> Parser<'source> {
 
             // TODO: interpreter must check that all the imports are used.
             // future.keywords don't have to be used.
-            self.check_and_add_import(
-                Import {
-                    span,
-                    refr,
-                    r#as: var,
-                },
-                &mut imports,
-            )?;
+            self.check_and_add_import(Import { span, refr, r#as: var }, &mut imports)?;
         }
 
         Ok(imports)
@@ -2050,13 +1946,12 @@ impl<'source> Parser<'source> {
         }
 
         let string_span = self.tok.1.clone();
-        let target_value =
-            match serde_json::from_str::<Value>(format!("\"{}\"", string_span.text()).as_str()) {
-                Ok(v) => v,
-                Err(e) => {
-                    bail!(string_span.error(&format!("invalid string literal: {}", e)));
-                }
-            };
+        let target_value = match serde_json::from_str::<Value>(format!("\"{}\"", string_span.text()).as_str()) {
+            Ok(v) => v,
+            Err(e) => {
+                bail!(string_span.error(&format!("invalid string literal: {}", e)));
+            }
+        };
 
         self.next_token()?;
 
@@ -2103,10 +1998,7 @@ impl<'source> Parser<'source> {
             // Guard policy rule accumulation against allocator limits.
             check_memory_limit()?;
             if self.token_text() == "__target__" {
-                bail!(self
-                    .tok
-                    .1
-                    .error("__target__ must be defined before any rules"));
+                bail!(self.tok.1.error("__target__ must be defined before any rules"));
             }
         }
 

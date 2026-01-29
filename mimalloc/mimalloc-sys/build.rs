@@ -1,19 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::boxed::Box;
-use std::env;
-use std::error::Error;
-use std::fs;
-use std::path::PathBuf;
+use std::{boxed::Box, env, error::Error, fs, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     compile_mimalloc();
     let build_dir = get_build_dir()?;
-    println!(
-        "cargo:rerun-if-changed={}",
-        build_dir.join("mimalloc").display()
-    );
+    println!("cargo:rerun-if-changed={}", build_dir.join("mimalloc").display());
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         // Required for privilege-related APIs used by the Windows static build of mimalloc.

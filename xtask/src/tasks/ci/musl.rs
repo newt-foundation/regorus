@@ -1,16 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::OsString;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::{
+    ffi::OsString,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use anyhow::{anyhow, Result};
 use clap::Args;
 
-use crate::tasks::util::{
-    opa_passing_arguments, run_cargo_step as util_run_cargo_step, workspace_root,
-};
+use crate::tasks::util::{opa_passing_arguments, run_cargo_step as util_run_cargo_step, workspace_root};
 
 /// Exercises the MUSL build and test matrix used in CI.
 #[derive(Args, Default)]
@@ -42,13 +42,7 @@ impl TestMuslCommand {
         run_cargo_test(&workspace, &self.target, self.release, self.frozen, &[])?;
         run_named_test(&workspace, &self.target, self.release, self.frozen, "aci")?;
         run_named_test(&workspace, &self.target, self.release, self.frozen, "kata")?;
-        run_opa_tests(
-            &workspace,
-            &self.target,
-            self.release,
-            self.frozen,
-            &self.opa_features,
-        )
+        run_opa_tests(&workspace, &self.target, self.release, self.frozen, &self.opa_features)
     }
 }
 
@@ -66,24 +60,13 @@ fn ensure_musl_gcc() -> Result<()> {
         )),
     }
 }
-fn run_build_all_targets(
-    workspace: &Path,
-    target: &str,
-    release: bool,
-    frozen: bool,
-) -> Result<()> {
+fn run_build_all_targets(workspace: &Path, target: &str, release: bool, frozen: bool) -> Result<()> {
     let mut args = cargo_target_args("build", target, release, frozen);
     args.push(OsString::from("--all-targets"));
     util_run_cargo_step(workspace, "cargo build --all-targets (musl)", args)
 }
 
-fn run_cargo_test(
-    workspace: &Path,
-    target: &str,
-    release: bool,
-    frozen: bool,
-    extra: &[&str],
-) -> Result<()> {
+fn run_cargo_test(workspace: &Path, target: &str, release: bool, frozen: bool, extra: &[&str]) -> Result<()> {
     let mut args = cargo_target_args("test", target, release, frozen);
     for arg in extra {
         args.push(OsString::from(*arg));
@@ -99,23 +82,11 @@ fn run_cargo_test(
     util_run_cargo_step(workspace, &label, args)
 }
 
-fn run_named_test(
-    workspace: &Path,
-    target: &str,
-    release: bool,
-    frozen: bool,
-    name: &str,
-) -> Result<()> {
+fn run_named_test(workspace: &Path, target: &str, release: bool, frozen: bool, name: &str) -> Result<()> {
     run_cargo_test(workspace, target, release, frozen, &["--test", name])
 }
 
-fn run_opa_tests(
-    workspace: &Path,
-    target: &str,
-    release: bool,
-    frozen: bool,
-    features: &str,
-) -> Result<()> {
+fn run_opa_tests(workspace: &Path, target: &str, release: bool, frozen: bool, features: &str) -> Result<()> {
     let tests = opa_passing_arguments(workspace)?;
     let mut args = cargo_target_args("test", target, release, frozen);
     args.push(OsString::from("--features"));

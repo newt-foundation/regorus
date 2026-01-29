@@ -97,9 +97,7 @@ pub struct ObjectCreateParams {
 impl ObjectCreateParams {
     /// Get the total number of fields
     pub const fn field_count(&self) -> usize {
-        self.literal_key_fields
-            .len()
-            .saturating_add(self.fields.len())
+        self.literal_key_fields.len().saturating_add(self.fields.len())
     }
 
     /// Get literal key field pairs as a slice
@@ -391,22 +389,15 @@ impl InstructionData {
     }
 
     /// Add virtual data document lookup parameters and return the index
-    pub fn add_virtual_data_document_lookup_params(
-        &mut self,
-        params: VirtualDataDocumentLookupParams,
-    ) -> u16 {
+    pub fn add_virtual_data_document_lookup_params(&mut self, params: VirtualDataDocumentLookupParams) -> u16 {
         let index = Self::ensure_u16_index(self.virtual_data_document_lookup_params.len());
         self.virtual_data_document_lookup_params.push(params);
         index
     }
 
     /// Get virtual data document lookup parameters by index
-    pub fn get_virtual_data_document_lookup_params(
-        &self,
-        index: u16,
-    ) -> Option<&VirtualDataDocumentLookupParams> {
-        self.virtual_data_document_lookup_params
-            .get(usize::from(index))
+    pub fn get_virtual_data_document_lookup_params(&self, index: u16) -> Option<&VirtualDataDocumentLookupParams> {
+        self.virtual_data_document_lookup_params.get(usize::from(index))
     }
 
     /// Add chained index parameters and return the index
@@ -439,10 +430,7 @@ impl InstructionData {
     }
 
     /// Get mutable reference to comprehension begin parameters by index
-    pub fn get_comprehension_begin_params_mut(
-        &mut self,
-        index: u16,
-    ) -> Option<&mut ComprehensionBeginParams> {
+    pub fn get_comprehension_begin_params_mut(&mut self, index: u16) -> Option<&mut ComprehensionBeginParams> {
         self.comprehension_begin_params.get_mut(usize::from(index))
     }
 }

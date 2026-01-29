@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use crate::builtins;
-use crate::value::Value;
-use alloc::string::String;
-use alloc::vec::Vec;
+use crate::{builtins, value::Value};
+use alloc::{string::String, vec::Vec};
 
-use super::errors::{Result, VmError};
-use super::execution_model::ExecutionMode;
-use super::machine::RegoVM;
+use super::{
+    errors::{Result, VmError},
+    execution_model::ExecutionMode,
+    machine::RegoVM,
+};
 
 impl RegoVM {
     pub(super) fn execute_function_call(&mut self, params_index: u16) -> Result<()> {
@@ -25,11 +25,9 @@ impl RegoVM {
             ExecutionMode::RunToCompletion => {
                 self.execute_call_rule_common(params.dest, params.func_rule_index, Some(&params))
             }
-            ExecutionMode::Suspendable => self.execute_call_rule_suspendable(
-                params.dest,
-                params.func_rule_index,
-                Some(&params),
-            ),
+            ExecutionMode::Suspendable => {
+                self.execute_call_rule_suspendable(params.dest, params.func_rule_index, Some(&params))
+            }
         };
 
         call_result?;
@@ -48,13 +46,14 @@ impl RegoVM {
                 pc: self.pc,
                 available: self.program.instruction_data.builtin_call_params.len(),
             })?;
-        let builtin_info = self.program.get_builtin_info(params.builtin_index).ok_or(
-            VmError::InvalidBuiltinInfoIndex {
-                index: params.builtin_index,
-                pc: self.pc,
-                available: self.program.builtin_info_table.len(),
-            },
-        )?;
+        let builtin_info =
+            self.program
+                .get_builtin_info(params.builtin_index)
+                .ok_or(VmError::InvalidBuiltinInfoIndex {
+                    index: params.builtin_index,
+                    pc: self.pc,
+                    available: self.program.builtin_info_table.len(),
+                })?;
 
         let mut args = Vec::new();
         for &arg_reg in params.arg_registers().iter() {
@@ -106,13 +105,11 @@ impl RegoVM {
                 }
             }
 
-            let result =
-                match (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, self.strict_builtin_errors)
-                {
-                    Ok(value) => value,
-                    Err(_) if !self.strict_builtin_errors => Value::Undefined,
-                    Err(err) => return Err(err.into()),
-                };
+            let result = match (builtin_fcn.0)(&dummy_span, &dummy_exprs, &args, self.strict_builtin_errors) {
+                Ok(value) => value,
+                Err(_) if !self.strict_builtin_errors => Value::Undefined,
+                Err(err) => return Err(err.into()),
+            };
 
             if result == Value::Undefined {
                 self.set_register(params.dest, Value::Undefined)?;

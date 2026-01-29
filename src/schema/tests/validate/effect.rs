@@ -181,21 +181,14 @@ fn test_validate_deny_effect_wrong_const() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "effect".into());
             match error.as_ref() {
-                ValidationError::ConstMismatch {
-                    expected, actual, ..
-                } => {
+                ValidationError::ConstMismatch { expected, actual, .. } => {
                     assert_eq!(*expected, "\"deny\"".into());
                     assert_eq!(*actual, "\"audit\"".into());
                 }
-                other => panic!(
-                    "Expected ConstMismatch error in nested structure, got: {:?}",
-                    other
-                ),
+                other => panic!("Expected ConstMismatch error in nested structure, got: {:?}", other),
             }
         }
         other => panic!("Expected PropertyValidationFailed error, got: {:?}", other),
@@ -238,9 +231,7 @@ fn test_validate_audit_effect_invalid_enum() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "auditDetails".into());
             match error.as_ref() {
                 ValidationError::PropertyValidationFailed {
@@ -253,16 +244,10 @@ fn test_validate_audit_effect_invalid_enum() {
                         ValidationError::NotInEnum { .. } => {
                             // Expected nested error structure
                         }
-                        other => panic!(
-                            "Expected NotInEnum error in nested structure, got: {:?}",
-                            other
-                        ),
+                        other => panic!("Expected NotInEnum error in nested structure, got: {:?}", other),
                     }
                 }
-                other => panic!(
-                    "Expected nested PropertyValidationFailed error, got: {:?}",
-                    other
-                ),
+                other => panic!("Expected nested PropertyValidationFailed error, got: {:?}", other),
             }
         }
         other => panic!("Expected PropertyValidationFailed error, got: {:?}", other),
@@ -340,9 +325,7 @@ fn test_validate_modify_effect_invalid_operation() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "modifyDetails".into());
             match error.as_ref() {
                 ValidationError::PropertyValidationFailed {
@@ -369,13 +352,12 @@ fn test_validate_modify_effect_invalid_operation() {
                                         ValidationError::NotInEnum { .. } => {
                                             // Expected deeply nested error structure
                                         }
-                                        other => panic!("Expected NotInEnum error in operation validation, got: {:?}", other),
+                                        other => {
+                                            panic!("Expected NotInEnum error in operation validation, got: {:?}", other)
+                                        }
                                     }
                                 }
-                                other => panic!(
-                                    "Expected PropertyValidationFailed for operation, got: {:?}",
-                                    other
-                                ),
+                                other => panic!("Expected PropertyValidationFailed for operation, got: {:?}", other),
                             }
                         }
                         other => {
@@ -383,10 +365,7 @@ fn test_validate_modify_effect_invalid_operation() {
                         }
                     }
                 }
-                other => panic!(
-                    "Expected nested PropertyValidationFailed error, got: {:?}",
-                    other
-                ),
+                other => panic!("Expected nested PropertyValidationFailed error, got: {:?}", other),
             }
         }
         other => panic!("Expected PropertyValidationFailed error, got: {:?}", other),
@@ -507,9 +486,7 @@ fn test_validate_effect_type_mismatch() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::TypeMismatch {
-            expected, actual, ..
-        } => {
+        ValidationError::TypeMismatch { expected, actual, .. } => {
             assert_eq!(expected, "object".into());
             assert_eq!(actual, "string".into());
         }

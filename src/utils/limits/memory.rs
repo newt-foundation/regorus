@@ -2,8 +2,10 @@
 // Licensed under the MIT License.
 
 use super::error::LimitError;
-use core::cell::Cell;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::{
+    cell::Cell,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use std::thread_local;
 
 static GLOBAL_MEMORY_LIMIT: AtomicU64 = AtomicU64::new(u64::MAX);

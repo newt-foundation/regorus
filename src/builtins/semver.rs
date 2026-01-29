@@ -2,11 +2,13 @@
 // Licensed under the MIT License.
 #![allow(clippy::as_conversions, clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string};
-use crate::lexer::Span;
-use crate::value::Value;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{ensure_args_count, ensure_string},
+    lexer::Span,
+    value::Value,
+};
 
 use semver::Version;
 

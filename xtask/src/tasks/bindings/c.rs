@@ -1,9 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::tasks::util::{run_cargo_step, run_command, workspace_root};
 use anyhow::{anyhow, Context, Result};
@@ -61,12 +63,8 @@ pub(super) fn run_binding(relative_dir: &str, binary_name: &str, release: bool) 
     let workspace = workspace_root();
     let source_dir = workspace.join(relative_dir);
     let build_dir = source_dir.join("build");
-    fs::create_dir_all(&build_dir).with_context(|| {
-        format!(
-            "failed to create build directory at {}",
-            build_dir.display()
-        )
-    })?;
+    fs::create_dir_all(&build_dir)
+        .with_context(|| format!("failed to create build directory at {}", build_dir.display()))?;
 
     let build_type = if release { "Release" } else { "Debug" };
     let mut configure = Command::new("cmake");

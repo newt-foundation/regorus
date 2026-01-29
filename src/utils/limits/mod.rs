@@ -16,15 +16,14 @@ pub use error::LimitError;
 #[allow(unused_imports)]
 #[cfg(feature = "allocator-memory-limits")]
 pub use memory::{
-    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters,
-    global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
-    thread_memory_flush_threshold,
+    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters, global_memory_limit,
+    set_global_memory_limit, set_thread_flush_threshold_override, thread_memory_flush_threshold,
 };
 
 #[allow(unused_imports)]
 pub use time::{
-    fallback_execution_timer_config, monotonic_now, set_fallback_execution_timer_config,
-    ExecutionTimer, ExecutionTimerConfig, TimeSource,
+    fallback_execution_timer_config, monotonic_now, set_fallback_execution_timer_config, ExecutionTimer,
+    ExecutionTimerConfig, TimeSource,
 };
 
 #[cfg(test)]

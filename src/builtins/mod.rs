@@ -52,9 +52,11 @@ mod uuid;
 #[cfg(feature = "opa-testutil")]
 mod test;
 
-use crate::ast::{Expr, Ref};
-use crate::lexer::Span;
-use crate::value::Value;
+use crate::{
+    ast::{Expr, Ref},
+    lexer::Span,
+    value::Value,
+};
 
 use crate::Map as BuiltinsMap;
 

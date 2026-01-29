@@ -12,11 +12,15 @@
     clippy::pattern_type_mismatch
 )]
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use core::cmp::Ordering;
-use core::fmt::{Debug, Formatter};
-use core::str::FromStr;
+use alloc::{
+    format,
+    string::{String, ToString},
+};
+use core::{
+    cmp::Ordering,
+    fmt::{Debug, Formatter},
+    str::FromStr,
+};
 
 use anyhow::{anyhow, bail, Result};
 use num_bigint::BigInt as NumBigInt;
@@ -24,8 +28,7 @@ use num_bigint::BigInt as NumBigInt;
 use num_traits::float::FloatCore;
 use num_traits::{One, Signed, ToPrimitive, Zero};
 
-use serde::ser::Serializer;
-use serde::Serialize;
+use serde::{ser::Serializer, Serialize};
 
 use crate::*;
 
@@ -173,8 +176,8 @@ impl Serialize for Number {
         S: Serializer,
     {
         let s = self.format_decimal();
-        let v = serde_json::Number::from_str(&s)
-            .map_err(|_| serde::ser::Error::custom("could not serialize number"))?;
+        let v =
+            serde_json::Number::from_str(&s).map_err(|_| serde::ser::Error::custom("could not serialize number"))?;
         v.serialize(serializer)
     }
 }
@@ -253,9 +256,8 @@ impl FromStr for Number {
         };
 
         let normalized_ref = normalized.as_str();
-        let is_integer_literal = !normalized_ref.contains('.')
-            && !normalized_ref.contains('e')
-            && !normalized_ref.contains('E');
+        let is_integer_literal =
+            !normalized_ref.contains('.') && !normalized_ref.contains('e') && !normalized_ref.contains('E');
 
         if is_integer_literal {
             let (sign, digits) = if let Some(rest) = normalized_ref.strip_prefix('-') {
@@ -382,11 +384,7 @@ impl Number {
             Number::Int(v) => Some(*v),
             Number::BigInt(v) => v.to_i64(),
             Number::Float(f) => {
-                if f.is_finite()
-                    && f.fract() == 0.0
-                    && *f >= i64::MIN as f64
-                    && *f <= i64::MAX as f64
-                {
+                if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
                     let candidate = *f as i64;
                     if (candidate as f64) == *f {
                         return Some(candidate);
@@ -419,8 +417,7 @@ impl Number {
     }
 
     pub fn to_big(&self) -> Result<Rc<BigInt>> {
-        self.as_big()
-            .ok_or_else(|| anyhow!("Number::to_big failed"))
+        self.as_big().ok_or_else(|| anyhow!("Number::to_big failed"))
     }
 
     pub fn add_assign(&mut self, rhs: &Self) -> Result<()> {
@@ -430,9 +427,7 @@ impl Number {
 
     pub fn add(&self, rhs: &Self) -> Result<Number> {
         if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() + rhs.to_f64_lossy(),
-            ));
+            return Ok(Number::normalize_float(self.to_f64_lossy() + rhs.to_f64_lossy()));
         }
 
         match (self, rhs) {
@@ -440,26 +435,20 @@ impl Number {
                 if let Some(sum) = a.checked_add(*b) {
                     Ok(Number::UInt(sum))
                 } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) + BigInt::from(*b),
-                    ))
+                    Ok(Number::from_bigint_owned(BigInt::from(*a) + BigInt::from(*b)))
                 }
             }
             (Number::Int(a), Number::Int(b)) => {
                 if let Some(sum) = a.checked_add(*b) {
                     Ok(Number::Int(sum))
                 } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) + BigInt::from(*b),
-                    ))
+                    Ok(Number::from_bigint_owned(BigInt::from(*a) + BigInt::from(*b)))
                 }
             }
             (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
                 Ok(Number::from_i128(*a as i128 + *b as i128))
             }
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() + (**b).clone()))
-            }
+            (Number::BigInt(a), Number::BigInt(b)) => Ok(Number::from_bigint_owned((**a).clone() + (**b).clone())),
             (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
                 let mut sum = (**a).clone();
                 sum += other.to_bigint_owned().unwrap();
@@ -476,9 +465,7 @@ impl Number {
 
     pub fn sub(&self, rhs: &Self) -> Result<Number> {
         if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() - rhs.to_f64_lossy(),
-            ));
+            return Ok(Number::normalize_float(self.to_f64_lossy() - rhs.to_f64_lossy()));
         }
 
         match (self, rhs) {
@@ -493,16 +480,12 @@ impl Number {
                 if let Some(diff) = a.checked_sub(*b) {
                     Ok(Number::Int(diff))
                 } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) - BigInt::from(*b),
-                    ))
+                    Ok(Number::from_bigint_owned(BigInt::from(*a) - BigInt::from(*b)))
                 }
             }
             (Number::Int(a), Number::UInt(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
             (Number::UInt(a), Number::Int(b)) => Ok(Number::from_i128(*a as i128 - *b as i128)),
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() - (**b).clone()))
-            }
+            (Number::BigInt(a), Number::BigInt(b)) => Ok(Number::from_bigint_owned((**a).clone() - (**b).clone())),
             (Number::BigInt(a), other) => {
                 let mut diff = (**a).clone();
                 diff -= other.to_bigint_owned().unwrap();
@@ -524,9 +507,7 @@ impl Number {
 
     pub fn mul(&self, rhs: &Self) -> Result<Number> {
         if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() * rhs.to_f64_lossy(),
-            ));
+            return Ok(Number::normalize_float(self.to_f64_lossy() * rhs.to_f64_lossy()));
         }
 
         match (self, rhs) {
@@ -542,9 +523,7 @@ impl Number {
                 if let Some(prod) = a.checked_mul(*b) {
                     Ok(Number::Int(prod))
                 } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) * BigInt::from(*b),
-                    ))
+                    Ok(Number::from_bigint_owned(BigInt::from(*a) * BigInt::from(*b)))
                 }
             }
             (Number::Int(a), Number::UInt(b)) | (Number::UInt(b), Number::Int(a)) => {
@@ -553,14 +532,10 @@ impl Number {
                 if let Some(prod) = lhs.checked_mul(rhs_val) {
                     Ok(Number::from_i128(prod))
                 } else {
-                    Ok(Number::from_bigint_owned(
-                        BigInt::from(*a) * BigInt::from(*b),
-                    ))
+                    Ok(Number::from_bigint_owned(BigInt::from(*a) * BigInt::from(*b)))
                 }
             }
-            (Number::BigInt(a), Number::BigInt(b)) => {
-                Ok(Number::from_bigint_owned((**a).clone() * (**b).clone()))
-            }
+            (Number::BigInt(a), Number::BigInt(b)) => Ok(Number::from_bigint_owned((**a).clone() * (**b).clone())),
             (Number::BigInt(a), other) | (other, Number::BigInt(a)) => {
                 let product = (**a).clone() * other.to_bigint_owned().unwrap();
                 Ok(Number::from_bigint_owned(product))
@@ -791,15 +766,11 @@ impl Number {
     }
 
     pub fn format_bin(&self) -> String {
-        self.ensure_integer()
-            .map(|v| v.to_str_radix(2))
-            .unwrap_or_default()
+        self.ensure_integer().map(|v| v.to_str_radix(2)).unwrap_or_default()
     }
 
     pub fn format_octal(&self) -> String {
-        self.ensure_integer()
-            .map(|v| v.to_str_radix(8))
-            .unwrap_or_default()
+        self.ensure_integer().map(|v| v.to_str_radix(8)).unwrap_or_default()
     }
 
     pub fn format_scientific(&self) -> String {
@@ -839,9 +810,7 @@ impl Number {
     }
 
     pub fn format_hex(&self) -> String {
-        self.ensure_integer()
-            .map(|v| v.to_str_radix(16))
-            .unwrap_or_default()
+        self.ensure_integer().map(|v| v.to_str_radix(16)).unwrap_or_default()
     }
 
     pub fn format_big_hex(&self) -> String {

@@ -309,12 +309,9 @@ impl Schema {
 
     /// Parse a JSON Schema document into a `Schema` instance.
     /// Provides better error messages than `serde_json::from_value`.
-    pub fn from_serde_json_value(
-        schema: serde_json::Value,
-    ) -> Result<Self, Box<dyn core::error::Error + Send + Sync>> {
+    pub fn from_serde_json_value(schema: serde_json::Value) -> Result<Self, Box<dyn core::error::Error + Send + Sync>> {
         let meta_schema_validation_result = meta::validate_schema_detailed(&schema);
-        let schema = serde_json::from_value::<Schema>(schema)
-            .map_err(|e| format!("Failed to parse schema: {e}"))?;
+        let schema = serde_json::from_value::<Schema>(schema).map_err(|e| format!("Failed to parse schema: {e}"))?;
         if let Err(errors) = meta_schema_validation_result {
             return Err(format!("Schema validation failed: {}", errors.join("\n")).into());
         }
@@ -325,8 +322,7 @@ impl Schema {
     /// Parse a JSON Schema document from a string into a `Schema` instance.
     /// Provides better error messages than `serde_json::from_str`.
     pub fn from_json_str(s: &str) -> Result<Self, Box<dyn core::error::Error + Send + Sync>> {
-        let value: serde_json::Value =
-            serde_json::from_str(s).map_err(|e| format!("Failed to parse schema: {e}"))?;
+        let value: serde_json::Value = serde_json::from_str(s).map_err(|e| format!("Failed to parse schema: {e}"))?;
         Self::from_serde_json_value(value)
     }
 
@@ -425,8 +421,7 @@ impl<'de> Deserialize<'de> for Schema {
                 #[serde(rename = "anyOf")]
                 variants: Rc<Vec<Schema>>,
             }
-            let any_of: AnyOf = Deserialize::deserialize(v)
-                .map_err(|e| serde::de::Error::custom(format!("{e}")))?;
+            let any_of: AnyOf = Deserialize::deserialize(v).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
             return Ok(Schema::new(Type::AnyOf(any_of.variants)));
         }
 
@@ -439,8 +434,8 @@ impl<'de> Deserialize<'de> for Schema {
                 value: Value,
                 description: Option<String>,
             }
-            let const_schema: Const = Deserialize::deserialize(v)
-                .map_err(|e| serde::de::Error::custom(format!("{e}")))?;
+            let const_schema: Const =
+                Deserialize::deserialize(v).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
             return Ok(Schema::new(Type::Const {
                 description: const_schema.description,
                 value: const_schema.value,
@@ -455,16 +450,15 @@ impl<'de> Deserialize<'de> for Schema {
                 values: Rc<Vec<Value>>,
                 description: Option<String>,
             }
-            let enum_schema: Enum = Deserialize::deserialize(v)
-                .map_err(|e| serde::de::Error::custom(format!("{e}")))?;
+            let enum_schema: Enum =
+                Deserialize::deserialize(v).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
             return Ok(Schema::new(Type::Enum {
                 description: enum_schema.description,
                 values: enum_schema.values,
             }));
         }
 
-        let t: Type =
-            Deserialize::deserialize(v).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
+        let t: Type = Deserialize::deserialize(v).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
         Ok(Schema::new(t))
     }
 }
@@ -898,10 +892,7 @@ pub enum Type {
     /// }
     /// ```
     #[serde(skip)]
-    Const {
-        description: Option<String>,
-        value: Value,
-    },
+    Const { description: Option<String>, value: Value },
 
     /// Represents an enumeration type with a fixed set of allowed values.
     ///
@@ -958,8 +949,8 @@ where
         }
     }
 
-    let schema: Schema = Deserialize::deserialize(value.clone())
-        .map_err(|e| serde::de::Error::custom(format!("{e}")))?;
+    let schema: Schema =
+        Deserialize::deserialize(value.clone()).map_err(|e| serde::de::Error::custom(format!("{e}")))?;
     Ok(Some(schema))
 }
 
@@ -1049,11 +1040,8 @@ impl<'de> Deserialize<'de> for DiscriminatedSubobject {
         }
 
         Ok(DiscriminatedSubobject {
-            discriminator: discriminator.ok_or_else(|| {
-                serde::de::Error::custom(
-                    "DiscriminatedSubobject must have a discriminator property",
-                )
-            })?,
+            discriminator: discriminator
+                .ok_or_else(|| serde::de::Error::custom("DiscriminatedSubobject must have a discriminator property"))?,
             variants: Rc::new(variants),
         })
     }

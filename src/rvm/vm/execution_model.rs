@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::program::RuleType;
-use crate::value::Value;
-use alloc::collections::BTreeSet;
-use alloc::vec::Vec;
+use crate::{rvm::program::RuleType, value::Value};
+use alloc::{collections::BTreeSet, vec::Vec};
 
-use super::context::{ComprehensionContext, LoopContext};
-use super::errors::VmError;
+use super::{
+    context::{ComprehensionContext, LoopContext},
+    errors::VmError,
+};
 
 /// Represents a single execution context (frame) in the VM
 #[derive(Debug, Clone)]
@@ -41,10 +41,7 @@ pub(super) enum FrameKind {
     /// Rule execution frame (replaces recursive jump_to calls)
     Rule(RuleFrameData),
     /// Loop iteration frame
-    Loop {
-        return_pc: usize,
-        context: LoopContext,
-    },
+    Loop { return_pc: usize, context: LoopContext },
     /// Comprehension frame
     Comprehension {
         return_pc: usize,

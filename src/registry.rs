@@ -144,19 +144,12 @@ impl<T> Registry<T> {
 
     /// Get all registered items as a vector.
     pub fn list_items(&self) -> Vec<Rc<T>> {
-        self.inner
-            .iter()
-            .map(|entry| Rc::clone(entry.value()))
-            .collect()
+        self.inner.iter().map(|entry| Rc::clone(entry.value())).collect()
     }
 
     /// Try to register an item, but don't fail if the name already exists.
     /// Returns Ok(true) if the item was registered, Ok(false) if the name already exists.
-    pub fn try_register(
-        &self,
-        name: impl Into<String>,
-        item: Rc<T>,
-    ) -> Result<bool, RegistryError> {
+    pub fn try_register(&self, name: impl Into<String>, item: Rc<T>) -> Result<bool, RegistryError> {
         match self.register(name, item) {
             Ok(()) => Ok(true),
             Err(RegistryError::AlreadyExists { .. }) => Ok(false),
@@ -204,10 +197,7 @@ pub mod instances {
 macro_rules! generate_registry_helpers {
     ($registry_var:ident, $item_type:ty, $item_description:literal, $item_description_plural:literal) => {
         #[doc = concat!("Register a ", $item_description, " with a given name.")]
-        pub fn register(
-            name: impl Into<String>,
-            item: Rc<$item_type>,
-        ) -> Result<(), RegistryError> {
+        pub fn register(name: impl Into<String>, item: Rc<$item_type>) -> Result<(), RegistryError> {
             $registry_var.register(name, item)
         }
 

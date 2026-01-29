@@ -91,6 +91,9 @@ opa-no-std = [
 # Rego language extensions
 rego-extensions = []
 
+# Newton-specific Rego extensions for Ethereum cryptography
+newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
+
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]
@@ -129,6 +132,10 @@ mimalloc = { path = "mimalloc", optional = true }
 # rvm related deps
 indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
+
+# Newton-crypto dependencies
+alloy-primitives = { version = "0.8", optional = true, default-features = false }
+k256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa"] }
 
 [dev-dependencies]
 anyhow = "1.0.45"

@@ -2,23 +2,25 @@
 // Licensed under the MIT License.
 #![allow(clippy::print_stderr)]
 
-use crate::ast::*;
-use crate::compiled_policy::CompiledPolicy;
-use crate::interpreter::*;
-use crate::lexer::*;
-use crate::parser::*;
-use crate::scheduler::*;
-use crate::utils::gather_functions;
-use crate::utils::limits::{self, fallback_execution_timer_config, ExecutionTimerConfig};
-use crate::value::*;
-use crate::*;
-use crate::{Extension, QueryResults};
+use crate::{
+    ast::*,
+    compiled_policy::CompiledPolicy,
+    interpreter::*,
+    lexer::*,
+    parser::*,
+    scheduler::*,
+    utils::{
+        gather_functions,
+        limits::{self, fallback_execution_timer_config, ExecutionTimerConfig},
+    },
+    value::*,
+    Extension, QueryResults, *,
+};
 
 use crate::Rc;
 use anyhow::{anyhow, bail, Result};
 
 /// The Rego evaluation engine.
-///
 #[derive(Debug, Clone)]
 pub struct Engine {
     modules: Rc<Vec<Ref<Module>>>,
@@ -66,8 +68,7 @@ impl Default for Engine {
 
 impl Engine {
     fn effective_execution_timer_config(&self) -> Option<ExecutionTimerConfig> {
-        self.execution_timer_config
-            .or_else(fallback_execution_timer_config)
+        self.execution_timer_config.or_else(fallback_execution_timer_config)
     }
 
     fn apply_effective_execution_timer_config(&mut self) {
@@ -100,19 +101,20 @@ impl Engine {
     /// engine.set_rego_v0(true);
     ///
     /// engine.add_policy(
-    ///    "test.rego".to_string(),
-    ///    r#"
+    ///     "test.rego".to_string(),
+    ///     r#"
     ///    package test
     ///
     ///    allow { # v0 syntax does not require if keyword
     ///       1 < 2
     ///    }
-    ///    "#.to_string())?;
+    ///    "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// # Ok(())
     /// # }
     /// ```
-    ///
     pub const fn set_rego_v0(&mut self, rego_v0: bool) {
         self.rego_v1 = !rego_v0;
     }
@@ -126,10 +128,8 @@ impl Engine {
     /// # Examples
     ///
     /// ```
-    /// use std::num::NonZeroU32;
-    /// use std::time::Duration;
-    /// use regorus::utils::limits::ExecutionTimerConfig;
-    /// use regorus::Engine;
+    /// use regorus::{utils::limits::ExecutionTimerConfig, Engine};
+    /// use std::{num::NonZeroU32, time::Duration};
     ///
     /// let mut engine = Engine::new();
     /// let config = ExecutionTimerConfig {
@@ -149,13 +149,11 @@ impl Engine {
     /// # Examples
     ///
     /// ```
-    /// use std::num::NonZeroU32;
-    /// use std::time::Duration;
-    /// use regorus::utils::limits::{
-    ///     set_fallback_execution_timer_config,
-    ///     ExecutionTimerConfig,
+    /// use regorus::{
+    ///     utils::limits::{set_fallback_execution_timer_config, ExecutionTimerConfig},
+    ///     Engine,
     /// };
-    /// use regorus::Engine;
+    /// use std::{num::NonZeroU32, time::Duration};
     ///
     /// let mut engine = Engine::new();
     /// let global = ExecutionTimerConfig {
@@ -169,6 +167,40 @@ impl Engine {
     pub fn clear_execution_timer_config(&mut self) {
         self.execution_timer_config = None;
         self.apply_effective_execution_timer_config();
+    }
+
+    /// Register Newton crypto extensions with the engine.
+    ///
+    /// This method registers Newton-specific Rego built-in functions for
+    /// Ethereum cryptography operations, including ECDSA signature recovery.
+    ///
+    /// Available functions:
+    /// - `newton.crypto.ecdsa_recover_signer(signature, message_hash)` - Recover signer from raw hash
+    /// - `newton.crypto.ecdsa_recover_signer_personal(signature, message)` - Recover signer using personal_sign format
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let mut engine = Engine::new();
+    ///
+    /// // Register Newton crypto extensions
+    /// engine.with_newton_crypto_extensions()?;
+    ///
+    /// engine.add_policy(
+    ///     "test.rego".to_string(),
+    ///     r#"
+    ///    package test
+    ///    signer := newton.crypto.ecdsa_recover_signer(input.signature, input.hash)
+    ///    "#
+    ///     .to_string(),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "newton-crypto")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-crypto")))]
+    pub fn with_newton_crypto_extensions(&mut self) -> Result<()> {
+        crate::extensions::crypto::register_newton_crypto_extensions(self)
     }
 
     /// Add a policy.
@@ -186,17 +218,18 @@ impl Engine {
     /// let mut engine = Engine::new();
     ///
     /// let package = engine.add_policy(
-    ///    "test.rego".to_string(),
-    ///    r#"
+    ///     "test.rego".to_string(),
+    ///     r#"
     ///    package test
     ///    allow = input.user == "root"
-    ///    "#.to_string())?;
+    ///    "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// assert_eq!(package, "data.test");
     /// # Ok(())
     /// # }
     /// ```
-    ///
     pub fn add_policy(&mut self, path: String, rego: String) -> Result<String> {
         let source = Source::from_contents(path, rego)?;
         let mut parser = self.make_parser(&source)?;
@@ -256,7 +289,10 @@ impl Engine {
     /// // Package names can be different from file names.
     /// let _ = engine.add_policy("policy.rego".into(), "package hello.world".into())?;
     ///
-    /// assert_eq!(engine.get_packages()?, vec!["data.framework", "data.hello.world"]);
+    /// assert_eq!(
+    ///     engine.get_packages()?,
+    ///     vec!["data.framework", "data.hello.world"]
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -336,11 +372,13 @@ impl Engine {
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
     ///
-    /// let input = Value::from_json_str(r#"
+    /// let input = Value::from_json_str(
+    ///     r#"
     /// {
     ///   "role" : "admin",
     ///   "action": "delete"
-    /// }"#)?;
+    /// }"#,
+    /// )?;
     ///
     /// engine.set_input(input);
     /// # Ok(())
@@ -394,17 +432,23 @@ impl Engine {
     /// assert!(engine.add_data(Value::from_json_str("[]")?).is_err());
     ///
     /// // Merge { "x" : 1, "y" : {} }
-    /// assert!(engine.add_data(Value::from_json_str(r#"{ "x" : 1, "y" : {}}"#)?).is_ok());
+    /// assert!(engine
+    ///     .add_data(Value::from_json_str(r#"{ "x" : 1, "y" : {}}"#)?)
+    ///     .is_ok());
     ///
     /// // Merge { "z" : 2 }
-    /// assert!(engine.add_data(Value::from_json_str(r#"{ "z" : 2 }"#)?).is_ok());
+    /// assert!(engine
+    ///     .add_data(Value::from_json_str(r#"{ "z" : 2 }"#)?)
+    ///     .is_ok());
     ///
     /// // Merge { "z" : 3 }. Conflict error.
-    /// assert!(engine.add_data(Value::from_json_str(r#"{ "z" : 3 }"#)?).is_err());
+    /// assert!(engine
+    ///     .add_data(Value::from_json_str(r#"{ "z" : 3 }"#)?)
+    ///     .is_err());
     ///
     /// assert_eq!(
-    ///   engine.eval_query("data".to_string(), false)?.result[0].expressions[0].value,
-    ///   Value::from_json_str(r#"{ "x": 1, "y": {}, "z": 2}"#)?
+    ///     engine.eval_query("data".to_string(), false)?.result[0].expressions[0].value,
+    ///     Value::from_json_str(r#"{ "x": 1, "y": {}, "z": 2}"#)?
     /// );
     /// # Ok(())
     /// # }
@@ -433,10 +477,14 @@ impl Engine {
     /// assert_eq!(engine.get_data(), Value::new_object());
     ///
     /// // Merge { "x" : 1, "y" : {} }
-    /// assert!(engine.add_data(Value::from_json_str(r#"{ "x" : 1, "y" : {}}"#)?).is_ok());
+    /// assert!(engine
+    ///     .add_data(Value::from_json_str(r#"{ "x" : 1, "y" : {}}"#)?)
+    ///     .is_ok());
     ///
     /// // Merge { "z" : 2 }
-    /// assert!(engine.add_data(Value::from_json_str(r#"{ "z" : 2 }"#)?).is_ok());
+    /// assert!(engine
+    ///     .add_data(Value::from_json_str(r#"{ "z" : 2 }"#)?)
+    ///     .is_ok());
     ///
     /// let data = engine.get_data();
     /// assert_eq!(data["x"], Value::from(1));
@@ -496,8 +544,12 @@ impl Engine {
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
-    /// engine.add_data(Value::from_json_str(r#"{"allowed_sizes": ["small", "medium"]}"#)?)?;
-    /// engine.add_policy("policy.rego".to_string(), r#"
+    /// engine.add_data(Value::from_json_str(
+    ///     r#"{"allowed_sizes": ["small", "medium"]}"#,
+    /// )?)?;
+    /// engine.add_policy(
+    ///     "policy.rego".to_string(),
+    ///     r#"
     ///     package policy.test
     ///     import rego.v1
     ///     __target__ := "target.tests.sample_test_target"
@@ -507,10 +559,13 @@ impl Engine {
     ///         input.type == "vm"
     ///         input.size in data.allowed_sizes
     ///     }
-    /// "#.to_string())?;
+    /// "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// let compiled = engine.compile_for_target()?;
-    /// let result = compiled.eval_with_input(Value::from_json_str(r#"{"type": "vm", "size": "small"}"#)?)?;
+    /// let result =
+    ///     compiled.eval_with_input(Value::from_json_str(r#"{"type": "vm", "size": "small"}"#)?)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -518,9 +573,7 @@ impl Engine {
     /// ## Target Registration and Usage
     ///
     /// ```no_run
-    /// use regorus::*;
-    /// use regorus::registry::targets;
-    /// use regorus::target::Target;
+    /// use regorus::{registry::targets, target::Target, *};
     /// use std::sync::Arc;
     ///
     /// # fn main() -> anyhow::Result<()> {
@@ -554,8 +607,12 @@ impl Engine {
     ///
     /// // Use the target in a policy
     /// let mut engine = Engine::new();
-    /// engine.add_data(Value::from_json_str(r#"{"allowed_locations": ["us-east"]}"#)?)?;
-    /// engine.add_policy("vm_policy.rego".to_string(), r#"
+    /// engine.add_data(Value::from_json_str(
+    ///     r#"{"allowed_locations": ["us-east"]}"#,
+    /// )?)?;
+    /// engine.add_policy(
+    ///     "vm_policy.rego".to_string(),
+    ///     r#"
     ///     package vm.validation
     ///     import rego.v1
     ///     __target__ := "target.example.vm_policy"
@@ -565,15 +622,19 @@ impl Engine {
     ///         input.type == "vm"
     ///         input.size in ["small", "medium"]
     ///     }
-    /// "#.to_string())?;
+    /// "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// let compiled = engine.compile_for_target()?;
-    /// let result = compiled.eval_with_input(Value::from_json_str(r#"
+    /// let result = compiled.eval_with_input(Value::from_json_str(
+    ///     r#"
     /// {
     ///   "name": "test-vm",
     ///   "type": "vm",
     ///   "size": "small"
-    /// }"#)?)?;
+    /// }"#,
+    /// )?)?;
     /// assert_eq!(result, Value::from(true));
     /// # Ok(())
     /// # }
@@ -628,8 +689,12 @@ impl Engine {
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
-    /// engine.add_data(Value::from_json_str(r#"{"allowed_users": ["alice", "bob"]}"#)?)?;
-    /// engine.add_policy("authz.rego".to_string(), r#"
+    /// engine.add_data(Value::from_json_str(
+    ///     r#"{"allowed_users": ["alice", "bob"]}"#,
+    /// )?)?;
+    /// engine.add_policy(
+    ///     "authz.rego".to_string(),
+    ///     r#"
     ///     package authz
     ///     import rego.v1
     ///     
@@ -642,10 +707,14 @@ impl Engine {
     ///     deny if {
     ///         input.user == "guest"
     ///     }
-    /// "#.to_string())?;
+    /// "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// let compiled = engine.compile_with_entrypoint(&"data.authz.allow".into())?;
-    /// let result = compiled.eval_with_input(Value::from_json_str(r#"{"user": "alice", "action": "read"}"#)?)?;
+    /// let result = compiled.eval_with_input(Value::from_json_str(
+    ///     r#"{"user": "alice", "action": "read"}"#,
+    /// )?)?;
     /// assert_eq!(result, Value::from(true));
     /// # Ok(())
     /// # }
@@ -659,18 +728,26 @@ impl Engine {
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
-    /// engine.add_data(Value::from_json_str(r#"{"departments": {"engineering": ["alice"], "hr": ["bob"]}}"#)?)?;
+    /// engine.add_data(Value::from_json_str(
+    ///     r#"{"departments": {"engineering": ["alice"], "hr": ["bob"]}}"#,
+    /// )?)?;
     ///
-    /// engine.add_policy("users.rego".to_string(), r#"
+    /// engine.add_policy(
+    ///     "users.rego".to_string(),
+    ///     r#"
     ///     package users
     ///     import rego.v1
     ///     
     ///     user_department(user) := dept if {
     ///         dept := [d | data.departments[d][_] == user][0]
     ///     }
-    /// "#.to_string())?;
+    /// "#
+    ///     .to_string(),
+    /// )?;
     ///
-    /// engine.add_policy("permissions.rego".to_string(), r#"
+    /// engine.add_policy(
+    ///     "permissions.rego".to_string(),
+    ///     r#"
     ///     package permissions
     ///     import rego.v1
     ///     import data.users
@@ -685,16 +762,20 @@ impl Engine {
     ///         users.user_department(input.user) == "hr"
     ///         input.resource.type == "personnel_data"
     ///     }
-    /// "#.to_string())?;
+    /// "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// let compiled = engine.compile_with_entrypoint(&"data.permissions.allow".into())?;
     ///
     /// // Test engineering access to code
-    /// let result = compiled.eval_with_input(Value::from_json_str(r#"
+    /// let result = compiled.eval_with_input(Value::from_json_str(
+    ///     r#"
     /// {
     ///   "user": "alice",
     ///   "resource": {"type": "code", "name": "main.rs"}
-    /// }"#)?)?;
+    /// }"#,
+    /// )?)?;
     /// assert_eq!(result, Value::from(true));
     /// # Ok(())
     /// # }
@@ -721,9 +802,7 @@ impl Engine {
         self.prepare_for_eval(false, false)?;
         self.apply_effective_execution_timer_config();
         self.interpreter.clean_internal_evaluation_state();
-        self.interpreter
-            .compile(Some(rule.clone()))
-            .map(CompiledPolicy::new)
+        self.interpreter.compile(Some(rule.clone())).map(CompiledPolicy::new)
     }
 
     /// Evaluate specified rule(s).
@@ -738,15 +817,17 @@ impl Engine {
     ///
     /// // Add policy
     /// engine.add_policy(
-    ///   "policy.rego".to_string(),
-    ///   r#"
+    ///     "policy.rego".to_string(),
+    ///     r#"
     ///   package example
     ///   import rego.v1
     ///
     ///   x = [1, 2]
     ///
     ///   y := 5 if input.a > 2
-    ///   "#.to_string())?;
+    ///   "#
+    ///     .to_string(),
+    /// )?;
     ///
     /// // Evaluate rule.
     /// let v = engine.eval_rule("data.example.x".to_string())?;
@@ -761,8 +842,8 @@ impl Engine {
     /// assert!(r.is_err());
     ///
     /// // Path must be valid rule paths.
-    /// assert!( engine.eval_rule("data".to_string()).is_err());
-    /// assert!( engine.eval_rule("data.example".to_string()).is_err());
+    /// assert!(engine.eval_rule("data".to_string()).is_err());
+    /// assert!(engine.eval_rule("data.example".to_string()).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -835,17 +916,29 @@ impl Engine {
     /// # let mut engine = Engine::new();
     ///
     /// let enable_tracing = false;
-    /// assert_eq!(engine.eval_bool_query("1 > 2".to_string(), enable_tracing)?, false);
-    /// assert_eq!(engine.eval_bool_query("1 < 2".to_string(), enable_tracing)?, true);
+    /// assert_eq!(
+    ///     engine.eval_bool_query("1 > 2".to_string(), enable_tracing)?,
+    ///     false
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_bool_query("1 < 2".to_string(), enable_tracing)?,
+    ///     true
+    /// );
     ///
     /// // Non boolean queries will raise an error.
-    /// assert!(engine.eval_bool_query("1+1".to_string(), enable_tracing).is_err());
+    /// assert!(engine
+    ///     .eval_bool_query("1+1".to_string(), enable_tracing)
+    ///     .is_err());
     ///
     /// // Queries producing multiple values will raise an error.
-    /// assert!(engine.eval_bool_query("true; true".to_string(), enable_tracing).is_err());
+    /// assert!(engine
+    ///     .eval_bool_query("true; true".to_string(), enable_tracing)
+    ///     .is_err());
     ///
     /// // Queries producing no values will raise an error.
-    /// assert!(engine.eval_bool_query("true; false; true".to_string(), enable_tracing).is_err());
+    /// assert!(engine
+    ///     .eval_bool_query("true; false; true".to_string(), enable_tracing)
+    ///     .is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -881,11 +974,26 @@ impl Engine {
     /// # let mut engine = Engine::new();
     ///
     /// let enable_tracing = false;
-    /// assert_eq!(engine.eval_allow_query("1 > 2".to_string(), enable_tracing), false);
-    /// assert_eq!(engine.eval_allow_query("1 < 2".to_string(), enable_tracing), true);
-    /// assert_eq!(engine.eval_allow_query("1+1".to_string(), enable_tracing), false);
-    /// assert_eq!(engine.eval_allow_query("true; true".to_string(), enable_tracing), false);
-    /// assert_eq!(engine.eval_allow_query("true; false; true".to_string(), enable_tracing), false);
+    /// assert_eq!(
+    ///     engine.eval_allow_query("1 > 2".to_string(), enable_tracing),
+    ///     false
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_allow_query("1 < 2".to_string(), enable_tracing),
+    ///     true
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_allow_query("1+1".to_string(), enable_tracing),
+    ///     false
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_allow_query("true; true".to_string(), enable_tracing),
+    ///     false
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_allow_query("true; false; true".to_string(), enable_tracing),
+    ///     false
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -903,12 +1011,27 @@ impl Engine {
     /// # let mut engine = Engine::new();
     ///
     /// let enable_tracing = false;
-    /// assert_eq!(engine.eval_deny_query("1 > 2".to_string(), enable_tracing), false);
-    /// assert_eq!(engine.eval_deny_query("1 < 2".to_string(), enable_tracing), true);
+    /// assert_eq!(
+    ///     engine.eval_deny_query("1 > 2".to_string(), enable_tracing),
+    ///     false
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_deny_query("1 < 2".to_string(), enable_tracing),
+    ///     true
+    /// );
     ///
-    /// assert_eq!(engine.eval_deny_query("1+1".to_string(), enable_tracing), true);
-    /// assert_eq!(engine.eval_deny_query("true; true".to_string(), enable_tracing), true);
-    /// assert_eq!(engine.eval_deny_query("true; false; true".to_string(), enable_tracing), true);
+    /// assert_eq!(
+    ///     engine.eval_deny_query("1+1".to_string(), enable_tracing),
+    ///     true
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_deny_query("true; true".to_string(), enable_tracing),
+    ///     true
+    /// );
+    /// assert_eq!(
+    ///     engine.eval_deny_query("true; false; true".to_string(), enable_tracing),
+    ///     true
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -937,8 +1060,7 @@ impl Engine {
         // Populate loop hoisting for the query snippet
         // Query snippets are treated as if they're in a module appended at the end (same as analyzer)
         // The loop hoisting table already has capacity for this (ensured in prepare_for_eval)
-        let module_idx = u32::try_from(self.modules.len())
-            .map_err(|_| anyhow!("module count exceeds u32::MAX"))?;
+        let module_idx = u32::try_from(self.modules.len()).map_err(|_| anyhow!("module count exceeds u32::MAX"))?;
 
         use crate::compiler::hoist::LoopHoister;
 
@@ -1004,11 +1126,7 @@ impl Engine {
     /// Evaluate the given query and all the rules in the supplied policies.
     ///
     /// This is mainly used for testing Regorus itself.
-    pub fn eval_query_and_all_rules(
-        &mut self,
-        query: String,
-        enable_tracing: bool,
-    ) -> Result<QueryResults> {
+    pub fn eval_query_and_all_rules(&mut self, query: String, enable_tracing: bool) -> Result<QueryResults> {
         self.eval_modules(enable_tracing)?;
         // Restart the timer window for the user query after module evaluation.
         self.apply_effective_execution_timer_config();
@@ -1039,8 +1157,7 @@ impl Engine {
             // with-modifiers will be applied to this document.
             self.interpreter.init_with_document()?;
 
-            self.interpreter
-                .set_functions(gather_functions(&self.modules)?);
+            self.interpreter.set_functions(gather_functions(&self.modules)?);
             self.interpreter.gather_rules()?;
             self.interpreter.process_imports()?;
 
@@ -1060,9 +1177,7 @@ impl Engine {
             #[cfg(feature = "azure_policy")]
             if for_target {
                 // Resolve and validate target specifications across all modules
-                crate::interpreter::target::resolve::resolve_and_apply_target(
-                    &mut self.interpreter,
-                )?;
+                crate::interpreter::target::resolve::resolve_and_apply_target(&mut self.interpreter)?;
                 // Infer resource types
                 crate::interpreter::target::infer::infer_resource_type(&mut self.interpreter)?;
             }
@@ -1105,8 +1220,7 @@ impl Engine {
         for m in self.modules.iter().filter(|m| m.policy.is_empty()) {
             let path = Parser::get_path_ref_components(&m.package.refr)?;
             let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
-            let vref =
-                Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
+            let vref = Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
             if *vref == Value::Undefined {
                 *vref = Value::new_object();
             }
@@ -1131,8 +1245,7 @@ impl Engine {
         for m in self.modules.iter() {
             let path = Parser::get_path_ref_components(&m.package.refr)?;
             let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
-            let vref =
-                Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
+            let vref = Interpreter::make_or_get_value_mut(self.interpreter.get_data_mut(), &path[..])?;
             if *vref == Value::Undefined {
                 *vref = Value::new_object();
             }
@@ -1155,10 +1268,11 @@ impl Engine {
     ///
     /// // Policy uses `do_magic` custom builtin.
     /// engine.add_policy(
-    ///    "test.rego".to_string(),
-    ///    r#"package test
+    ///     "test.rego".to_string(),
+    ///     r#"package test
     ///       x = do_magic(1)
-    ///    "#.to_string(),
+    ///    "#
+    ///     .to_string(),
     /// )?;
     ///
     /// // Evaluating fails since `do_magic` is not defined.
@@ -1166,23 +1280,27 @@ impl Engine {
     ///
     /// // Add extension to implement `do_magic`. The extension can be stateful.
     /// let mut magic = 8;
-    /// engine.add_extension("do_magic".to_string(), 1 , Box::new(move | mut params: Vec<Value> | {
-    ///   // params is mut and therefore individual values can be removed from it and modified.
-    ///   // The number of parameters (1) has already been validated.
+    /// engine.add_extension(
+    ///     "do_magic".to_string(),
+    ///     1,
+    ///     Box::new(move |mut params: Vec<Value>| {
+    ///         // params is mut and therefore individual values can be removed from it and modified.
+    ///         // The number of parameters (1) has already been validated.
     ///
-    ///   match &params[0].as_i64() {
-    ///      Ok(i) => {
-    ///         // Compute value
-    ///         let v = *i + magic;
-    ///         // Update extension state.
-    ///         magic += 1;
-    ///         Ok(Value::from(v))
-    ///      }
-    ///      // Extensions can raise errors. Regorus will add location information to
-    ///      // the error.
-    ///      _ => bail!("do_magic expects i64 value")
-    ///   }
-    /// }))?;
+    ///         match &params[0].as_i64() {
+    ///             Ok(i) => {
+    ///                 // Compute value
+    ///                 let v = *i + magic;
+    ///                 // Update extension state.
+    ///                 magic += 1;
+    ///                 Ok(Value::from(v))
+    ///             }
+    ///             // Extensions can raise errors. Regorus will add location information to
+    ///             // the error.
+    ///             _ => bail!("do_magic expects i64 value"),
+    ///         }
+    ///     }),
+    /// )?;
     ///
     /// // Evaluation will now succeed.
     /// let r = engine.eval_query("data.test.x".to_string(), false)?;
@@ -1200,32 +1318,34 @@ impl Engine {
     /// assert_eq!(r.result[0].expressions[0].value.as_i64()?, 10);
     ///
     /// // Once added, the extension cannot be replaced or removed.
-    /// assert!(engine.add_extension("do_magic".to_string(), 1, Box::new(|_:Vec<Value>| {
-    ///   Ok(Value::Undefined)
-    /// })).is_err());
+    /// assert!(engine
+    ///     .add_extension(
+    ///         "do_magic".to_string(),
+    ///         1,
+    ///         Box::new(|_: Vec<Value>| { Ok(Value::Undefined) })
+    ///     )
+    ///     .is_err());
     ///
     /// // Extensions don't support out-parameter syntax.
     /// engine.add_policy(
-    ///   "policy.rego".to_string(),
-    ///   r#"package invalid
+    ///     "policy.rego".to_string(),
+    ///     r#"package invalid
     ///      x = y if {
     ///       # y = do_magic(2)
     ///       do_magic(2, y)  # y is supplied as an out parameter.
     ///     }
-    ///    "#.to_string()
+    ///    "#
+    ///     .to_string(),
     /// )?;
     ///
     /// // Evaluation fails since rule x calls an extension with out parameter.
-    /// assert!(engine.eval_query("data.invalid.x".to_string(), false).is_err());
+    /// assert!(engine
+    ///     .eval_query("data.invalid.x".to_string(), false)
+    ///     .is_err());
     /// # Ok(())
     /// # }
     /// ```
-    pub fn add_extension(
-        &mut self,
-        path: String,
-        nargs: u8,
-        extension: Box<dyn Extension>,
-    ) -> Result<()> {
+    pub fn add_extension(&mut self, path: String, nargs: u8, extension: Box<dyn Extension>) -> Result<()> {
         self.interpreter.add_extension(path, nargs, extension)
     }
 
@@ -1240,15 +1360,16 @@ impl Engine {
     /// let mut engine = Engine::new();
     ///
     /// engine.add_policy(
-    ///    "policy.rego".to_string(),
-    ///    r#"
+    ///     "policy.rego".to_string(),
+    ///     r#"
     /// package test    # Line 2
     ///
     /// x = y if {         # Line 4
     ///   input.a > 2   # Line 5
     ///   y = 5         # Line 6
     /// }
-    ///    "#.to_string()
+    ///    "#
+    ///     .to_string(),
     /// )?;
     ///
     /// // Enable coverage.
@@ -1260,10 +1381,24 @@ impl Engine {
     /// assert_eq!(report.files[0].path, "policy.rego");
     ///
     /// // Only line 5 is evaluated.
-    /// assert_eq!(report.files[0].covered.iter().cloned().collect::<Vec<u32>>(), vec![5]);
+    /// assert_eq!(
+    ///     report.files[0]
+    ///         .covered
+    ///         .iter()
+    ///         .cloned()
+    ///         .collect::<Vec<u32>>(),
+    ///     vec![5]
+    /// );
     ///
     /// // Line 4 and 6 are not evaluated.
-    /// assert_eq!(report.files[0].not_covered.iter().cloned().collect::<Vec<u32>>(), vec![4, 6]);
+    /// assert_eq!(
+    ///     report.files[0]
+    ///         .not_covered
+    ///         .iter()
+    ///         .cloned()
+    ///         .collect::<Vec<u32>>(),
+    ///     vec![4, 6]
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -1320,7 +1455,7 @@ impl Engine {
     /// assert!(prints[0].contains("Hello"));
     ///
     /// for p in prints {
-    ///   println!("{p}");
+    ///     println!("{p}");
     /// }
     /// # Ok(())
     /// # }
@@ -1342,7 +1477,12 @@ impl Engine {
     /// let ast = engine.get_ast_as_json()?;
     /// let value = Value::from_json_str(&ast)?;
     ///
-    /// assert_eq!(value[0]["ast"]["package"]["refr"]["Var"][1].as_string()?.as_ref(), "test");
+    /// assert_eq!(
+    ///     value[0]["ast"]["package"]["refr"]["Var"][1]
+    ///         .as_string()?
+    ///         .as_ref(),
+    ///     "test"
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -1376,7 +1516,10 @@ impl Engine {
     /// # fn main() -> Result<()> {
     /// # let mut engine = Engine::new();
     /// engine.add_policy("test.rego".to_string(), "package test\n x := 1".to_string())?;
-    /// engine.add_policy("test2.rego".to_string(), "package test.multi.segment\n x := 1".to_string())?;
+    /// engine.add_policy(
+    ///     "test2.rego".to_string(),
+    ///     "package test.multi.segment\n x := 1".to_string(),
+    /// )?;
     ///
     /// let package_names = engine.get_policy_package_names()?;
     ///
@@ -1408,7 +1551,10 @@ impl Engine {
     /// # use anyhow::{bail, Result};
     /// # fn main() -> Result<()> {
     /// # let mut engine = Engine::new();
-    /// engine.add_policy("test.rego".to_string(), "package test default parameters.a = 5 parameters.b = 10\n x := 1".to_string())?;
+    /// engine.add_policy(
+    ///     "test.rego".to_string(),
+    ///     "package test default parameters.a = 5 parameters.b = 10\n x := 1".to_string(),
+    /// )?;
     ///
     /// let parameters = engine.get_policy_parameters()?;
     ///
@@ -1453,9 +1599,7 @@ impl Engine {
                                 let path = Parser::get_path_ref_components(refr)?;
                                 let paths: Vec<&str> = path.iter().map(|s| s.text()).collect();
 
-                                if paths.len() == 2
-                                    && paths.first().is_some_and(|p| *p == "parameters")
-                                {
+                                if paths.len() == 2 && paths.first().is_some_and(|p| *p == "parameters") {
                                     if let Some(name) = paths.get(1) {
                                         // Todo: Fetch fields other than name from rego metadoc for the parameter
                                         modifiers.push(PolicyModifier {
@@ -1495,7 +1639,9 @@ impl Engine {
         }
 
         if has_target {
-            std::eprintln!("Warning: Target specifications found in policy modules but not using target-aware compilation.");
+            std::eprintln!(
+                "Warning: Target specifications found in policy modules but not using target-aware compilation."
+            );
             std::eprintln!("         The following files contain __target__ declarations:");
             for file in target_files {
                 std::eprintln!("         - {}", file);
@@ -1514,9 +1660,7 @@ impl Engine {
 
     /// Create a new Engine from a compiled policy.
     #[doc(hidden)]
-    pub(crate) fn new_from_compiled_policy(
-        compiled_policy: Rc<crate::compiled_policy::CompiledPolicyData>,
-    ) -> Self {
+    pub(crate) fn new_from_compiled_policy(compiled_policy: Rc<crate::compiled_policy::CompiledPolicyData>) -> Self {
         let modules = compiled_policy.modules.clone();
         let mut engine = Self {
             modules,

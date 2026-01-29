@@ -9,8 +9,10 @@
 //! with both the interpreter's loop hoisting and the RVM compiler.
 
 use crate::ast::ExprRef;
-use alloc::collections::BTreeSet;
-use alloc::string::{String, ToString};
+use alloc::{
+    collections::BTreeSet,
+    string::{String, ToString},
+};
 
 /// Type of compilation context for tracking different scenarios
 #[derive(Debug, Clone, PartialEq, Eq)]

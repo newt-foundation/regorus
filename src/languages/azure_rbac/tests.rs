@@ -7,9 +7,7 @@
 mod condition_tests {
     #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)] // tests unwrap/expect to assert parse results
     use crate::languages::azure_rbac::parser::*;
-    use alloc::string::String;
-    use alloc::vec;
-    use alloc::vec::Vec;
+    use alloc::{string::String, vec, vec::Vec};
     use serde_json;
     use serde_yaml;
 
@@ -91,10 +89,7 @@ mod condition_tests {
             ("@Request[attr] InvalidOperator 'value'", "Invalid operator"),
             ("@Request[attr] StringEquals", "Missing right operand"),
             ("StringEquals 'value'", "Missing left operand"),
-            (
-                "@Request[attr] 'value'",
-                "Missing operator between operands",
-            ),
+            ("@Request[attr] 'value'", "Missing operator between operands"),
             ("StringEquals 'value'", "Missing left operand"),
             ("StringEquals", "Binary operator without any operands"),
             (
@@ -116,15 +111,9 @@ mod condition_tests {
             ("NOT", "Standalone NOT without operand"),
             ("Exists", "Exists without operand"),
             ("NotExists", "NotExists without operand"),
-            (
-                "(@Request[attr] StringEquals 'value'",
-                "Unmatched parenthesis",
-            ),
+            ("(@Request[attr] StringEquals 'value'", "Unmatched parenthesis"),
             ("@Request[attr] StringEquals 'unclosed", "Unclosed string"),
-            (
-                "@Request[attr] StringEquals 'value')",
-                "Unexpected closing parenthesis",
-            ),
+            ("@Request[attr] StringEquals 'value')", "Unexpected closing parenthesis"),
         ];
 
         for (expression, description) in invalid_expressions {

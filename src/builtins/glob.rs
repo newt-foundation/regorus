@@ -3,12 +3,14 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string, ensure_string_collection};
-use crate::lexer::Span;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{ensure_args_count, ensure_string, ensure_string_collection},
+    lexer::Span,
+    value::Value,
+    *,
+};
 
 use anyhow::{bail, Result};
 use globset::{GlobBuilder, GlobMatcher};
@@ -81,15 +83,11 @@ fn glob_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     let delimiters = if let Value::Array(_) = &args[1] {
         ensure_string_collection(name, &params[1], &args[1])?
     } else {
-        bail!(params[1]
-            .span()
-            .error(format!("{name} requires string array").as_str()));
+        bail!(params[1].span().error(format!("{name} requires string array").as_str()));
     };
 
     if delimiters.iter().any(|d| d.len() > 1) {
-        bail!(params[1]
-            .span()
-            .error("delimiters must be single character"));
+        bail!(params[1].span().error("delimiters must be single character"));
     }
 
     let mut delimiters: Vec<char> = delimiters.iter().filter_map(|d| d.chars().next()).collect();

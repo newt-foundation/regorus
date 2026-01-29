@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::compiled_policy::CompiledPolicy;
-use crate::engine::Engine;
-use crate::value::Value;
-use crate::*;
+use crate::{compiled_policy::CompiledPolicy, engine::Engine, value::Value, *};
 
 use anyhow::Result;
 

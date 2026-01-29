@@ -3,13 +3,15 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric};
-use crate::lexer::Span;
-use crate::number::Number;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric},
+    lexer::Span,
+    number::Number,
+    value::Value,
+    *,
+};
 
 use anyhow::{bail, Result};
 
@@ -32,9 +34,7 @@ fn count(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
         Value::String(a) => a.encode_utf16().count(),
         a if strict => {
             let span = params[0].span();
-            bail!(span.error(
-                format!("`count` requires array/object/set/string argument. Got `{a}`.").as_str()
-            ))
+            bail!(span.error(format!("`count` requires array/object/set/string argument. Got `{a}`.").as_str()))
         }
         _ => return Ok(Value::Undefined),
     })))

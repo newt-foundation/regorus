@@ -3,12 +3,14 @@
 
 #![allow(clippy::unseparated_literal_suffix, clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::ensure_args_count;
-use crate::lexer::Span;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::ensure_args_count,
+    lexer::Span,
+    value::Value,
+    *,
+};
 
 use anyhow::{bail, Result};
 
@@ -36,9 +38,7 @@ fn to_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
             }
         },
         _ => {
-            bail!(
-                span.error(format!("`{name}` expects bool/number/string/null argument.").as_str())
-            );
+            bail!(span.error(format!("`{name}` expects bool/number/string/null argument.").as_str()));
         }
     })
 }

@@ -13,18 +13,20 @@
 
 use crate::number::Number;
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::vec::Vec;
-use core::fmt;
-use core::ops;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
+use core::{fmt, ops};
 
-use core::convert::AsRef;
-use core::str::FromStr;
+use core::{convert::AsRef, str::FromStr};
 
 use anyhow::{anyhow, bail, Result};
-use serde::de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
-use serde::ser::{SerializeMap, Serializer};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor},
+    ser::{SerializeMap, Serializer},
+    Deserialize, Serialize,
+};
 
 use crate::*;
 
@@ -380,8 +382,12 @@ impl Value {
     /// // Convert the value back to json.
     /// let json_str = value.to_json_str()?;
     ///
-    /// assert_eq!(json_str.trim(),
-    ///            std::fs::read_to_string("tests/aci/input.json")?.trim().replace("\r\n", "\n"));
+    /// assert_eq!(
+    ///     json_str.trim(),
+    ///     std::fs::read_to_string("tests/aci/input.json")?
+    ///         .trim()
+    ///         .replace("\r\n", "\n")
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -404,8 +410,12 @@ impl Value {
     /// // Convert the value back to json.
     /// let json_str = value.to_json_str()?;
     ///
-    /// assert_eq!(json_str.trim(),
-    ///            std::fs::read_to_string("tests/aci/input.json")?.trim().replace("\r\n", "\n"));
+    /// assert_eq!(
+    ///     json_str.trim(),
+    ///     std::fs::read_to_string("tests/aci/input.json")?
+    ///         .trim()
+    ///         .replace("\r\n", "\n")
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -422,12 +432,14 @@ impl Value {
     /// let set_value = Value::from(set);
     ///
     /// assert_eq!(
-    ///  set_value.to_json_str()?,
-    ///  r#"
-    ///[
+    ///     set_value.to_json_str()?,
+    ///     r#"
+    /// [
     ///   1,
     ///   "Hello"
-    ///]"#.trim());
+    /// ]"#
+    ///     .trim()
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -445,12 +457,14 @@ impl Value {
     /// let obj_value = Value::from(obj);
     ///
     /// assert_eq!(
-    ///  obj_value.to_json_str()?,
-    ///  r#"
-    ///{
+    ///     obj_value.to_json_str()?,
+    ///     r#"
+    /// {
     ///   "Hello": "World",
     ///   "[1]": null
-    ///}"#.trim());
+    /// }"#
+    ///     .trim()
+    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -463,8 +477,7 @@ impl Value {
     #[cfg(feature = "yaml")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn from_yaml_str(yaml: &str) -> Result<Value> {
-        let value = serde_yaml::from_str(yaml)
-            .map_err(|err| anyhow::anyhow!("Failed to parse YAML: {}", err))?;
+        let value = serde_yaml::from_str(yaml).map_err(|err| anyhow::anyhow!("Failed to parse YAML: {}", err))?;
         Ok(value)
     }
 
@@ -617,9 +630,7 @@ impl From<f64> for Value {
     /// ```
     /// # use regorus::*;
     /// # fn main() -> anyhow::Result<()> {
-    /// assert_eq!(
-    ///   Value::from(3.5f64),
-    ///   Value::from_numeric_string("3.5")?);
+    /// assert_eq!(Value::from(3.5f64), Value::from_numeric_string("3.5")?);
     /// # Ok(())
     /// # }
     /// ```
@@ -635,9 +646,7 @@ impl From<f64> for Value {
     /// assert_eq!(from_float, from_string);
     ///
     /// // All representations round to approximately 15 digits.
-    /// assert_eq!(
-    ///   from_float,
-    ///   Value::from_numeric_string("3.141592653589793")?);
+    /// assert_eq!(from_float, Value::from_numeric_string("3.141592653589793")?);
     /// # Ok(())
     /// # }
     /// ```
@@ -1425,8 +1434,10 @@ impl ops::Index<&Value> for Value {
     /// assert_eq!(&set[&Value::from(10)], &Value::Undefined);
     ///
     /// let mut obj = Value::new_object();
-    /// obj.as_object_mut()?.insert(Value::from("Hello"), Value::from("World"));
-    /// obj.as_object_mut()?.insert(Value::new_array(), Value::from("bye"));
+    /// obj.as_object_mut()?
+    ///     .insert(Value::from("Hello"), Value::from("World"));
+    /// obj.as_object_mut()?
+    ///     .insert(Value::new_array(), Value::from("bye"));
     ///
     /// // Index an object.
     /// assert_eq!(&obj[Value::from("Hello")].as_string()?.as_ref(), &"World");

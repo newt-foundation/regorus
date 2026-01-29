@@ -11,24 +11,28 @@
 
 //! Assignment-specific planning utilities.
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::{String, ToString},
+    vec::Vec,
+};
 
-use crate::ast::{AssignOp, Expr, ExprRef};
-use crate::compiler::destructuring_planner::create_destructuring_plan;
-use crate::compiler::destructuring_planner::destructuring::create_destructuring_plan_with_tracking;
-use crate::compiler::destructuring_planner::utils::{
-    collect_plan_var_spans, ensure_literal_match, ensure_structural_compatibility,
-    extract_literal_key, format_literal_key_for_error, plan_only_if_binds,
+use crate::{
+    ast::{AssignOp, Expr, ExprRef},
+    compiler::destructuring_planner::{
+        create_destructuring_plan,
+        destructuring::create_destructuring_plan_with_tracking,
+        utils::{
+            collect_plan_var_spans, ensure_literal_match, ensure_structural_compatibility, extract_literal_key,
+            format_literal_key_for_error, plan_only_if_binds,
+        },
+        AssignmentPlan, BindingPlan, BindingPlannerError, DestructuringPlan, Result, ScopingMode,
+        VariableBindingContext, WildcardSide,
+    },
+    lexer::Span,
+    query::traversal::collect_expr_dependencies,
+    value::Value,
 };
-use crate::compiler::destructuring_planner::{
-    AssignmentPlan, BindingPlan, BindingPlannerError, DestructuringPlan, Result, ScopingMode,
-    VariableBindingContext, WildcardSide,
-};
-use crate::lexer::Span;
-use crate::query::traversal::collect_expr_dependencies;
-use crate::value::Value;
 
 /// Convenience function for assignment expressions with specific := and = rules.
 pub fn create_assignment_binding_plan<T: VariableBindingContext>(
@@ -54,10 +58,7 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
                     let has_same_scope_binding = context.has_same_scope_binding(&name);
 
                     if is_duplicate || has_same_scope_binding {
-                        return Err(BindingPlannerError::VariableAlreadyDefined {
-                            var: name,
-                            span,
-                        });
+                        return Err(BindingPlannerError::VariableAlreadyDefined { var: name, span });
                     }
                 }
 
@@ -76,18 +77,14 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
         }
 
         AssignOp::Eq => {
-            let lhs_struct_plan =
-                create_destructuring_plan(lhs_expr, context, ScopingMode::RespectParent);
-            let rhs_struct_plan =
-                create_destructuring_plan(rhs_expr, context, ScopingMode::RespectParent);
+            let lhs_struct_plan = create_destructuring_plan(lhs_expr, context, ScopingMode::RespectParent);
+            let rhs_struct_plan = create_destructuring_plan(rhs_expr, context, ScopingMode::RespectParent);
 
             let lhs_plan = plan_only_if_binds(lhs_struct_plan.clone());
             let rhs_plan = plan_only_if_binds(rhs_struct_plan.clone());
 
-            let lhs_is_wildcard =
-                matches!(lhs_expr.as_ref(), Expr::Var { span, .. } if span.text() == "_");
-            let rhs_is_wildcard =
-                matches!(rhs_expr.as_ref(), Expr::Var { span, .. } if span.text() == "_");
+            let lhs_is_wildcard = matches!(lhs_expr.as_ref(), Expr::Var { span, .. } if span.text() == "_");
+            let rhs_is_wildcard = matches!(rhs_expr.as_ref(), Expr::Var { span, .. } if span.text() == "_");
 
             if lhs_is_wildcard || rhs_is_wildcard {
                 let wildcard_side = match (lhs_is_wildcard, rhs_is_wildcard) {
@@ -106,13 +103,7 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
                 // Both sides have unbound vars - recursively flatten all nested structures
                 let mut element_pairs = Vec::new();
                 let mut newly_bound = BTreeSet::new();
-                flatten_assignment_pairs(
-                    lhs_expr,
-                    rhs_expr,
-                    context,
-                    &mut newly_bound,
-                    &mut element_pairs,
-                )?;
+                flatten_assignment_pairs(lhs_expr, rhs_expr, context, &mut newly_bound, &mut element_pairs)?;
                 order_element_pairs(&mut element_pairs, context);
 
                 AssignmentPlan::EqualsBothSides {
@@ -170,9 +161,7 @@ pub fn create_assignment_binding_plan<T: VariableBindingContext>(
         }
     };
 
-    Ok(BindingPlan::Assignment {
-        plan: assignment_plan,
-    })
+    Ok(BindingPlan::Assignment { plan: assignment_plan })
 }
 
 /// Recursively flatten assignment destructuring into (value_expr, pattern_plan) pairs.
@@ -183,16 +172,11 @@ fn flatten_assignment_pairs<T: VariableBindingContext>(
     newly_bound: &mut BTreeSet<String>,
     pairs: &mut Vec<(ExprRef, DestructuringPlan)>,
 ) -> Result<()> {
-    let (lhs_plan, lhs_delta) =
-        preview_binding_plan(lhs_expr, context, ScopingMode::RespectParent, newly_bound);
-    let (rhs_plan, rhs_delta) =
-        preview_binding_plan(rhs_expr, context, ScopingMode::RespectParent, newly_bound);
+    let (lhs_plan, lhs_delta) = preview_binding_plan(lhs_expr, context, ScopingMode::RespectParent, newly_bound);
+    let (rhs_plan, rhs_delta) = preview_binding_plan(rhs_expr, context, ScopingMode::RespectParent, newly_bound);
 
     if lhs_plan.is_none() && rhs_plan.is_none() {
-        pairs.push((
-            rhs_expr.clone(),
-            DestructuringPlan::EqualityExpr(lhs_expr.clone()),
-        ));
+        pairs.push((rhs_expr.clone(), DestructuringPlan::EqualityExpr(lhs_expr.clone())));
         return Ok(());
     }
 
@@ -267,17 +251,10 @@ fn collect_array_pairs(lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<Vec<(Ex
         });
     }
 
-    Ok(lhs_items
-        .iter()
-        .cloned()
-        .zip(rhs_items.iter().cloned())
-        .collect())
+    Ok(lhs_items.iter().cloned().zip(rhs_items.iter().cloned()).collect())
 }
 
-fn order_element_pairs<T: VariableBindingContext>(
-    element_pairs: &mut Vec<(ExprRef, DestructuringPlan)>,
-    context: &T,
-) {
+fn order_element_pairs<T: VariableBindingContext>(element_pairs: &mut Vec<(ExprRef, DestructuringPlan)>, context: &T) {
     if element_pairs.len() <= 1 {
         return;
     }
@@ -308,9 +285,9 @@ fn order_element_pairs<T: VariableBindingContext>(
         for idx in 0..remaining.len() {
             let (_, _, deps, _) = &remaining[idx];
             let deps = deps.as_ref().expect("checked above");
-            let ready = deps.iter().all(|var| {
-                scheduled.contains(var) || !context.is_var_unbound(var, ScopingMode::RespectParent)
-            });
+            let ready = deps
+                .iter()
+                .all(|var| scheduled.contains(var) || !context.is_var_unbound(var, ScopingMode::RespectParent));
 
             if ready {
                 let (value_expr, plan, _deps, binds) = remaining.remove(idx);
@@ -322,11 +299,7 @@ fn order_element_pairs<T: VariableBindingContext>(
         }
 
         if !progress {
-            ordered.extend(
-                remaining
-                    .into_iter()
-                    .map(|(value_expr, plan, _, _)| (value_expr, plan)),
-            );
+            ordered.extend(remaining.into_iter().map(|(value_expr, plan, _, _)| (value_expr, plan)));
             break;
         }
     }
@@ -334,10 +307,7 @@ fn order_element_pairs<T: VariableBindingContext>(
     *element_pairs = ordered;
 }
 
-fn collect_object_pairs(
-    lhs_expr: &ExprRef,
-    rhs_expr: &ExprRef,
-) -> Result<Option<Vec<(ExprRef, ExprRef)>>> {
+fn collect_object_pairs(lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<Option<Vec<(ExprRef, ExprRef)>>> {
     let lhs_fields = match lhs_expr.as_ref() {
         Expr::Object { fields, .. } => fields,
         _ => unreachable!(),
@@ -367,10 +337,7 @@ fn collect_object_pairs(
             if let Some(lhs_value_expr) = lhs_map.get(&key_value) {
                 pairs.push((lhs_value_expr.clone(), val_expr.clone()));
             } else if missing_literal_key.is_none() {
-                missing_literal_key = Some((
-                    format_literal_key_for_error(&key_value),
-                    key_expr.span().clone(),
-                ));
+                missing_literal_key = Some((format_literal_key_for_error(&key_value), key_expr.span().clone()));
             }
         } else {
             return Ok(None);

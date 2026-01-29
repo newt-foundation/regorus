@@ -6,11 +6,13 @@ mod collection_literals;
 mod operations;
 
 use super::{Compiler, CompilerError, Register, Result};
-use crate::ast::{Expr, ExprRef};
-use crate::compiler::destructuring_planner::plans::BindingPlan;
-use crate::lexer::Span;
-use crate::rvm::Instruction;
-use crate::Value;
+use crate::{
+    ast::{Expr, ExprRef},
+    compiler::destructuring_planner::plans::BindingPlan,
+    lexer::Span,
+    rvm::Instruction,
+    Value,
+};
 use alloc::{format, string::ToString};
 
 impl<'a> Compiler<'a> {
@@ -29,12 +31,7 @@ impl<'a> Compiler<'a> {
         if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
             let result_reg = reg;
             if assert_condition {
-                self.emit_instruction(
-                    Instruction::AssertCondition {
-                        condition: result_reg,
-                    },
-                    span,
-                );
+                self.emit_instruction(Instruction::AssertCondition { condition: result_reg }, span);
             }
             return Ok(result_reg);
         }
@@ -61,8 +58,7 @@ impl<'a> Compiler<'a> {
             Expr::ArithExpr { lhs, op, rhs, .. } => self.compile_arith_expr(lhs, rhs, op, span)?,
             Expr::BoolExpr { lhs, op, rhs, .. } => self.compile_bool_expr(lhs, rhs, op, span)?,
             Expr::AssignExpr { .. } => {
-                let binding_plan =
-                    self.expect_binding_plan_for_expr(expr, "assignment expression")?;
+                let binding_plan = self.expect_binding_plan_for_expr(expr, "assignment expression")?;
 
                 let result: Result<Register> = match binding_plan {
                     BindingPlan::Assignment { plan } => self
@@ -88,21 +84,13 @@ impl<'a> Compiler<'a> {
                 }
             }
             Expr::RefDot { .. } | Expr::RefBrack { .. } => self.compile_chained_ref(expr, span)?,
-            Expr::Membership {
-                value, collection, ..
-            } => self.compile_membership(value, collection, span)?,
-            Expr::ArrayCompr { term, query, .. } => {
-                self.compile_array_comprehension(term, query, span)?
+            Expr::Membership { value, collection, .. } => self.compile_membership(value, collection, span)?,
+            Expr::ArrayCompr { term, query, .. } => self.compile_array_comprehension(term, query, span)?,
+            Expr::SetCompr { term, query, .. } => self.compile_set_comprehension(term, query, span)?,
+            Expr::ObjectCompr { key, value, query, .. } => {
+                self.compile_object_comprehension(key, value, query, span)?
             }
-            Expr::SetCompr { term, query, .. } => {
-                self.compile_set_comprehension(term, query, span)?
-            }
-            Expr::ObjectCompr {
-                key, value, query, ..
-            } => self.compile_object_comprehension(key, value, query, span)?,
-            Expr::Call { fcn, params, .. } => {
-                self.compile_function_call(fcn, params, span.clone())?
-            }
+            Expr::Call { fcn, params, .. } => self.compile_function_call(fcn, params, span.clone())?,
             Expr::UnaryExpr { expr, .. } => self.compile_unary_minus(expr, span)?,
             Expr::BinExpr { op, lhs, rhs, .. } => self.compile_bin_expr(lhs, rhs, op, span)?,
             #[cfg(feature = "rego-extensions")]
@@ -110,12 +98,7 @@ impl<'a> Compiler<'a> {
         };
 
         if assert_condition {
-            self.emit_instruction(
-                Instruction::AssertCondition {
-                    condition: result_reg,
-                },
-                span,
-            );
+            self.emit_instruction(Instruction::AssertCondition { condition: result_reg }, span);
         }
 
         Ok(result_reg)

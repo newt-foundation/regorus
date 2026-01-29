@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 #![allow(clippy::pattern_type_mismatch)]
 
-use alloc::format;
-use alloc::string::String;
+use alloc::{format, string::String};
 
 use crate::lexer::Span;
 use core::fmt;
@@ -22,9 +21,7 @@ pub enum CompilerError {
     #[error("internal: missing context for yield")]
     MissingYieldContext,
 
-    #[error(
-        "Direct access to 'data' root is not allowed. Use a specific path like 'data.package.rule'"
-    )]
+    #[error("Direct access to 'data' root is not allowed. Use a specific path like 'data.package.rule'")]
     DirectDataAccess,
 
     #[error("Not a simple reference chain")]

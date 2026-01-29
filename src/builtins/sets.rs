@@ -3,12 +3,14 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_set};
-use crate::lexer::Span;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{ensure_args_count, ensure_set},
+    lexer::Span,
+    value::Value,
+    *,
+};
 
 use alloc::collections::BTreeSet;
 
@@ -39,12 +41,7 @@ pub fn difference(expr1: &Expr, expr2: &Expr, v1: Value, v2: Value) -> Result<Va
     Ok(Value::from_set(s1.difference(&s2).cloned().collect()))
 }
 
-fn binary_set_union(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn binary_set_union(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "__builtin_sets.union";
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
@@ -52,27 +49,15 @@ fn binary_set_union(
     Ok(Value::from_set(left.union(&right).cloned().collect()))
 }
 
-fn binary_set_intersection(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn binary_set_intersection(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "__builtin_sets.intersection";
     ensure_args_count(span, name, params, args, 2)?;
     let left = ensure_set(name, &params[0], args[0].clone())?;
     let right = ensure_set(name, &params[1], args[1].clone())?;
-    Ok(Value::from_set(
-        left.intersection(&right).cloned().collect(),
-    ))
+    Ok(Value::from_set(left.intersection(&right).cloned().collect()))
 }
 
-fn intersection_of_set_of_sets(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn intersection_of_set_of_sets(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "intersection";
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
@@ -83,9 +68,7 @@ fn intersection_of_set_of_sets(
     for s in set.iter() {
         let s = match s {
             Value::Set(s) => s,
-            _ => bail!(
-                span.error(format!("`{name}` expects set of sets. Got `{}`", args[0]).as_str())
-            ),
+            _ => bail!(span.error(format!("`{name}` expects set of sets. Got `{}`", args[0]).as_str())),
         };
 
         if first {
@@ -99,12 +82,7 @@ fn intersection_of_set_of_sets(
     Ok(Value::from_set(res))
 }
 
-fn union_of_set_of_sets(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn union_of_set_of_sets(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "union";
     ensure_args_count(span, name, params, args, 1)?;
     let set = ensure_set(name, &params[0], args[0].clone())?;
@@ -114,9 +92,7 @@ fn union_of_set_of_sets(
     for s in set.iter() {
         let s = match s {
             Value::Set(s) => s,
-            _ => bail!(
-                span.error(format!("`{name}` expects set of sets. Got `{}`", args[0]).as_str())
-            ),
+            _ => bail!(span.error(format!("`{name}` expects set of sets. Got `{}`", args[0]).as_str())),
         };
 
         res = res.union(s).cloned().collect();

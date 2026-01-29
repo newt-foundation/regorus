@@ -128,8 +128,7 @@ fn vm_memory_limit_on_entry() {
     let compiled = engine
         .compile_with_entrypoint(&entrypoint)
         .expect("compile policy for VM");
-    let program = Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()])
-        .expect("compile VM program");
+    let program = Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()]).expect("compile VM program");
 
     let mut vm = RegoVM::new();
     vm.load_program(program);
@@ -170,8 +169,7 @@ fn vm_memory_limit_during_large_allocation() {
     let compiled = engine
         .compile_with_entrypoint(&entrypoint)
         .expect("compile policy for VM");
-    let program = Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()])
-        .expect("compile VM program");
+    let program = Compiler::compile_from_policy(&compiled, &[entrypoint.as_ref()]).expect("compile VM program");
 
     let mut vm = RegoVM::new();
     vm.load_program(program);

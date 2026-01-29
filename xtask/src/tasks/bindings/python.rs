@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::OsString;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
@@ -37,23 +39,11 @@ impl BuildPythonCommand {
         let workspace = workspace_root();
         let python_dir = workspace.join("bindings/python");
 
-        build_python_crate(
-            &python_dir,
-            self.release,
-            self.target.as_deref(),
-            self.frozen,
-        )?;
+        build_python_crate(&python_dir, self.release, self.target.as_deref(), self.frozen)?;
 
-        let wheel_dir = self
-            .target_dir
-            .clone()
-            .unwrap_or_else(|| python_dir.join("wheels"));
-        fs::create_dir_all(&wheel_dir).with_context(|| {
-            format!(
-                "failed to create Python wheel directory at {}",
-                wheel_dir.display()
-            )
-        })?;
+        let wheel_dir = self.target_dir.clone().unwrap_or_else(|| python_dir.join("wheels"));
+        fs::create_dir_all(&wheel_dir)
+            .with_context(|| format!("failed to create Python wheel directory at {}", wheel_dir.display()))?;
 
         let mut maturin = Command::new("maturin");
         maturin.current_dir(&python_dir);
@@ -122,19 +112,11 @@ fn install_testing_dependencies(venv_python: &Path) -> Result<()> {
     install.arg("pip");
     install.arg("install");
     install.arg("pytest");
-    let label = format!(
-        "{} -m pip install pytest (bindings/python)",
-        venv_python.display()
-    );
+    let label = format!("{} -m pip install pytest (bindings/python)", venv_python.display());
     run_command(install, &label)
 }
 
-fn install_local_package(
-    python_dir: &Path,
-    release: bool,
-    target: Option<&str>,
-    venv_dir: &Path,
-) -> Result<()> {
+fn install_local_package(python_dir: &Path, release: bool, target: Option<&str>, venv_dir: &Path) -> Result<()> {
     let mut maturin = Command::new("maturin");
     maturin.current_dir(python_dir);
     maturin.arg("develop");
@@ -158,12 +140,7 @@ fn install_local_package(
     run_command(maturin, "maturin develop (bindings/python)")
 }
 
-fn build_python_crate(
-    python_dir: &Path,
-    release: bool,
-    target: Option<&str>,
-    frozen: bool,
-) -> Result<()> {
+fn build_python_crate(python_dir: &Path, release: bool, target: Option<&str>, frozen: bool) -> Result<()> {
     let mut args = Vec::new();
     args.push(OsString::from("build"));
     if release {
@@ -187,11 +164,7 @@ fn ensure_virtual_env(python_dir: &Path, python: &str) -> Result<(PathBuf, PathB
     if venv_dir.exists() {
         let existing_python = venv_bin_dir(&venv_dir).join(venv_python_name());
         if existing_python.exists()
-            && ensure_python_version(
-                existing_python.as_os_str(),
-                &existing_python.display().to_string(),
-            )
-            .is_ok()
+            && ensure_python_version(existing_python.as_os_str(), &existing_python.display().to_string()).is_ok()
         {
             return Ok((existing_python, venv_dir));
         }
@@ -257,11 +230,7 @@ fn query_python_version(executable: &std::ffi::OsStr, label: &str) -> Result<(u3
         .with_context(|| format!("failed to query Python version from {}", label))?;
 
     if !output.status.success() {
-        bail!(
-            "{} -c 'import sys; ...' exited with status {}",
-            label,
-            output.status
-        );
+        bail!("{} -c 'import sys; ...' exited with status {}", label, output.status);
     }
 
     let stdout = String::from_utf8(output.stdout)

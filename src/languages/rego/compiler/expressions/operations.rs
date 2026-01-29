@@ -3,11 +3,12 @@
 #![allow(clippy::pattern_type_mismatch)]
 
 use super::{Compiler, CompilerError, Register, Result};
-use crate::ast::{ArithOp, BinOp, BoolOp, ExprRef};
-use crate::lexer::Span;
-use crate::rvm::instructions::BuiltinCallParams;
-use crate::rvm::Instruction;
-use crate::Value;
+use crate::{
+    ast::{ArithOp, BinOp, BoolOp, ExprRef},
+    lexer::Span,
+    rvm::{instructions::BuiltinCallParams, Instruction},
+    Value,
+};
 
 impl<'a> Compiler<'a> {
     pub(super) fn compile_arith_expr(
@@ -150,10 +151,7 @@ impl<'a> Compiler<'a> {
                     num_args: 2,
                     args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
                 };
-                let params_index = self
-                    .program
-                    .instruction_data
-                    .add_builtin_call_params(params);
+                let params_index = self.program.instruction_data.add_builtin_call_params(params);
                 self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
             }
             BinOp::Intersection => {
@@ -164,10 +162,7 @@ impl<'a> Compiler<'a> {
                     num_args: 2,
                     args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
                 };
-                let params_index = self
-                    .program
-                    .instruction_data
-                    .add_builtin_call_params(params);
+                let params_index = self.program.instruction_data.add_builtin_call_params(params);
                 self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
             }
         }
@@ -181,8 +176,7 @@ impl<'a> Compiler<'a> {
         span: &Span,
     ) -> Result<Register> {
         let value_reg = self.compile_rego_expr_with_span(value, value.span(), false)?;
-        let collection_reg =
-            self.compile_rego_expr_with_span(collection, collection.span(), false)?;
+        let collection_reg = self.compile_rego_expr_with_span(collection, collection.span(), false)?;
 
         let dest = self.alloc_register();
         self.emit_instruction(
@@ -226,12 +220,7 @@ impl<'a> Compiler<'a> {
     }
 
     #[cfg(feature = "rego-extensions")]
-    pub(super) fn compile_or_expr(
-        &mut self,
-        lhs: &ExprRef,
-        rhs: &ExprRef,
-        span: &Span,
-    ) -> Result<Register> {
+    pub(super) fn compile_or_expr(&mut self, lhs: &ExprRef, rhs: &ExprRef, span: &Span) -> Result<Register> {
         let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
         let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
 

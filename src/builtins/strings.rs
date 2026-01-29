@@ -7,16 +7,18 @@
     clippy::pattern_type_mismatch
 )]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{
-    enforce_limit, ensure_args_count, ensure_array, ensure_numeric, ensure_object, ensure_string,
-    ensure_string_collection,
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{
+        enforce_limit, ensure_args_count, ensure_array, ensure_numeric, ensure_object, ensure_string,
+        ensure_string_collection,
+    },
+    lexer::Span,
+    number::Number,
+    value::Value,
+    *,
 };
-use crate::lexer::Span;
-use crate::number::Number;
-use crate::value::Value;
-use crate::*;
 
 use anyhow::{bail, Result};
 
@@ -184,26 +186,14 @@ fn to_string(v: &Value, unescape: bool) -> String {
     match v {
         Value::Null => "null".to_owned(),
         Value::Bool(b) => b.to_string(),
-        Value::String(s) if unescape => {
-            serde_json::to_string(s.as_ref()).unwrap_or(s.as_ref().to_string())
-        }
+        Value::String(s) if unescape => serde_json::to_string(s.as_ref()).unwrap_or(s.as_ref().to_string()),
         Value::String(s) => s.as_ref().to_string(),
         Value::Number(n) => n.format_decimal(),
         Value::Array(a) => {
-            "[".to_owned()
-                + &a.iter()
-                    .map(|e| to_string(e, true))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-                + "]"
+            "[".to_owned() + &a.iter().map(|e| to_string(e, true)).collect::<Vec<String>>().join(", ") + "]"
         }
         Value::Set(s) => {
-            "{".to_owned()
-                + &s.iter()
-                    .map(|e| to_string(e, true))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-                + "}"
+            "{".to_owned() + &s.iter().map(|e| to_string(e, true)).collect::<Vec<String>>().join(", ") + "}"
         }
         Value::Object(o) => {
             "{".to_owned()
@@ -273,9 +263,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                         Some(c) => (c, width),
                         _ => {
                             let span = params[0].span();
-                            bail!(span.error(
-                                "missing format verb after `%width` at end of format string"
-                            ));
+                            bail!(span.error("missing format verb after `%width` at end of format string"));
                         }
                     }
                 }
@@ -293,8 +281,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
         };
 
         if args_idx >= args.len() {
-            bail!(args_span
-                .error(format!("no argument specified for format verb {args_idx}").as_str()));
+            bail!(args_span.error(format!("no argument specified for format verb {args_idx}").as_str()));
         }
         let arg = &args[args_idx];
         args_idx += 1;
@@ -331,10 +318,8 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                 match ch_opt {
                     Some(Some(c)) => s.push(c),
                     _ => {
-                        bail!(args_span.error(
-                            format!("invalid value {} for format verb c.", f.format_decimal())
-                                .as_str()
-                        ))
+                        bail!(args_span
+                            .error(format!("invalid value {} for format verb c.", f.format_decimal()).as_str()))
                     }
                 }
             }
@@ -411,9 +396,7 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
                 bail!(args_span.error("Go-syntax fields names format verm %#v is not supported."));
             }
             ('T', _) | ('#', _) | ('q', _) | ('p', _) => {
-                bail!(
-                    args_span.error("Go-syntax format verbs %#v. %q, %p and %T are not supported.")
-                );
+                bail!(args_span.error("Go-syntax format verbs %#v. %q, %p and %T are not supported."));
             }
             _ => {}
         }
@@ -432,47 +415,34 @@ fn sprintf(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> 
     Ok(Value::String(s.into()))
 }
 
-fn any_prefix_match(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
+fn any_prefix_match(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "strings.any_prefix_match";
     ensure_args_count(span, name, params, args, 2)?;
 
     let search = match &args[0] {
         Value::String(s) => vec![s.as_ref()],
-        Value::Array(_) | Value::Set(_) => {
-            match ensure_string_collection(name, &params[0], &args[0]) {
-                Ok(c) => c,
-                Err(e) if strict => return Err(e),
-                _ => return Ok(Value::Undefined),
-            }
-        }
+        Value::Array(_) | Value::Set(_) => match ensure_string_collection(name, &params[0], &args[0]) {
+            Ok(c) => c,
+            Err(e) if strict => return Err(e),
+            _ => return Ok(Value::Undefined),
+        },
         _ if strict => {
             let span = params[0].span();
-            bail!(span.error(
-                format!("`{name}` expects string/array[string]/set[string] argument.").as_str()
-            ));
+            bail!(span.error(format!("`{name}` expects string/array[string]/set[string] argument.").as_str()));
         }
         _ => return Ok(Value::Undefined),
     };
 
     let base = match &args[1] {
         Value::String(s) => vec![s.as_ref()],
-        Value::Array(_) | Value::Set(_) => {
-            match ensure_string_collection(name, &params[1], &args[1]) {
-                Ok(c) => c,
-                Err(e) if strict => return Err(e),
-                _ => return Ok(Value::Undefined),
-            }
-        }
+        Value::Array(_) | Value::Set(_) => match ensure_string_collection(name, &params[1], &args[1]) {
+            Ok(c) => c,
+            Err(e) if strict => return Err(e),
+            _ => return Ok(Value::Undefined),
+        },
         _ if strict => {
             let span = params[0].span();
-            bail!(span.error(
-                format!("`{name}` expects string/array[string]/set[string] argument.").as_str()
-            ));
+            bail!(span.error(format!("`{name}` expects string/array[string]/set[string] argument.").as_str()));
         }
         _ => return Ok(Value::Undefined),
     };
@@ -482,62 +452,42 @@ fn any_prefix_match(
     ))
 }
 
-fn any_suffix_match(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
+fn any_suffix_match(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "strings.any_suffix_match";
     ensure_args_count(span, name, params, args, 2)?;
 
     let search = match &args[0] {
         Value::String(s) => vec![s.as_ref()],
-        Value::Array(_) | Value::Set(_) => {
-            match ensure_string_collection(name, &params[0], &args[0]) {
-                Ok(c) => c,
-                Err(e) if strict => return Err(e),
-                _ => return Ok(Value::Undefined),
-            }
-        }
+        Value::Array(_) | Value::Set(_) => match ensure_string_collection(name, &params[0], &args[0]) {
+            Ok(c) => c,
+            Err(e) if strict => return Err(e),
+            _ => return Ok(Value::Undefined),
+        },
         _ if strict => {
             let span = params[0].span();
-            bail!(span.error(
-                format!("`{name}` expects string/array[string]/set[string] argument.").as_str()
-            ));
+            bail!(span.error(format!("`{name}` expects string/array[string]/set[string] argument.").as_str()));
         }
         _ => return Ok(Value::Undefined),
     };
 
     let base = match &args[1] {
         Value::String(s) => vec![s.as_ref()],
-        Value::Array(_) | Value::Set(_) => {
-            match ensure_string_collection(name, &params[1], &args[1]) {
-                Ok(c) => c,
-                Err(e) if strict => return Err(e),
-                _ => return Ok(Value::Undefined),
-            }
-        }
+        Value::Array(_) | Value::Set(_) => match ensure_string_collection(name, &params[1], &args[1]) {
+            Ok(c) => c,
+            Err(e) if strict => return Err(e),
+            _ => return Ok(Value::Undefined),
+        },
         _ if strict => {
             let span = params[0].span();
-            bail!(span.error(
-                format!("`{name}` expects string/array[string]/set[string] argument.").as_str()
-            ));
+            bail!(span.error(format!("`{name}` expects string/array[string]/set[string] argument.").as_str()));
         }
         _ => return Ok(Value::Undefined),
     };
 
-    Ok(Value::Bool(
-        search.iter().any(|s| base.iter().any(|b| s.ends_with(b))),
-    ))
+    Ok(Value::Bool(search.iter().any(|s| base.iter().any(|b| s.ends_with(b)))))
 }
 
-fn strings_count(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+fn strings_count(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "strings.count";
     ensure_args_count(span, name, params, args, 2)?;
 
@@ -574,9 +524,7 @@ fn replace_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
                 s = s.replace(k.as_ref(), v.as_ref()).into();
             }
             _ => {
-                bail!(span.error(
-                    format!("`{name}` expects string keys and values in pattern object.").as_str()
-                ))
+                bail!(span.error(format!("`{name}` expects string keys and values in pattern object.").as_str()))
             }
         }
     }
@@ -625,9 +573,7 @@ fn trim_left(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
     ensure_args_count(span, name, params, args, 2)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
-    Ok(Value::String(
-        s1.trim_start_matches(|c| s2.contains(c)).into(),
-    ))
+    Ok(Value::String(s1.trim_start_matches(|c| s2.contains(c)).into()))
 }
 
 fn trim_prefix(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -646,9 +592,7 @@ fn trim_right(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) 
     ensure_args_count(span, name, params, args, 2)?;
     let s1 = ensure_string(name, &params[0], &args[0])?;
     let s2 = ensure_string(name, &params[1], &args[1])?;
-    Ok(Value::String(
-        s1.trim_end_matches(|c| s2.contains(c)).into(),
-    ))
+    Ok(Value::String(s1.trim_end_matches(|c| s2.contains(c)).into()))
 }
 
 fn trim_space(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {

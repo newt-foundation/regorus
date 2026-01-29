@@ -11,8 +11,7 @@
 #![allow(clippy::panic)] // debug-only index checks panic on invariants
 
 use crate::ast::*;
-use alloc::collections::BTreeSet;
-use alloc::format;
+use alloc::{collections::BTreeSet, format};
 use anyhow::{bail, Result};
 
 // Ensures that indexes are unique and continuous, starting from 0.
@@ -47,10 +46,7 @@ impl IndexChecker {
                 Literal::SomeVars { .. } => (),
                 Literal::Expr { expr, .. } => self.check_eidx(expr.as_ref())?,
                 Literal::SomeIn {
-                    key,
-                    value,
-                    collection,
-                    ..
+                    key, value, collection, ..
                 } => {
                     if let Some(key) = key {
                         self.check_eidx(key.as_ref())?;
@@ -81,12 +77,7 @@ impl IndexChecker {
         }
 
         match expr {
-            String { .. }
-            | RawString { .. }
-            | Number { .. }
-            | Bool { .. }
-            | Null { .. }
-            | Var { .. } => (),
+            String { .. } | RawString { .. } | Number { .. } | Bool { .. } | Null { .. } | Var { .. } => (),
 
             Array { items, .. } => {
                 for elem in items {
@@ -116,9 +107,7 @@ impl IndexChecker {
                 self.check_query(query.as_ref())?;
             }
 
-            ObjectCompr {
-                key, value, query, ..
-            } => {
+            ObjectCompr { key, value, query, .. } => {
                 self.check_eidx(key.as_ref())?;
                 self.check_eidx(value.as_ref())?;
                 self.check_query(query.as_ref())?;
@@ -152,10 +141,7 @@ impl IndexChecker {
             }
 
             Membership {
-                key,
-                value,
-                collection,
-                ..
+                key, value, collection, ..
             } => {
                 if let Some(key) = key {
                     self.check_eidx(key.as_ref())?;
@@ -193,9 +179,7 @@ impl IndexChecker {
                     self.check_rule_assign(assign)?;
                 }
             }
-            RuleHead::Func {
-                refr, args, assign, ..
-            } => {
+            RuleHead::Func { refr, args, assign, .. } => {
                 self.check_eidx(refr.as_ref())?;
                 if let Some(assign) = assign {
                     self.check_rule_assign(assign)?;
@@ -216,12 +200,7 @@ impl IndexChecker {
         Ok(())
     }
 
-    fn check_gathered_indexes(
-        &self,
-        num_idx: u32,
-        idx_set: &BTreeSet<u32>,
-        idx_type: &str,
-    ) -> Result<()> {
+    fn check_gathered_indexes(&self, num_idx: u32, idx_set: &BTreeSet<u32>, idx_type: &str) -> Result<()> {
         if num_idx == 0 {
             if !idx_set.is_empty() {
                 bail!("no {idx_type} indexes should be collected when num_{idx_type}s is 0");
@@ -241,10 +220,7 @@ impl IndexChecker {
             .last()
             .unwrap_or_else(|| panic!("no {idx_type} indexes collected"));
         if last_idx != &(num_idx - 1) {
-            bail!(
-                "last {idx_type} index must be {} got {last_idx} instead",
-                num_idx - 1
-            );
+            bail!("last {idx_type} index must be {} got {last_idx} instead", num_idx - 1);
         }
 
         Ok(())
@@ -263,9 +239,7 @@ impl IndexChecker {
                         self.check_rule_body(body)?;
                     }
                 }
-                Rule::Default {
-                    refr, args, value, ..
-                } => {
+                Rule::Default { refr, args, value, .. } => {
                     self.check_eidx(refr.as_ref())?;
                     for arg in args {
                         self.check_eidx(arg.as_ref())?;

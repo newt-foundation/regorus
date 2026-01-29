@@ -4,11 +4,12 @@
 
 use alloc::collections::BTreeSet;
 
-use crate::number::Number;
-use crate::value::Value;
+use crate::{number::Number, value::Value};
 
-use super::errors::{Result, VmError};
-use super::machine::RegoVM;
+use super::{
+    errors::{Result, VmError},
+    machine::RegoVM,
+};
 
 impl RegoVM {
     /// Add two values using interpreter's arithmetic logic

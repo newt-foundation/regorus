@@ -4,16 +4,15 @@
 #![cfg(feature = "rvm")]
 
 use anyhow::Result;
-use regorus::rvm::vm::{ExecutionMode, ExecutionState, SuspendReason, VmError};
-use regorus::rvm::{Instruction, Program, RegoVM};
-use regorus::utils::limits::{
-    fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
+use regorus::{
+    rvm::{
+        vm::{ExecutionMode, ExecutionState, SuspendReason, VmError},
+        Instruction, Program, RegoVM,
+    },
+    utils::limits::{fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig},
+    Value,
 };
-use regorus::Value;
-use std::num::NonZeroU32;
-use std::sync::Mutex;
-use std::thread::sleep;
-use std::time::Duration;
+use std::{num::NonZeroU32, sync::Mutex, thread::sleep, time::Duration};
 
 static LIMITS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -81,10 +80,7 @@ fn vm_execution_time_limit_override_allows_completion() -> Result<()> {
     program.dispatch_window_size = 2;
     program.max_rule_window_size = 2;
     program.entry_points.insert("main".to_string(), 0);
-    program.instructions = vec![
-        Instruction::LoadNull { dest: 0 },
-        Instruction::Return { value: 0 },
-    ];
+    program.instructions = vec![Instruction::LoadNull { dest: 0 }, Instruction::Return { value: 0 }];
     program.instruction_spans = vec![None; program.instructions.len()];
     program.main_entry_point = 0;
 
@@ -100,10 +96,7 @@ fn vm_execution_time_limit_override_allows_completion() -> Result<()> {
     vm.set_execution_timer_config(Some(relaxed_config));
 
     let result = vm.execute();
-    assert!(
-        result.is_ok(),
-        "expected successful execution, got {result:?}"
-    );
+    assert!(result.is_ok(), "expected successful execution, got {result:?}");
 
     Ok(())
 }
@@ -132,11 +125,7 @@ fn vm_suspend_resume_excludes_suspended_time_from_limit() -> Result<()> {
             dest: 1,
             literal_idx: 1,
         },
-        Instruction::HostAwait {
-            dest: 2,
-            arg: 1,
-            id: 0,
-        },
+        Instruction::HostAwait { dest: 2, arg: 1, id: 0 },
         Instruction::Return { value: 2 },
     ];
     program.instruction_spans = vec![None; program.instructions.len()];

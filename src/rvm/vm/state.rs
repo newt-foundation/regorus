@@ -4,9 +4,11 @@
 use crate::value::Value;
 use alloc::vec::Vec;
 
-use super::errors::{Result, VmError};
-use super::execution_model::ExecutionState;
-use super::machine::RegoVM;
+use super::{
+    errors::{Result, VmError},
+    execution_model::ExecutionState,
+    machine::RegoVM,
+};
 
 impl RegoVM {
     /// Reset all execution state and return objects to pools for reuse
@@ -29,8 +31,7 @@ impl RegoVM {
 
         // Reset registers to clean state
         self.registers.clear();
-        self.registers
-            .resize(self.base_register_count, Value::Undefined);
+        self.registers.resize(self.base_register_count, Value::Undefined);
 
         // Builtin cache entries only live for a single execution
         self.builtins_cache.clear();

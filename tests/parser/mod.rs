@@ -112,16 +112,12 @@ fn match_expr_impl(e: &Expr, v: &Value) -> Result<()> {
         Expr::Array { span, items, .. } => match_vec(span, items, &v["array"]),
         Expr::Set { span, items, .. } => match_vec(span, items, &v["set"]),
         Expr::Object { span, fields, .. } => match_object(span, fields, &v["object"]),
-        Expr::ArrayCompr {
-            span, term, query, ..
-        } => {
+        Expr::ArrayCompr { span, term, query, .. } => {
             match_span_opt(span, &v["arraycompr"]["span"])?;
             match_expr(term, &v["arraycompr"]["term"])?;
             match_query(query, &v["arraycompr"]["query"])
         }
-        Expr::SetCompr {
-            span, term, query, ..
-        } => {
+        Expr::SetCompr { span, term, query, .. } => {
             match_span_opt(span, &v["setcompr"]["span"])?;
             match_expr(term, &v["setcompr"]["term"])?;
             match_query(query, &v["setcompr"]["query"])
@@ -138,23 +134,17 @@ fn match_expr_impl(e: &Expr, v: &Value) -> Result<()> {
             match_expr(value, &v["objectcompr"]["value"])?;
             match_query(query, &v["objectcompr"]["query"])
         }
-        Expr::Call {
-            span, fcn, params, ..
-        } => {
+        Expr::Call { span, fcn, params, .. } => {
             match_span_opt(span, &v["call"]["span"])?;
             match_expr(fcn, &v["call"]["fcn"])?;
             match_vec(span /*dummy*/, params, &v["call"]["params"])
         }
-        Expr::RefDot {
-            span, refr, field, ..
-        } => {
+        Expr::RefDot { span, refr, field, .. } => {
             match_span_opt(span, &v["refdot"]["span"])?;
             match_expr(refr, &v["refdot"]["refr"])?;
             match_span(&field.0, &v["refdot"]["field"])
         }
-        Expr::RefBrack {
-            span, refr, index, ..
-        } => {
+        Expr::RefBrack { span, refr, index, .. } => {
             match_span_opt(span, &v["refbrack"]["span"])?;
             match_expr(refr, &v["refbrack"]["refr"])?;
             match_expr(index, &v["refbrack"]["index"])
@@ -165,42 +155,30 @@ fn match_expr_impl(e: &Expr, v: &Value) -> Result<()> {
                 &Value::String("-".into()),
                 &v["op"],
                 "{}",
-                span.source.message(
-                    span.line,
-                    span.col,
-                    "mismatch-error",
-                    "could not match `-` operator",
-                ),
+                span.source
+                    .message(span.line, span.col, "mismatch-error", "could not match `-` operator",),
             );
             match_expr(expr, &v["expr"])
         }
-        Expr::BinExpr {
-            span, op, lhs, rhs, ..
-        } => {
+        Expr::BinExpr { span, op, lhs, rhs, .. } => {
             match_span_opt(span, &v["binexpr"]["span"])?;
             match_bin_op(span, op, &v["binexpr"]["op"])?;
             match_expr(lhs, &v["binexpr"]["lhs"])?;
             match_expr(rhs, &v["binexpr"]["rhs"])
         }
-        Expr::ArithExpr {
-            span, op, lhs, rhs, ..
-        } => {
+        Expr::ArithExpr { span, op, lhs, rhs, .. } => {
             match_span_opt(span, &v["arithexpr"]["span"])?;
             match_arith_op(span, op, &v["arithexpr"]["op"])?;
             match_expr(lhs, &v["arithexpr"]["lhs"])?;
             match_expr(rhs, &v["arithexpr"]["rhs"])
         }
-        Expr::BoolExpr {
-            span, op, lhs, rhs, ..
-        } => {
+        Expr::BoolExpr { span, op, lhs, rhs, .. } => {
             match_span_opt(span, &v["boolexpr"]["span"])?;
             match_bool_op(span, op, &v["boolexpr"]["op"])?;
             match_expr(lhs, &v["boolexpr"]["lhs"])?;
             match_expr(rhs, &v["boolexpr"]["rhs"])
         }
-        Expr::AssignExpr {
-            span, op, lhs, rhs, ..
-        } => {
+        Expr::AssignExpr { span, op, lhs, rhs, .. } => {
             match_span_opt(span, &v["assignexpr"]["span"])?;
             match_assign_op(span, op, &v["assignexpr"]["op"])?;
             match_expr(lhs, &v["assignexpr"]["lhs"])?;
@@ -234,12 +212,7 @@ fn match_expr_impl(e: &Expr, v: &Value) -> Result<()> {
                 "{}",
                 e.span().message(
                     "mismatch-error",
-                    format!(
-                        "eidx mismatch: expected {:?}, got {:?}",
-                        v["eidx"],
-                        e.eidx(),
-                    )
-                    .as_str()
+                    format!("eidx mismatch: expected {:?}, got {:?}", v["eidx"], e.eidx(),).as_str()
                 )
             );
         }
@@ -363,12 +336,9 @@ fn match_query(q: &Query, v: &Value) -> Result<()> {
         q.stmts.len(),
         stmts.len(),
         "{}",
-        q.span.source.message(
-            q.span.line,
-            q.span.col,
-            "mismatch-error",
-            "mismatch in statement count"
-        )
+        q.span
+            .source
+            .message(q.span.line, q.span.col, "mismatch-error", "mismatch in statement count")
     );
     for (idx, stmt) in stmts.iter().enumerate() {
         match_literal_stmt(&q.stmts[idx], stmt)?;
@@ -387,12 +357,7 @@ fn match_expr_opt(s: &Span, e: &Option<Ref<Expr>>, v: &Value) -> Result<()> {
                     s.line,
                     s.col,
                     "mismatch-error",
-                    format!(
-                        "failed to match {:#?} and {}",
-                        e,
-                        serde_json::to_string_pretty(&v)?
-                    )
-                    .as_str()
+                    format!("failed to match {:#?} and {}", e, serde_json::to_string_pretty(&v)?).as_str()
                 )
             )
         }
@@ -551,12 +516,8 @@ fn match_literal(l: &Literal, v: &Value) -> Result<()> {
                 _ => {
                     bail!(
                         "{}",
-                        span.source.message(
-                            span.line,
-                            span.col,
-                            "mismatch-error",
-                            "`op: -` not found in value`"
-                        )
+                        span.source
+                            .message(span.line, span.col, "mismatch-error", "`op: -` not found in value`")
                     )
                 }
             }
@@ -578,12 +539,8 @@ fn match_literal(l: &Literal, v: &Value) -> Result<()> {
                         &Value::Undefined,
                         &v["key"],
                         "{}",
-                        span.source.message(
-                            span.line,
-                            span.col,
-                            "mismatch-error",
-                            "could not match `key``"
-                        )
+                        span.source
+                            .message(span.line, span.col, "mismatch-error", "could not match `key``")
                     );
                 }
             }
@@ -620,12 +577,8 @@ fn match_rule_bodies(span: &Span, bodies: &[RuleBody], v: &Value) -> Result<()> 
         bodies.len(),
         v.len(),
         "{}",
-        span.source.message(
-            span.line,
-            span.col,
-            "mismatch-error",
-            "mismatch in body count",
-        ),
+        span.source
+            .message(span.line, span.col, "mismatch-error", "mismatch in body count",),
     );
 
     for idx in 0..bodies.len() {
@@ -730,28 +683,16 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                     "mismatch in num_expressions"
                 );
 
-                my_assert_eq!(
-                    module.num_statements,
-                    case.num_statements,
-                    "mismatch in num_statements"
-                );
+                my_assert_eq!(module.num_statements, case.num_statements, "mismatch in num_statements");
 
-                my_assert_eq!(
-                    module.num_queries,
-                    case.num_queries,
-                    "mismatch in num_queries"
-                );
+                my_assert_eq!(module.num_queries, case.num_queries, "mismatch in num_queries");
 
                 if let Some(p) = &case.package {
                     match_package(&module.package, p)?;
                 }
 
                 if let Some(imports) = &case.imports {
-                    my_assert_eq!(
-                        module.imports.len(),
-                        imports.len(),
-                        "mismatch in number of imports"
-                    );
+                    my_assert_eq!(module.imports.len(), imports.len(), "mismatch in number of imports");
 
                     for (idx, import) in imports.iter().enumerate().take(module.imports.len()) {
                         match_import(&module.imports[idx], import)?;
@@ -759,11 +700,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                 }
 
                 if let Some(policy) = &case.policy {
-                    my_assert_eq!(
-                        module.policy.len(),
-                        policy.len(),
-                        "mismatch in policy length"
-                    );
+                    my_assert_eq!(module.policy.len(), policy.len(), "mismatch in policy length");
                     for (idx, policy) in policy.iter().enumerate().take(module.policy.len()) {
                         if skip_value(policy) {
                             continue;
@@ -776,11 +713,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                 Some(expected) => {
                     let actual = actual.to_string();
                     if !actual.contains(expected) {
-                        bail!(
-                            "Error message\n`{}\n`\ndoes not contain `{}`",
-                            actual,
-                            expected
-                        );
+                        bail!("Error message\n`{}\n`\ndoes not contain `{}`", actual, expected);
                     }
                     println!("{actual}");
                 }

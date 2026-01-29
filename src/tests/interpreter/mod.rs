@@ -14,36 +14,35 @@
 
 use std::env;
 
-use crate::test_utils::{check_output, ValueOrVec};
-use crate::utils::limits::{
-    acquire_limits_test_lock, fallback_execution_timer_config, ExecutionTimerConfig,
+use crate::{
+    test_utils::{check_output, ValueOrVec},
+    utils::limits::{acquire_limits_test_lock, fallback_execution_timer_config, ExecutionTimerConfig},
+    *,
 };
-use crate::*;
 
 use anyhow::{bail, Result};
-use core::num::NonZeroU32;
-use core::time::Duration;
+use core::{num::NonZeroU32, time::Duration};
 use serde::{Deserialize, Serialize};
 use test_generator::test_resources;
-use timer_test_support::{
-    apply_engine_timer, configure_time_source, reset_time_source, GlobalTimerGuard,
-};
+use timer_test_support::{apply_engine_timer, configure_time_source, reset_time_source, GlobalTimerGuard};
 
 mod timer_test_support {
     use super::{ExecutionTimerTestConfig, TimeSourceTestConfig};
     #[cfg(any(test, not(feature = "std")))]
     use crate::utils::limits::set_time_source;
-    use crate::utils::limits::{
-        fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
-        TimeSource,
+    use crate::{
+        utils::limits::{
+            fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig, TimeSource,
+        },
+        Engine,
     };
-    use crate::Engine;
     use anyhow::{anyhow, Result};
-    use core::num::NonZeroU32;
-    use core::time::Duration;
-    use std::collections::VecDeque;
-    use std::sync::{Mutex, Once};
-    use std::vec::Vec;
+    use core::{num::NonZeroU32, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::{Mutex, Once},
+        vec::Vec,
+    };
 
     pub struct GlobalTimerGuard {
         previous: Option<ExecutionTimerConfig>,
@@ -81,21 +80,14 @@ mod timer_test_support {
     pub fn configure_time_source(spec: Option<&TimeSourceTestConfig>) {
         ensure_time_source_registered();
 
-        let mut state = TIME_SOURCE_STATE
-            .lock()
-            .expect("time source mutex poisoned");
+        let mut state = TIME_SOURCE_STATE.lock().expect("time source mutex poisoned");
 
         if let Some(cfg) = spec {
             state.default_increment = cfg
                 .default_increment_ms
                 .map(Duration::from_millis)
                 .unwrap_or(DEFAULT_INCREMENT);
-            state.template_increments = cfg
-                .increments_ms
-                .iter()
-                .copied()
-                .map(Duration::from_millis)
-                .collect();
+            state.template_increments = cfg.increments_ms.iter().copied().map(Duration::from_millis).collect();
         } else {
             state.default_increment = DEFAULT_INCREMENT;
             state.template_increments.clear();
@@ -105,9 +97,7 @@ mod timer_test_support {
     }
 
     pub fn reset_time_source() {
-        let mut state = TIME_SOURCE_STATE
-            .lock()
-            .expect("time source mutex poisoned");
+        let mut state = TIME_SOURCE_STATE.lock().expect("time source mutex poisoned");
         state.reset_from_template();
     }
 
@@ -156,19 +146,14 @@ mod timer_test_support {
 
     impl TimeSource for TestTimeSource {
         fn now(&self) -> Option<Duration> {
-            let mut state = TIME_SOURCE_STATE
-                .lock()
-                .expect("time source mutex poisoned");
+            let mut state = TIME_SOURCE_STATE.lock().expect("time source mutex poisoned");
 
             if !state.started {
                 state.started = true;
                 return Some(state.current);
             }
 
-            let increment = state
-                .increments
-                .pop_front()
-                .unwrap_or(state.default_increment);
+            let increment = state.increments.pop_front().unwrap_or(state.default_increment);
             state.current = state.current.saturating_add(increment);
             Some(state.current)
         }
@@ -194,8 +179,7 @@ mod timer_test_support {
         let check_interval = spec
             .check_interval
             .map(|interval| {
-                NonZeroU32::new(interval)
-                    .ok_or_else(|| anyhow!("execution_timer.check_interval must be non-zero"))
+                NonZeroU32::new(interval).ok_or_else(|| anyhow!("execution_timer.check_interval must be non-zero"))
             })
             .transpose()? // Result<Option<NonZeroU32>>
             .unwrap_or(NonZeroU32::MIN);
@@ -225,10 +209,8 @@ mod load_target_definitions {
     }
 
     fn load_target_definitions_impl() -> Result<()> {
-        use crate::registry::targets;
-        use crate::target::Target;
-        use std::fs;
-        use std::path::Path;
+        use crate::{registry::targets, target::Target};
+        use std::{fs, path::Path};
 
         let definitions_path = Path::new("tests/interpreter/cases/target/definitions");
 
@@ -258,11 +240,7 @@ mod load_target_definitions {
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "Failed to parse target definition from {}: {}",
-                            path.display(),
-                            e
-                        );
+                        eprintln!("Failed to parse target definition from {}: {}", path.display(), e);
                     }
                 }
             }
@@ -294,16 +272,10 @@ mod load_target_definitions {
 
         // Verify we can retrieve the targets
         let sample_target = targets::get("target.tests.sample_test_target");
-        assert!(
-            sample_target.is_some(),
-            "Should be able to retrieve sample target"
-        );
+        assert!(sample_target.is_some(), "Should be able to retrieve sample target");
 
         let azure_target = targets::get("target.tests.azure_compute");
-        assert!(
-            azure_target.is_some(),
-            "Should be able to retrieve azure target"
-        );
+        assert!(azure_target.is_some(), "Should be able to retrieve azure target");
 
         // Verify target properties
         if let Some(target) = sample_target {
@@ -363,8 +335,7 @@ pub fn eval_file(
     #[cfg(feature = "coverage")]
     engine.set_enable_coverage(true);
 
-    let use_default_timer =
-        execution_timer.is_none() && fallback_execution_timer_config().is_none();
+    let use_default_timer = execution_timer.is_none() && fallback_execution_timer_config().is_none();
 
     if let Some(spec) = execution_timer {
         apply_engine_timer(&mut engine, spec)?;
@@ -464,8 +435,7 @@ pub fn eval_file_with_rule_evaluation(
     #[cfg(feature = "coverage")]
     engine.set_enable_coverage(true);
 
-    let use_default_timer =
-        execution_timer.is_none() && fallback_execution_timer_config().is_none();
+    let use_default_timer = execution_timer.is_none() && fallback_execution_timer_config().is_none();
 
     if let Some(spec) = execution_timer {
         apply_engine_timer(&mut engine, spec)?;
@@ -683,9 +653,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                     let mut expected_results = vec![];
                     match want_result {
                         ValueOrVec::Single(single_result) => expected_results.push(single_result),
-                        ValueOrVec::Many(mut many_result) => {
-                            expected_results.append(&mut many_result)
-                        }
+                        ValueOrVec::Many(mut many_result) => expected_results.append(&mut many_result),
                     }
 
                     check_output(&results, &expected_results)?;
@@ -693,10 +661,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         assert_eq!(expected_prints.len(), prints.len());
                         for (idx, ep) in expected_prints.into_iter().enumerate() {
                             if ep != prints[idx] {
-                                std::println!(
-                                    "print mismatch :\n{}",
-                                    prettydiff::diff_chars(&ep, &prints[idx])
-                                );
+                                std::println!("print mismatch :\n{}", prettydiff::diff_chars(&ep, &prints[idx]));
                                 panic!("exiting");
                             }
                         }
@@ -709,11 +674,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                 Some(expected) => {
                     let actual = actual.to_string();
                     if !actual.contains(expected) {
-                        bail!(
-                            "Error message\n`{}\n`\ndoes not contain `{}`",
-                            actual,
-                            expected
-                        );
+                        bail!("Error message\n`{}\n`\ndoes not contain `{}`", actual, expected);
                     }
                     std::println!("{actual}");
                 }

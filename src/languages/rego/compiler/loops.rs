@@ -9,16 +9,20 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, ContextType, Register, Result};
-use crate::ast::{self, ExprRef, LiteralStmt, Query};
-use crate::compiler::destructuring_planner::plans::BindingPlan;
-use crate::compiler::hoist::{HoistedLoop, LoopType};
-use crate::lexer::Span;
-use crate::rvm::instructions::{LoopMode, LoopStartParams};
-use crate::rvm::Instruction;
-use crate::Value;
-use alloc::format;
-use alloc::string::ToString;
-use alloc::vec::Vec;
+use crate::{
+    ast::{self, ExprRef, LiteralStmt, Query},
+    compiler::{
+        destructuring_planner::plans::BindingPlan,
+        hoist::{HoistedLoop, LoopType},
+    },
+    lexer::Span,
+    rvm::{
+        instructions::{LoopMode, LoopStartParams},
+        Instruction,
+    },
+    Value,
+};
+use alloc::{format, string::ToString, vec::Vec};
 
 impl<'a> Compiler<'a> {
     pub(super) fn get_statement_loops(&self, stmt: &LiteralStmt) -> Result<Vec<HoistedLoop>> {
@@ -72,11 +76,7 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    pub(super) fn compile_hoisted_loops(
-        &mut self,
-        stmts: &[&LiteralStmt],
-        loops: &[HoistedLoop],
-    ) -> Result<()> {
+    pub(super) fn compile_hoisted_loops(&mut self, stmts: &[&LiteralStmt], loops: &[HoistedLoop]) -> Result<()> {
         if loops.is_empty() {
             if !stmts.is_empty() {
                 self.compile_single_statement(stmts[0])?;
@@ -182,16 +182,14 @@ impl<'a> Compiler<'a> {
 
         let loop_end = self.program.instructions.len() as u16;
 
-        self.program
-            .update_loop_params(loop_params_index, |params| {
-                params.body_start = body_start;
-                params.loop_end = loop_end;
-            });
+        self.program.update_loop_params(loop_params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
 
         let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
-            loop_end: ref mut end,
-            ..
+            loop_end: ref mut end, ..
         } = &mut self.program.instructions[loop_next_idx]
         {
             *end = loop_end;
@@ -216,8 +214,7 @@ impl<'a> Compiler<'a> {
         let result_reg = self.alloc_register();
 
         if let Some(loop_expr) = loop_expr {
-            self.loop_expr_register_map
-                .insert(loop_expr.clone(), value_reg);
+            self.loop_expr_register_map.insert(loop_expr.clone(), value_reg);
         }
 
         let mut key_binding_plan: Option<(BindingPlan, Span)> = None;
@@ -297,16 +294,14 @@ impl<'a> Compiler<'a> {
 
         let loop_end = self.program.instructions.len() as u16;
 
-        self.program
-            .update_loop_params(loop_params_index, |params| {
-                params.body_start = body_start;
-                params.loop_end = loop_end;
-            });
+        self.program.update_loop_params(loop_params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
 
         let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
-            loop_end: ref mut end,
-            ..
+            loop_end: ref mut end, ..
         } = &mut self.program.instructions[loop_next_idx]
         {
             *end = loop_end;
@@ -359,9 +354,7 @@ impl<'a> Compiler<'a> {
 
         if let Some(binding_plan) = self.get_binding_plan_for_expr(collection)? {
             if let BindingPlan::SomeIn {
-                key_plan,
-                value_plan,
-                ..
+                key_plan, value_plan, ..
             } = &binding_plan
             {
                 let key_register = key_plan.as_ref().map(|_| key_reg);
@@ -383,16 +376,12 @@ impl<'a> Compiler<'a> {
         } else {
             if let Some(key_expr) = key {
                 match key_expr.as_ref() {
-                    ast::Expr::Var {
-                        value: var_name, ..
-                    } => {
+                    ast::Expr::Var { value: var_name, .. } => {
                         let var_name = var_name
                             .as_string()
                             .map_err(|err| {
                                 CompilerError::General {
-                                    message: format!(
-                                        "Failed to read some-in key variable name: {err}"
-                                    ),
+                                    message: format!("Failed to read some-in key variable name: {err}"),
                                 }
                                 .at(key_expr.span())
                             })?
@@ -409,16 +398,12 @@ impl<'a> Compiler<'a> {
             }
 
             match value.as_ref() {
-                ast::Expr::Var {
-                    value: var_name, ..
-                } => {
+                ast::Expr::Var { value: var_name, .. } => {
                     let var_name = var_name
                         .as_string()
                         .map_err(|err| {
                             CompilerError::General {
-                                message: format!(
-                                    "Failed to read some-in value variable name: {err}"
-                                ),
+                                message: format!("Failed to read some-in value variable name: {err}"),
                             }
                             .at(value.span())
                         })?
@@ -446,16 +431,14 @@ impl<'a> Compiler<'a> {
 
         let loop_end = self.program.instructions.len() as u16;
 
-        self.program
-            .update_loop_params(loop_params_index, |params| {
-                params.body_start = body_start;
-                params.loop_end = loop_end;
-            });
+        self.program.update_loop_params(loop_params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
 
         let loop_next_idx = self.program.instructions.len() - 1;
         if let Instruction::LoopNext {
-            loop_end: ref mut end,
-            ..
+            loop_end: ref mut end, ..
         } = &mut self.program.instructions[loop_next_idx]
         {
             *end = loop_end;

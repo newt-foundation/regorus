@@ -2,9 +2,11 @@
 // Licensed under the MIT License.
 #![allow(clippy::option_if_let_else)]
 
-use alloc::format;
-use alloc::string::{String, ToString as _};
-use alloc::vec::Vec;
+use alloc::{
+    format,
+    string::{String, ToString as _},
+    vec::Vec,
+};
 use core::fmt::{self, Write as _};
 
 use crate::rvm::{
@@ -73,10 +75,7 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
         push_line(&mut output, format_args!(";"));
         push_line(&mut output, format_args!("; BUILTINS TABLE:"));
         for (idx, builtin_info) in program.builtin_info_table.iter().enumerate() {
-            push_line(
-                &mut output,
-                format_args!(";   B{:2}: {}", idx, builtin_info.name),
-            );
+            push_line(&mut output, format_args!(";   B{:2}: {}", idx, builtin_info.name));
         }
     }
 
@@ -85,12 +84,8 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
         push_line(&mut output, format_args!(";"));
         push_line(&mut output, format_args!("; LITERALS (JSON values):"));
         for (idx, literal) in program.literals.iter().enumerate() {
-            let literal_json =
-                serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
-            push_line(
-                &mut output,
-                format_args!(";   L{:2}: {}", idx, literal_json),
-            );
+            let literal_json = serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
+            push_line(&mut output, format_args!(";   L{:2}: {}", idx, literal_json));
         }
     }
 
@@ -99,10 +94,7 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
         push_line(&mut output, format_args!(";"));
         push_line(&mut output, format_args!("; RULES TABLE:"));
         for (idx, rule_info) in program.rule_infos.iter().enumerate() {
-            push_line(
-                &mut output,
-                format_args!(";   R{:2}: {}", idx, rule_info.name),
-            );
+            push_line(&mut output, format_args!(";   R{:2}: {}", idx, rule_info.name));
         }
     }
 
@@ -119,15 +111,9 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
 
             // Add rule name prefix
             if let Some(rule_info) = program.rule_infos.get(usize::from(rule_index)) {
-                push_line(
-                    &mut output,
-                    format_args!("; ===== RULE: {} =====", rule_info.name),
-                );
+                push_line(&mut output, format_args!("; ===== RULE: {} =====", rule_info.name));
             } else {
-                push_line(
-                    &mut output,
-                    format_args!("; ===== RULE: rule_{} =====", rule_index),
-                );
+                push_line(&mut output, format_args!("; ===== RULE: rule_{} =====", rule_index));
             }
         }
 
@@ -170,13 +156,7 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
         };
 
         // Format instruction with proper indentation and aligned comments
-        let inst_str = format_instruction_readable(
-            instruction,
-            &indent,
-            &program.instruction_data,
-            program,
-            config,
-        );
+        let inst_str = format_instruction_readable(instruction, &indent, &program.instruction_data, program, config);
 
         push_line(&mut output, format_args!("{}{}", addr_str, inst_str));
 
@@ -189,10 +169,7 @@ pub fn generate_assembly_listing(program: &Program, config: &AssemblyListingConf
                 }
             }
             Instruction::ComprehensionBegin { params_index } => {
-                if let Some(params) = program
-                    .instruction_data
-                    .get_comprehension_begin_params(params_index)
-                {
+                if let Some(params) = program.instruction_data.get_comprehension_begin_params(params_index) {
                     active_ends.push(params.comprehension_end);
                     indent_level = indent_level.saturating_add(1);
                 }
@@ -232,8 +209,7 @@ fn format_instruction_readable(
             let base = format!("{}Load         r{} ← L{}", indent, dest, literal_idx);
             let comment = match program.literals.get(usize::from(literal_idx)) {
                 Some(literal) => {
-                    let literal_json =
-                        serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
+                    let literal_json = serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
                     format!("Load literal: {}", literal_json)
                 }
                 None => "Load literal: <invalid index>".to_string(),
@@ -291,58 +267,37 @@ fn format_instruction_readable(
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Mod { dest, left, right } => {
-            let base = format!(
-                "{}Mod          r{} ← r{} mod r{}",
-                indent, dest, left, right
-            );
+            let base = format!("{}Mod          r{} ← r{} mod r{}", indent, dest, left, right);
             let comment = format!("Modulo operation: r{} mod r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Eq { dest, left, right } => {
-            let base = format!(
-                "{}Eq           r{} ← (r{} = r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Eq           r{} ← (r{} = r{})", indent, dest, left, right);
             let comment = format!("Equality test: r{} == r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Ne { dest, left, right } => {
-            let base = format!(
-                "{}Ne           r{} ← (r{} ≠ r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Ne           r{} ← (r{} ≠ r{})", indent, dest, left, right);
             let comment = format!("Inequality test: r{} != r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Lt { dest, left, right } => {
-            let base = format!(
-                "{}Lt           r{} ← (r{} < r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Lt           r{} ← (r{} < r{})", indent, dest, left, right);
             let comment = format!("Less than comparison: r{} < r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Le { dest, left, right } => {
-            let base = format!(
-                "{}Le           r{} ← (r{} ≤ r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Le           r{} ← (r{} ≤ r{})", indent, dest, left, right);
             let comment = format!("Less or equal comparison: r{} <= r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Gt { dest, left, right } => {
-            let base = format!(
-                "{}Gt           r{} ← (r{} > r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Gt           r{} ← (r{} > r{})", indent, dest, left, right);
             let comment = format!("Greater than comparison: r{} > r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::Ge { dest, left, right } => {
-            let base = format!(
-                "{}Ge           r{} ← (r{} ≥ r{})",
-                indent, dest, left, right
-            );
+            let base = format!("{}Ge           r{} ← (r{} ≥ r{})", indent, dest, left, right);
             let comment = format!("Greater or equal comparison: r{} >= r{}", left, right);
             align_comment(&base, &comment, config.comment_column)
         }
@@ -387,11 +342,7 @@ fn format_instruction_readable(
                 align_comment(&base, &comment, config.comment_column)
             } else {
                 let base = format!("{}BuiltinCall  [INVALID P({})]", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid builtin call parameters",
-                    config.comment_column,
-                )
+                align_comment(&base, "ERROR: Invalid builtin call parameters", config.comment_column)
             }
         }
         Instruction::FunctionCall { params_index } => {
@@ -409,10 +360,7 @@ fn format_instruction_readable(
                     .map(|info| info.name.as_str())
                     .unwrap_or("<invalid>");
 
-                let base = format!(
-                    "{}FunctionCall r{} ← {}({})",
-                    indent, params.dest, func_name, args_str
-                );
+                let base = format!("{}FunctionCall r{} ← {}({})", indent, params.dest, func_name, args_str);
                 let comment = format!(
                     "Call function '{}' (R{}) with {} args",
                     func_name, params.func_rule_index, params.num_args
@@ -420,24 +368,14 @@ fn format_instruction_readable(
                 align_comment(&base, &comment, config.comment_column)
             } else {
                 let base = format!("{}FunctionCall [INVALID P({})]", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid function call parameters",
-                    config.comment_column,
-                )
+                align_comment(&base, "ERROR: Invalid function call parameters", config.comment_column)
             }
         }
         Instruction::HostAwait { dest, arg, id } => {
-            let base = format!(
-                "{}HostAwait    r{} ← await r{} (id r{})",
-                indent, dest, arg, id
-            );
+            let base = format!("{}HostAwait    r{} ← await r{} (id r{})", indent, dest, arg, id);
             align_comment(
                 &base,
-                &format!(
-                    "Suspend and request host result using r{} with identifier r{}",
-                    arg, id
-                ),
+                &format!("Suspend and request host result using r{} with identifier r{}", arg, id),
                 config.comment_column,
             )
         }
@@ -452,33 +390,16 @@ fn format_instruction_readable(
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::ObjectCreate { params_index } => {
-            let params = program
-                .instruction_data
-                .get_object_create_params(params_index);
-            let base = format!(
-                "{}ObjectCreate r{} ← {{...}}",
-                indent,
-                params.map_or(0, |p| p.dest)
-            );
+            let params = program.instruction_data.get_object_create_params(params_index);
+            let base = format!("{}ObjectCreate r{} ← {{...}}", indent, params.map_or(0, |p| p.dest));
             let comment = match params {
-                Some(p) => format!(
-                    "Create object with {} fields (P{})",
-                    p.field_count(),
-                    params_index
-                ),
+                Some(p) => format!("Create object with {} fields (P{})", p.field_count(), params_index),
                 None => format!("Create object (P{} - INVALID)", params_index),
             };
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::Index {
-            dest,
-            container,
-            key,
-        } => {
-            let base = format!(
-                "{}Index        r{} ← r{}[r{}]",
-                indent, dest, container, key
-            );
+        Instruction::Index { dest, container, key } => {
+            let base = format!("{}Index        r{} ← r{}[r{}]", indent, dest, container, key);
             let comment = format!("Index operation: get r{}[r{}]", container, key);
             align_comment(&base, &comment, config.comment_column)
         }
@@ -487,20 +408,13 @@ fn format_instruction_readable(
             container,
             literal_idx,
         } => {
-            let base = format!(
-                "{}IndexLiteral r{} ← r{}[L{}]",
-                indent, dest, container, literal_idx
-            );
+            let base = format!("{}IndexLiteral r{} ← r{}[L{}]", indent, dest, container, literal_idx);
             let comment = match program.literals.get(usize::from(literal_idx)) {
                 Some(literal) => {
-                    let literal_json =
-                        serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
+                    let literal_json = serde_json::to_string(literal).unwrap_or_else(|_| "<invalid>".to_string());
                     format!("Index with literal key: r{}[{}]", container, literal_json)
                 }
-                None => format!(
-                    "Index with literal: r{}[L{}] (invalid index)",
-                    container, literal_idx
-                ),
+                None => format!("Index with literal: r{}[L{}] (invalid index)", container, literal_idx),
             };
             align_comment(&base, &comment, config.comment_column)
         }
@@ -563,10 +477,7 @@ fn format_instruction_readable(
             collection,
             value,
         } => {
-            let base = format!(
-                "{}Contains     r{} ← (r{} ∈ r{})",
-                indent, dest, value, collection
-            );
+            let base = format!("{}Contains     r{} ← (r{} ∈ r{})", indent, dest, value, collection);
             let comment = format!("Membership test: r{} in r{}", value, collection);
             align_comment(&base, &comment, config.comment_column)
         }
@@ -581,10 +492,7 @@ fn format_instruction_readable(
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::AssertNotUndefined { register } => {
-            let base = format!(
-                "{}AssertNotUndefined assert_not_undefined r{}",
-                indent, register
-            );
+            let base = format!("{}AssertNotUndefined assert_not_undefined r{}", indent, register);
             let comment = format!("Assert r{} is not undefined (exit if undefined)", register);
             align_comment(&base, &comment, config.comment_column)
         }
@@ -597,12 +505,7 @@ fn format_instruction_readable(
                 };
                 let base = format!(
                     "{}LoopStart    {} r{},r{} in r{} → r{} {{",
-                    indent,
-                    mode_str,
-                    params.key_reg,
-                    params.value_reg,
-                    params.collection,
-                    params.result_reg
+                    indent, mode_str, params.key_reg, params.value_reg, params.collection, params.result_reg
                 );
                 let comment = format!(
                     "{} loop over r{}, body: {}-{} (P{})",
@@ -611,25 +514,12 @@ fn format_instruction_readable(
                 align_comment(&base, &comment, config.comment_column)
             } else {
                 let base = format!("{}LoopStart    [INVALID P({})] {{", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid loop parameters",
-                    config.comment_column,
-                )
+                align_comment(&base, "ERROR: Invalid loop parameters", config.comment_column)
             }
         }
-        Instruction::LoopNext {
-            body_start,
-            loop_end,
-        } => {
-            let base = format!(
-                "{}}} continue → {} or exit → {}",
-                indent, body_start, loop_end
-            );
-            let comment = format!(
-                "Next iteration or exit loop (body:{}-{})",
-                body_start, loop_end
-            );
+        Instruction::LoopNext { body_start, loop_end } => {
+            let base = format!("{}}} continue → {} or exit → {}", indent, body_start, loop_end);
+            let comment = format!("Next iteration or exit loop (body:{}-{})", body_start, loop_end);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::CallRule { dest, rule_index } => {
@@ -643,10 +533,7 @@ fn format_instruction_readable(
             let comment = format!("Call rule '{}' (R{}) with caching", rule_name, rule_index);
             align_comment(&base, &comment, config.comment_column)
         }
-        Instruction::RuleInit {
-            result_reg,
-            rule_index,
-        } => {
+        Instruction::RuleInit { result_reg, rule_index } => {
             let rule_name = program
                 .rule_infos
                 .get(usize::from(rule_index))
@@ -654,10 +541,7 @@ fn format_instruction_readable(
                 .unwrap_or("<invalid>");
 
             let base = format!("{}RuleInit     {} → r{} {{", indent, rule_name, result_reg);
-            let comment = format!(
-                "Initialize rule '{}' (R{}) evaluation",
-                rule_name, rule_index
-            );
+            let comment = format!("Initialize rule '{}' (R{}) evaluation", rule_name, rule_index);
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::RuleReturn {} => {
@@ -665,60 +549,52 @@ fn format_instruction_readable(
             align_comment(&base, "End of rule evaluation", config.comment_column)
         }
         Instruction::ChainedIndex { params_index } => {
-            let (base, comment) =
-                if let Some(params) = instruction_data.get_chained_index_params(params_index) {
-                    let chain_parts: Vec<String> = params
-                        .path_components
-                        .iter()
-                        .map(|component| match *component {
-                            crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
-                                if let Some(literal) = program.literals.get(usize::from(idx)) {
-                                    match *literal {
-                                        crate::Value::String(ref s) => format!(".{}", s.as_ref()),
-                                        ref other => format!(
-                                            "[{}]",
-                                            serde_json::to_string(other)
-                                                .unwrap_or_else(|_| "?".to_string())
-                                        ),
-                                    }
-                                } else {
-                                    format!("[L{}?]", idx)
+            let (base, comment) = if let Some(params) = instruction_data.get_chained_index_params(params_index) {
+                let chain_parts: Vec<String> = params
+                    .path_components
+                    .iter()
+                    .map(|component| match *component {
+                        crate::rvm::instructions::LiteralOrRegister::Literal(idx) => {
+                            if let Some(literal) = program.literals.get(usize::from(idx)) {
+                                match *literal {
+                                    crate::Value::String(ref s) => format!(".{}", s.as_ref()),
+                                    ref other => format!(
+                                        "[{}]",
+                                        serde_json::to_string(other).unwrap_or_else(|_| "?".to_string())
+                                    ),
                                 }
+                            } else {
+                                format!("[L{}?]", idx)
                             }
-                            crate::rvm::instructions::LiteralOrRegister::Register(reg) => {
-                                format!("[r{}]", reg)
-                            }
-                        })
-                        .collect();
+                        }
+                        crate::rvm::instructions::LiteralOrRegister::Register(reg) => {
+                            format!("[r{}]", reg)
+                        }
+                    })
+                    .collect();
 
-                    let chain_display = if chain_parts.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" r{}{}", params.root, chain_parts.join(""))
-                    };
-
-                    let base_str = format!(
-                        "{}ChainedIndex r{} ← r{}{}",
-                        indent, params.dest, params.root, chain_display
-                    );
-                    let comment_str = format!(
-                        "Multi-level chained indexing: r{} → r{}",
-                        params.root, params.dest
-                    );
-                    (base_str, comment_str)
+                let chain_display = if chain_parts.is_empty() {
+                    String::new()
                 } else {
-                    let base_str = format!("{}ChainedIndex chained_index", indent);
-                    let comment_str = "Multi-level chained indexing (invalid params)".to_string();
-                    (base_str, comment_str)
+                    format!(" r{}{}", params.root, chain_parts.join(""))
                 };
+
+                let base_str = format!(
+                    "{}ChainedIndex r{} ← r{}{}",
+                    indent, params.dest, params.root, chain_display
+                );
+                let comment_str = format!("Multi-level chained indexing: r{} → r{}", params.root, params.dest);
+                (base_str, comment_str)
+            } else {
+                let base_str = format!("{}ChainedIndex chained_index", indent);
+                let comment_str = "Multi-level chained indexing (invalid params)".to_string();
+                (base_str, comment_str)
+            };
 
             align_comment(&base, &comment, config.comment_column)
         }
         Instruction::VirtualDataDocumentLookup { .. } => {
-            let base = format!(
-                "{}VirtualDataDocumentLookup virtual_data_document_lookup",
-                indent
-            );
+            let base = format!("{}VirtualDataDocumentLookup virtual_data_document_lookup", indent);
             align_comment(
                 &base,
                 "Lookup in data namespace virtual documents",
@@ -727,11 +603,7 @@ fn format_instruction_readable(
         }
         Instruction::DestructuringSuccess {} => {
             let base = format!("{}DestructuringSuccess ✓", indent);
-            align_comment(
-                &base,
-                "Parameter destructuring validated",
-                config.comment_column,
-            )
+            align_comment(&base, "Parameter destructuring validated", config.comment_column)
         }
         Instruction::Halt {} => {
             let base = format!("{}Halt         halt", indent);
@@ -745,10 +617,7 @@ fn format_instruction_readable(
                     crate::rvm::instructions::ComprehensionMode::Object => "object",
                 };
                 let (source_desc, result_desc) = if params.collection_reg == params.result_reg {
-                    (
-                        format!("r{}", params.collection_reg),
-                        format!("r{}", params.result_reg),
-                    )
+                    (format!("r{}", params.collection_reg), format!("r{}", params.result_reg))
                 } else {
                     (
                         format!("r{} (src)", params.collection_reg),
@@ -761,20 +630,12 @@ fn format_instruction_readable(
                 );
                 let comment = format!(
                     "{} comprehension in r{}, body: {}-{} (P{})",
-                    mode_str,
-                    params.collection_reg,
-                    params.body_start,
-                    params.comprehension_end,
-                    params_index
+                    mode_str, params.collection_reg, params.body_start, params.comprehension_end, params_index
                 );
                 align_comment(&base, &comment, config.comment_column)
             } else {
                 let base = format!("{}CompBegin   [INVALID P({})] {{", indent, params_index);
-                align_comment(
-                    &base,
-                    "ERROR: Invalid comprehension parameters",
-                    config.comment_column,
-                )
+                align_comment(&base, "ERROR: Invalid comprehension parameters", config.comment_column)
             }
         }
         Instruction::ComprehensionYield { value_reg, key_reg } => {
@@ -792,10 +653,7 @@ fn format_instruction_readable(
 }
 
 /// Generate compact tabular assembly listing
-pub fn generate_tabular_assembly_listing(
-    program: &Program,
-    _config: &AssemblyListingConfig,
-) -> String {
+pub fn generate_tabular_assembly_listing(program: &Program, _config: &AssemblyListingConfig) -> String {
     let mut output = String::new();
     let mut indent_level: usize = 0;
 
@@ -810,14 +668,8 @@ pub fn generate_tabular_assembly_listing(
         ),
     );
     push_line(&mut output, format_args!(";"));
-    push_line(
-        &mut output,
-        format_args!("; PC  | Instruction  | Operation"),
-    );
-    push_line(
-        &mut output,
-        format_args!(";-----|--------------|----------"),
-    );
+    push_line(&mut output, format_args!("; PC  | Instruction  | Operation"));
+    push_line(&mut output, format_args!(";-----|--------------|----------"));
 
     for (pc, instruction) in program.instructions.iter().enumerate() {
         // Handle loop indentation
@@ -836,8 +688,7 @@ pub fn generate_tabular_assembly_listing(
         // Format in tabular style
         let addr_str = format!("{:03}", pc);
         let inst_name = get_instruction_name(instruction);
-        let operation =
-            format_operation_compact(instruction, &indent, &program.instruction_data, program);
+        let operation = format_operation_compact(instruction, &indent, &program.instruction_data, program);
 
         push_line(
             &mut output,
@@ -938,11 +789,7 @@ fn format_operation_compact(
         Instruction::Add { dest, left, right } => {
             format!("{}r{} ← r{} + r{}", indent, dest, left, right)
         }
-        Instruction::Index {
-            dest,
-            container,
-            key,
-        } => {
+        Instruction::Index { dest, container, key } => {
             format!("{}r{} ← r{}[r{}]", indent, dest, container, key)
         }
         Instruction::IndexLiteral {
@@ -954,10 +801,7 @@ fn format_operation_compact(
         }
         Instruction::LoopStart { params_index } => {
             if let Some(params) = instruction_data.get_loop_params(params_index) {
-                format!(
-                    "{}loop r{} in r{} {{",
-                    indent, params.value_reg, params.collection
-                )
+                format!("{}loop r{} in r{} {{", indent, params.value_reg, params.collection)
             } else {
                 format!("{}loop P({}) {{", indent, params_index)
             }
@@ -971,10 +815,7 @@ fn format_operation_compact(
         Instruction::HostAwait { dest, arg, id } => {
             format!("{}await r{} → r{} (id r{})", indent, arg, dest, id)
         }
-        Instruction::RuleInit {
-            result_reg,
-            rule_index,
-        } => {
+        Instruction::RuleInit { result_reg, rule_index } => {
             format!("{}rule_{} → r{} {{", indent, rule_index, result_reg)
         }
         Instruction::RuleReturn {} => {

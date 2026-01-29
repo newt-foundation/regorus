@@ -1,9 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
@@ -39,11 +41,7 @@ impl BuildFfiCommand {
         } else {
             println!("Built FFI artefacts:");
             for triple in &targets {
-                println!(
-                    "  {} -> {}",
-                    triple,
-                    artifact_path(&base, triple, profile).display()
-                );
+                println!("  {} -> {}", triple, artifact_path(&base, triple, profile).display());
             }
         }
 
@@ -85,10 +83,7 @@ pub fn detect_host_triple() -> Result<String> {
         .context("failed to invoke rustc")?;
 
     if !output.status.success() {
-        bail!(
-            "rustc -Vv failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        bail!("rustc -Vv failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 
     let stdout = String::from_utf8(output.stdout).context("rustc output was not valid UTF-8")?;

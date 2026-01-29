@@ -3,12 +3,14 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_object};
-use crate::lexer::Span;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{enforce_limit, ensure_args_count, ensure_object},
+    lexer::Span,
+    value::Value,
+    *,
+};
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -152,12 +154,7 @@ fn visit(
     Ok(())
 }
 
-fn reachable_paths(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    strict: bool,
-) -> Result<Value> {
+fn reachable_paths(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
     let name = "graph.reachable_paths";
     ensure_args_count(span, name, params, args, 2)?;
 

@@ -1,17 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use core::alloc::{GlobalAlloc, Layout};
-use core::ffi::c_void;
-use mimalloc_sys::{
-    mi_free, mi_malloc_aligned, mi_realloc_aligned, mi_zalloc_aligned, MI_ALIGNMENT_MAX,
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    ffi::c_void,
 };
+use mimalloc_sys::{mi_free, mi_malloc_aligned, mi_realloc_aligned, mi_zalloc_aligned, MI_ALIGNMENT_MAX};
 
 #[cfg(feature = "allocator-memory-limits")]
 pub use crate::limits::{
     allocation_stats_snapshot, current_thread_allocation_stats, flush_thread_counters,
-    global_allocation_stats_snapshot, record_alloc, record_free, set_thread_flush_threshold,
-    GlobalAllocationStats, ThreadAllocationStats,
+    global_allocation_stats_snapshot, record_alloc, record_free, set_thread_flush_threshold, GlobalAllocationStats,
+    ThreadAllocationStats,
 };
 pub struct Mimalloc;
 
@@ -50,8 +50,7 @@ unsafe impl GlobalAlloc for Mimalloc {
     #[inline]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         debug_assert!(layout.align() < MI_ALIGNMENT_MAX);
-        let result =
-            mi_realloc_aligned(ptr.cast::<c_void>(), new_size, layout.align()).cast::<u8>();
+        let result = mi_realloc_aligned(ptr.cast::<c_void>(), new_size, layout.align()).cast::<u8>();
 
         #[cfg(feature = "allocator-memory-limits")]
         if !result.is_null() {

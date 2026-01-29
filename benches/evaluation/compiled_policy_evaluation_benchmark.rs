@@ -1,10 +1,12 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use regorus::{compile_policy_with_entrypoint, CompiledPolicy, PolicyModule, Value};
-use std::collections::HashMap;
-use std::hint::black_box;
-use std::sync::{Arc, Barrier, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    hint::black_box,
+    sync::{Arc, Barrier, Mutex},
+    thread,
+    time::Duration,
+};
 
 mod policy_data;
 
@@ -33,12 +35,7 @@ fn multi_threaded_compiled_eval(
                         id: "policy.rego".into(),
                         content: policy.as_str().into(),
                     };
-                    compile_policy_with_entrypoint(
-                        Value::new_object(),
-                        &[module],
-                        "data.bench.allow".into(),
-                    )
-                    .unwrap()
+                    compile_policy_with_entrypoint(Value::new_object(), &[module], "data.bench.allow".into()).unwrap()
                 })
                 .collect(),
         ))
@@ -49,10 +46,7 @@ fn multi_threaded_compiled_eval(
     // Initialize policy evaluation counters
     let policy_counters = Arc::new(Mutex::new(HashMap::new()));
     for policy_name in &policy_names {
-        policy_counters
-            .lock()
-            .unwrap()
-            .insert(policy_name.to_string(), 0);
+        policy_counters.lock().unwrap().insert(policy_name.to_string(), 0);
     }
     let total_evals = Arc::new(Mutex::new(0usize));
 
@@ -118,12 +112,9 @@ fn multi_threaded_compiled_eval(
                         id: "policy.rego".into(),
                         content: policy.as_str().into(),
                     };
-                    let compiled_policy = compile_policy_with_entrypoint(
-                        Value::new_object(),
-                        &[module],
-                        "data.bench.allow".into(),
-                    )
-                    .unwrap();
+                    let compiled_policy =
+                        compile_policy_with_entrypoint(Value::new_object(), &[module], "data.bench.allow".into())
+                            .unwrap();
                     compiled_policy.eval_with_input(input_value)
                 };
 
@@ -157,10 +148,7 @@ fn multi_threaded_compiled_eval(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let max_threads = num_cpus::get() * 2;
-    println!(
-        "Running compiled policy benchmark with max_threads: {}",
-        max_threads
-    );
+    println!("Running compiled policy benchmark with max_threads: {}", max_threads);
 
     let evals_per_thread = 1000;
 
@@ -205,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
                             // Sanity check: Ensure the expected number of evaluations matches the actual number performed per iteration batch.
                             // total_evals is the expected number for this batch, total_evals_aggregated is the sum over all iters.
-                            assert_eq!(total_evals, total_evals_aggregated/iters as usize);
+                            assert_eq!(total_evals, total_evals_aggregated / iters as usize);
 
                             // On one iteration, print policy evaluation statistics
                             if iters == 1 {
@@ -213,7 +201,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 for (policy_name, count) in &policy_counters {
                                     // println!("  {}: {} evaluations", policy_name, count);
                                     if *count == 0 {
-                                        println!("\x1b[31mERROR: Policy '{}' was never evaluated successfully!\x1b[0m", policy_name);
+                                        println!(
+                                            "\x1b[31mERROR: Policy '{}' was never evaluated successfully!\x1b[0m",
+                                            policy_name
+                                        );
                                     }
                                 }
                             }

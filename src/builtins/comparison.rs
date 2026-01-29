@@ -3,8 +3,7 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::ast::BoolOp;
-use crate::value::Value;
+use crate::{ast::BoolOp, value::Value};
 
 use anyhow::Result;
 

@@ -1,9 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::lexer::*;
-use crate::value::Value;
-use crate::*;
+use crate::{lexer::*, value::Value, *};
 
 use core::{cmp, fmt, ops::Deref};
 

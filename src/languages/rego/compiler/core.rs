@@ -8,15 +8,21 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, Register, Result, Scope};
-use crate::ast::ExprRef;
-use crate::builtins;
-use crate::compiler::destructuring_planner::plans::BindingPlan;
-use crate::lexer::Span;
-use crate::rvm::program::{BuiltinInfo, SpanInfo};
-use crate::rvm::Instruction;
-use crate::Value;
-use alloc::format;
-use alloc::string::{String, ToString};
+use crate::{
+    ast::ExprRef,
+    builtins,
+    compiler::destructuring_planner::plans::BindingPlan,
+    lexer::Span,
+    rvm::{
+        program::{BuiltinInfo, SpanInfo},
+        Instruction,
+    },
+    Value,
+};
+use alloc::{
+    format,
+    string::{String, ToString},
+};
 
 impl<'a> Compiler<'a> {
     /// Check if a function path is a builtin function (similar to interpreter's is_builtin)
@@ -63,8 +69,7 @@ impl<'a> Compiler<'a> {
         let index = self.program.add_builtin_info(builtin_info);
 
         // Store in our mapping
-        self.builtin_index_map
-            .insert(builtin_name.to_string(), index);
+        self.builtin_index_map.insert(builtin_name.to_string(), index);
 
         Ok(index)
     }
@@ -165,9 +170,7 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn add_unbound_variable(&mut self, var_name: &str) {
-        self.current_scope_mut()
-            .unbound_vars
-            .insert(var_name.to_string());
+        self.current_scope_mut().unbound_vars.insert(var_name.to_string());
     }
 
     pub fn is_unbound_var(&self, var_name: &str) -> bool {
@@ -208,11 +211,7 @@ impl<'a> Compiler<'a> {
             .map(|plan: Option<&BindingPlan>| plan.cloned())
     }
 
-    pub(super) fn expect_binding_plan_for_expr(
-        &self,
-        expr: &ExprRef,
-        context: &str,
-    ) -> Result<BindingPlan> {
+    pub(super) fn expect_binding_plan_for_expr(&self, expr: &ExprRef, context: &str) -> Result<BindingPlan> {
         self.get_binding_plan_for_expr(expr)?.ok_or_else(|| {
             CompilerError::MissingBindingPlan {
                 context: context.to_string(),
@@ -264,8 +263,7 @@ impl<'a> Compiler<'a> {
         let source_path = span.source.get_path().to_string();
         let source_index = self.get_or_create_source_index(&source_path);
 
-        self.spans
-            .push(SpanInfo::from_lexer_span(span, source_index));
+        self.spans.push(SpanInfo::from_lexer_span(span, source_index));
     }
 
     fn get_or_create_source_index(&mut self, source_path: &str) -> usize {

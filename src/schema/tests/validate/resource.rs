@@ -284,9 +284,7 @@ fn test_validate_vm_resource_invalid_vm_size() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "properties".into());
             match error.as_ref() {
                 ValidationError::PropertyValidationFailed {
@@ -311,10 +309,7 @@ fn test_validate_vm_resource_invalid_vm_size() {
                                 }
                             }
                         }
-                        other => panic!(
-                            "Expected PropertyValidationFailed for vmSize, got: {:?}",
-                            other
-                        ),
+                        other => panic!("Expected PropertyValidationFailed for vmSize, got: {:?}", other),
                     }
                 }
                 other => panic!(
@@ -373,9 +368,7 @@ fn test_validate_storage_resource_invalid_name() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "name".into());
             match error.as_ref() {
                 ValidationError::PatternMismatch { .. } => {
@@ -408,9 +401,7 @@ fn test_validate_storage_resource_invalid_sku() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "sku".into());
             match error.as_ref() {
                 ValidationError::PropertyValidationFailed {
@@ -426,10 +417,7 @@ fn test_validate_storage_resource_invalid_sku() {
                         other => panic!("Expected NotInEnum error for sku name, got: {:?}", other),
                     }
                 }
-                other => panic!(
-                    "Expected PropertyValidationFailed for sku name, got: {:?}",
-                    other
-                ),
+                other => panic!("Expected PropertyValidationFailed for sku name, got: {:?}", other),
             }
         }
         other => panic!("Expected PropertyValidationFailed error, got: {:?}", other),
@@ -486,22 +474,16 @@ fn test_validate_network_resource_invalid_address_prefix() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::PropertyValidationFailed {
-            property, error, ..
-        } => {
+        ValidationError::PropertyValidationFailed { property, error, .. } => {
             assert_eq!(property, "properties".into());
             match error.as_ref() {
                 ValidationError::PropertyValidationFailed {
-                    property: addr_prop,
-                    ..
+                    property: addr_prop, ..
                 } => {
                     assert_eq!(*addr_prop, "addressSpace".into());
                     // Continue checking nested structure for array validation
                 }
-                other => panic!(
-                    "Expected PropertyValidationFailed for addressSpace, got: {:?}",
-                    other
-                ),
+                other => panic!("Expected PropertyValidationFailed for addressSpace, got: {:?}", other),
             }
         }
         other => panic!("Expected PropertyValidationFailed error, got: {:?}", other),
@@ -522,10 +504,7 @@ fn test_validate_basic_resource_enum() {
     for resource_type in valid_types {
         let value = Value::from(resource_type);
         let result = SchemaValidator::validate(&value, &schema);
-        assert!(
-            result.is_ok(),
-            "Resource type '{resource_type}' should be valid"
-        );
+        assert!(result.is_ok(), "Resource type '{resource_type}' should be valid");
     }
 
     // Test invalid resource type
@@ -653,9 +632,7 @@ fn test_validate_resource_type_mismatch() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ValidationError::TypeMismatch {
-            expected, actual, ..
-        } => {
+        ValidationError::TypeMismatch { expected, actual, .. } => {
             assert_eq!(expected, "object".into());
             assert_eq!(actual, "string".into());
         }
@@ -868,10 +845,7 @@ fn test_complex_nested_azure_template_validation() {
     let value = Value::from(valid_template);
     let result = SchemaValidator::validate(&value, &schema);
 
-    assert!(
-        result.is_ok(),
-        "Complex valid template should pass validation"
-    );
+    assert!(result.is_ok(), "Complex valid template should pass validation");
 
     // Test invalid template with constraint violations
     let invalid_template = json!({
@@ -892,10 +866,7 @@ fn test_complex_nested_azure_template_validation() {
 
     let value = Value::from(invalid_template);
     let result = SchemaValidator::validate(&value, &schema);
-    assert!(
-        result.is_err(),
-        "Template with constraint violations should fail"
-    );
+    assert!(result.is_err(), "Template with constraint violations should fail");
 }
 
 #[test]
@@ -1017,10 +988,7 @@ fn test_deep_nesting_and_recursive_structures() {
 
     let value = Value::from(invalid_deep_data);
     let result = SchemaValidator::validate(&value, &schema);
-    assert!(
-        result.is_err(),
-        "Structure missing required deep field should fail"
-    );
+    assert!(result.is_err(), "Structure missing required deep field should fail");
 }
 
 #[test]
@@ -1111,10 +1079,7 @@ fn test_unicode_and_internationalization_validation() {
 
     let value = Value::from(invalid_unicode_data);
     let result = SchemaValidator::validate(&value, &schema);
-    assert!(
-        result.is_err(),
-        "Invalid Unicode patterns should fail validation"
-    );
+    assert!(result.is_err(), "Invalid Unicode patterns should fail validation");
 }
 
 #[test]
@@ -1212,10 +1177,7 @@ fn test_edge_cases_and_boundary_conditions() {
 
     let value = Value::from(valid_boundary_data);
     let result = SchemaValidator::validate(&value, &schema);
-    assert!(
-        result.is_ok(),
-        "Valid boundary conditions should pass validation"
-    );
+    assert!(result.is_ok(), "Valid boundary conditions should pass validation");
 
     // Invalid boundary violations
     let invalid_boundary_data = json!({
@@ -1249,16 +1211,12 @@ fn test_edge_cases_and_boundary_conditions() {
 
     let value = Value::from(invalid_boundary_data);
     let result = SchemaValidator::validate(&value, &schema);
-    assert!(
-        result.is_err(),
-        "Boundary violations should fail validation"
-    );
+    assert!(result.is_err(), "Boundary violations should fail validation");
 }
 
 #[test]
 fn test_concurrent_schema_validation_stress() {
-    use std::sync::Arc;
-    use std::thread;
+    use std::{sync::Arc, thread};
 
     // Create a complex schema for concurrent testing
     let concurrent_schema = json!({

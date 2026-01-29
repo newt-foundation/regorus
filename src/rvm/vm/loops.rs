@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::instructions::LoopMode;
-use crate::value::Value;
+use crate::{rvm::instructions::LoopMode, value::Value};
 
-use super::context::{IterationState, LoopContext};
-use super::errors::{Result, VmError};
-use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
-use super::machine::RegoVM;
+use super::{
+    context::{IterationState, LoopContext},
+    errors::{Result, VmError},
+    execution_model::{ExecutionFrame, ExecutionMode, FrameKind},
+    machine::RegoVM,
+};
 
 fn compute_body_resume_pc(loop_start_pc: usize, body_start: u16) -> usize {
     if body_start == 0 {
@@ -42,36 +43,26 @@ enum LoopAction {
 impl RegoVM {
     pub(super) fn execute_loop_start(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.execute_loop_start_run_to_completion(mode, params)
-            }
+            ExecutionMode::RunToCompletion => self.execute_loop_start_run_to_completion(mode, params),
             ExecutionMode::Suspendable => self.execute_loop_start_suspendable(mode, params),
         }
     }
 
     pub(super) fn execute_loop_next(&mut self, body_start: u16, loop_end: u16) -> Result<()> {
         match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.execute_loop_next_run_to_completion(body_start, loop_end)
-            }
+            ExecutionMode::RunToCompletion => self.execute_loop_next_run_to_completion(body_start, loop_end),
             ExecutionMode::Suspendable => self.execute_loop_next_suspendable(body_start, loop_end),
         }
     }
 
     pub(super) fn handle_condition(&mut self, condition_passed: bool) -> Result<()> {
         match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.handle_condition_run_to_completion(condition_passed)
-            }
+            ExecutionMode::RunToCompletion => self.handle_condition_run_to_completion(condition_passed),
             ExecutionMode::Suspendable => self.handle_condition_suspendable(condition_passed),
         }
     }
 
-    fn execute_loop_start_run_to_completion(
-        &mut self,
-        mode: &LoopMode,
-        params: LoopParams,
-    ) -> Result<()> {
+    fn execute_loop_start_run_to_completion(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         let initial_result = match *mode {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
         };
@@ -117,8 +108,7 @@ impl RegoVM {
             }
         };
 
-        let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+        let has_next = self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -149,11 +139,7 @@ impl RegoVM {
         Ok(())
     }
 
-    fn execute_loop_next_run_to_completion(
-        &mut self,
-        _body_start: u16,
-        loop_end: u16,
-    ) -> Result<()> {
+    fn execute_loop_next_run_to_completion(&mut self, _body_start: u16, loop_end: u16) -> Result<()> {
         if let Some(mut loop_ctx) = self.loop_stack.pop() {
             let body_start = loop_ctx.body_start;
             let loop_end_local = loop_ctx.loop_end;
@@ -183,27 +169,22 @@ impl RegoVM {
             }
 
             if let &mut IterationState::Object {
-                ref mut current_key,
-                ..
+                ref mut current_key, ..
             } = &mut loop_ctx.iteration_state
             {
                 if loop_ctx.key_reg != loop_ctx.value_reg {
                     *current_key = Some(self.get_register(loop_ctx.key_reg)?.clone());
                 }
             } else if let &mut IterationState::Set {
-                ref mut current_item,
-                ..
+                ref mut current_item, ..
             } = &mut loop_ctx.iteration_state
             {
                 *current_item = Some(self.get_register(loop_ctx.value_reg)?.clone());
             }
 
             loop_ctx.iteration_state.advance();
-            let has_next = self.setup_next_iteration(
-                &loop_ctx.iteration_state,
-                loop_ctx.key_reg,
-                loop_ctx.value_reg,
-            )?;
+            let has_next =
+                self.setup_next_iteration(&loop_ctx.iteration_state, loop_ctx.key_reg, loop_ctx.value_reg)?;
 
             if has_next {
                 loop_ctx.current_iteration_failed = false;
@@ -213,9 +194,7 @@ impl RegoVM {
             } else {
                 let final_result = match loop_ctx.mode {
                     LoopMode::Any => Value::Bool(loop_ctx.success_count > 0),
-                    LoopMode::Every => {
-                        Value::Bool(loop_ctx.success_count == loop_ctx.total_iterations)
-                    }
+                    LoopMode::Every => Value::Bool(loop_ctx.success_count == loop_ctx.total_iterations),
                     LoopMode::ForEach => Value::Bool(loop_ctx.success_count > 0),
                 };
 
@@ -231,11 +210,7 @@ impl RegoVM {
         }
     }
 
-    fn execute_loop_start_suspendable(
-        &mut self,
-        mode: &LoopMode,
-        params: LoopParams,
-    ) -> Result<()> {
+    fn execute_loop_start_suspendable(&mut self, mode: &LoopMode, params: LoopParams) -> Result<()> {
         let initial_result = match *mode {
             LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
         };
@@ -282,8 +257,7 @@ impl RegoVM {
             }
         };
 
-        let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+        let has_next = self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -424,20 +398,16 @@ impl RegoVM {
                         .last_mut()
                         .ok_or(VmError::AssertionFailed { pc: self.pc })?;
                     match &mut frame.kind {
-                        &mut FrameKind::Loop {
-                            ref mut context, ..
-                        } => {
+                        &mut FrameKind::Loop { ref mut context, .. } => {
                             if let &mut IterationState::Object {
-                                ref mut current_key,
-                                ..
+                                ref mut current_key, ..
                             } = &mut context.iteration_state
                             {
                                 if context.key_reg != context.value_reg {
                                     *current_key = key_value;
                                 }
                             } else if let &mut IterationState::Set {
-                                ref mut current_item,
-                                ..
+                                ref mut current_item, ..
                             } = &mut context.iteration_state
                             {
                                 *current_item = Some(value_value.clone());
@@ -496,12 +466,7 @@ impl RegoVM {
         }
     }
 
-    fn handle_empty_collection(
-        &mut self,
-        mode: &LoopMode,
-        result_reg: u8,
-        loop_end: u16,
-    ) -> Result<()> {
+    fn handle_empty_collection(&mut self, mode: &LoopMode, result_reg: u8, loop_end: u16) -> Result<()> {
         let result = match *mode {
             LoopMode::Any => Value::Bool(false),
             LoopMode::Every => Value::Bool(true),
@@ -513,17 +478,9 @@ impl RegoVM {
         Ok(())
     }
 
-    pub(super) fn setup_next_iteration(
-        &mut self,
-        state: &IterationState,
-        key_reg: u8,
-        value_reg: u8,
-    ) -> Result<bool> {
+    pub(super) fn setup_next_iteration(&mut self, state: &IterationState, key_reg: u8, value_reg: u8) -> Result<bool> {
         match *state {
-            IterationState::Array {
-                ref items,
-                ref index,
-            } => {
+            IterationState::Array { ref items, ref index } => {
                 if *index < items.len() {
                     if key_reg != value_reg {
                         let key_value = Value::from(*index);
@@ -555,10 +512,7 @@ impl RegoVM {
                         Ok(false)
                     }
                 } else if let Some(ref current) = *current_key {
-                    let mut range_iter = obj.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
+                    let mut range_iter = obj.range((core::ops::Bound::Excluded(current), core::ops::Bound::Unbounded));
                     if let Some((key, value)) = range_iter.next() {
                         if key_reg != value_reg {
                             self.set_register(key_reg, key.clone())?;
@@ -588,10 +542,8 @@ impl RegoVM {
                         Ok(false)
                     }
                 } else if let Some(ref current) = *current_item {
-                    let mut range_iter = items.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
+                    let mut range_iter =
+                        items.range((core::ops::Bound::Excluded(current), core::ops::Bound::Unbounded));
                     if let Some(item) = range_iter.next() {
                         if key_reg != value_reg {
                             self.set_register(key_reg, item.clone())?;
@@ -628,10 +580,7 @@ impl RegoVM {
 
         if !self.loop_stack.is_empty() {
             let (loop_mode, loop_next_pc, loop_end, result_reg) = {
-                let loop_ctx = self
-                    .loop_stack
-                    .last()
-                    .ok_or(VmError::AssertionFailed { pc: self.pc })?;
+                let loop_ctx = self.loop_stack.last().ok_or(VmError::AssertionFailed { pc: self.pc })?;
                 (
                     loop_ctx.mode,
                     loop_ctx.loop_next_pc,
@@ -688,12 +637,7 @@ impl RegoVM {
                     &mut FrameKind::Loop {
                         ref return_pc,
                         ref mut context,
-                    } => (
-                        context.mode,
-                        *return_pc,
-                        context.loop_next_pc,
-                        context.result_reg,
-                    ),
+                    } => (context.mode, *return_pc, context.loop_next_pc, context.result_reg),
                     _ => return Err(VmError::AssertionFailed { pc: self.pc }),
                 }
             };
@@ -703,8 +647,7 @@ impl RegoVM {
                     if let Some(&mut ExecutionFrame {
                         kind:
                             FrameKind::Loop {
-                                context: ref mut ctx,
-                                ..
+                                context: ref mut ctx, ..
                             },
                         ..
                     }) = self.execution_stack.last_mut()
@@ -718,8 +661,7 @@ impl RegoVM {
                     if let Some(&mut ExecutionFrame {
                         kind:
                             FrameKind::Loop {
-                                context: ref mut ctx,
-                                ..
+                                context: ref mut ctx, ..
                             },
                         ..
                     }) = self.execution_stack.last_mut()

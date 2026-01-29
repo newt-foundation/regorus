@@ -6,15 +6,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::{String, ToString};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::{String, ToString},
+};
 
 use anyhow::Result;
 
-use crate::ast::Expr::{self, *};
-use crate::ast::{AssignOp, ExprRef};
-use crate::lexer::{SourceStr, Span};
-use crate::value::Value;
+use crate::{
+    ast::{
+        AssignOp,
+        Expr::{self, *},
+        ExprRef,
+    },
+    lexer::{SourceStr, Span},
+    value::Value,
+};
 
 #[derive(Clone, Default, Debug)]
 pub struct Scope {
@@ -30,12 +37,7 @@ pub fn traverse(expr: &ExprRef, f: &mut dyn FnMut(&ExprRef) -> Result<bool>) -> 
     }
 
     match expr.as_ref() {
-        Expr::String { .. }
-        | RawString { .. }
-        | Number { .. }
-        | Bool { .. }
-        | Null { .. }
-        | Var { .. } => (),
+        Expr::String { .. } | RawString { .. } | Number { .. } | Bool { .. } | Null { .. } | Var { .. } => (),
 
         Array { items, .. } | Set { items, .. } => {
             for item in items {
@@ -81,10 +83,7 @@ pub fn traverse(expr: &ExprRef, f: &mut dyn FnMut(&ExprRef) -> Result<bool>) -> 
         }
 
         Membership {
-            key,
-            value,
-            collection,
-            ..
+            key, value, collection, ..
         } => {
             if let Some(key) = key.as_ref() {
                 traverse(key, f)?;
@@ -174,12 +173,7 @@ pub fn gather_loop_vars(expr: &ExprRef, parent_scopes: &[Scope], scope: &mut Sco
     })
 }
 
-pub fn gather_vars(
-    expr: &ExprRef,
-    can_shadow: bool,
-    parent_scopes: &[Scope],
-    scope: &mut Scope,
-) -> Result<()> {
+pub fn gather_vars(expr: &ExprRef, can_shadow: bool, parent_scopes: &[Scope], scope: &mut Scope) -> Result<()> {
     if let AssignExpr { op, lhs, rhs, .. } = expr.as_ref() {
         gather_assigned_vars(lhs, *op == AssignOp::ColEq, parent_scopes, scope)?;
         gather_assigned_vars(rhs, false, parent_scopes, scope)?;

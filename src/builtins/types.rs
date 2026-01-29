@@ -2,11 +2,13 @@
 // Licensed under the MIT License.
 #![allow(clippy::indexing_slicing, clippy::pattern_type_mismatch)]
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::ensure_args_count;
-use crate::lexer::Span;
-use crate::value::Value;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::ensure_args_count,
+    lexer::Span,
+    value::Value,
+};
 
 use anyhow::Result;
 
@@ -69,12 +71,7 @@ pub fn get_type(value: &Value) -> &str {
     }
 }
 
-pub fn type_name(
-    span: &Span,
-    params: &[Ref<Expr>],
-    args: &[Value],
-    _strict: bool,
-) -> Result<Value> {
+pub fn type_name(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "type_name", params, args, 1)?;
     Ok(Value::String(get_type(&args[0]).into()))
 }

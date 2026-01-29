@@ -1,14 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![allow(
-    clippy::panic_in_result_fn,
-    clippy::indexing_slicing,
-    clippy::as_conversions
-)] // scheduler tests assert and index directly for clarity
+#![allow(clippy::panic_in_result_fn, clippy::indexing_slicing, clippy::as_conversions)] // scheduler tests assert and index directly for clarity
 
-use crate::scheduler::*;
-use crate::*;
+use crate::{scheduler::*, *};
 use anyhow::{bail, Result};
 
 mod analyzer;

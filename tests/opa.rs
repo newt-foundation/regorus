@@ -1,15 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use regorus::languages::rego::compiler::Compiler;
-use regorus::rvm::tests::test_utils::test_round_trip_serialization;
-use regorus::rvm::vm::RegoVM;
-use regorus::*;
+use regorus::{
+    languages::rego::compiler::Compiler,
+    rvm::{tests::test_utils::test_round_trip_serialization, vm::RegoVM},
+    *,
+};
 
 use regorus::Rc;
-use std::collections::BTreeMap;
-use std::io::{self, Write};
-use std::path::Path;
-use std::process::Command;
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -18,8 +21,7 @@ use walkdir::WalkDir;
 
 const OPA_REPO: &str = "https://github.com/open-policy-agent/opa";
 const OPA_BRANCH: &str = "v1.2.0";
-const PARTIAL_OBJECT_OVERRIDE_NOTE: &str =
-    "regression/partial-object override, different key type, query";
+const PARTIAL_OBJECT_OVERRIDE_NOTE: &str = "regression/partial-object override, different key type, query";
 
 const OPA_TODO_FOLDERS: &[&str] = &[
     "aggregates",
@@ -117,12 +119,9 @@ fn setup_engine_for_case(case: &TestCase, is_rego_v0_test: bool) -> Result<Engin
     engine.set_input(resolved_input.clone());
     if let Some(input_term) = &case.input_term {
         let input = match engine.eval_query(input_term.clone(), true)?.result.last() {
-            Some(r) if r.expressions.last().is_some() => r
-                .expressions
-                .last()
-                .expect("no expressions in result")
-                .value
-                .clone(),
+            Some(r) if r.expressions.last().is_some() => {
+                r.expressions.last().expect("no expressions in result").value.clone()
+            }
             _ => bail!("no results in evaluated input term"),
         };
         engine.set_input(input.clone());
@@ -136,10 +135,7 @@ fn setup_engine_for_case(case: &TestCase, is_rego_v0_test: bool) -> Result<Engin
 
     engine.set_strict_builtin_errors(case.strict_error.unwrap_or_default());
 
-    Ok(EngineSetup {
-        engine,
-        resolved_input,
-    })
+    Ok(EngineSetup { engine, resolved_input })
 }
 
 fn eval_test_case(case: &TestCase, is_rego_v0_test: bool) -> Result<Value> {
@@ -240,13 +236,8 @@ fn eval_rule_with_rvm(case: &TestCase, is_rego_v0_test: bool, rule_path: &str) -
     let rule = Rc::from(rule_path.to_string());
     let compiled_policy = engine.compile_with_entrypoint(&rule)?;
     let program = Compiler::compile_from_policy(&compiled_policy, &[rule_path])?;
-    test_round_trip_serialization(program.as_ref()).map_err(|e| {
-        anyhow::anyhow!(
-            "Round-trip serialization test failed for query '{}': {}",
-            rule_path,
-            e
-        )
-    })?;
+    test_round_trip_serialization(program.as_ref())
+        .map_err(|e| anyhow::anyhow!("Round-trip serialization test failed for query '{}': {}", rule_path, e))?;
 
     let mut vm = RegoVM::new();
     vm.load_program(program);
@@ -268,11 +259,8 @@ fn is_not_valid_rule_path_error(err: &anyhow::Error) -> bool {
 }
 
 fn is_with_keyword_unsupported_error(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .to_string()
-            .contains("`with` keyword is not supported")
-    })
+    err.chain()
+        .any(|cause| cause.to_string().contains("`with` keyword is not supported"))
 }
 
 fn maybe_verify_rvm_case(case: &TestCase, is_rego_v0_test: bool, actual: &Value) -> Result<()> {
@@ -293,18 +281,12 @@ fn maybe_verify_rvm_case(case: &TestCase, is_rego_v0_test: bool, actual: &Value)
         Ok(value) => value,
         Err(err) => {
             if is_not_valid_rule_path_error(&err) {
-                println!(
-                    "    skipping RVM check for '{}' (rule path not compiled)",
-                    case.note
-                );
+                println!("    skipping RVM check for '{}' (rule path not compiled)", case.note);
                 return Ok(());
             }
 
             if is_with_keyword_unsupported_error(&err) {
-                println!(
-                    "    skipping RVM check for '{}' (with keyword unsupported)",
-                    case.note
-                );
+                println!("    skipping RVM check for '{}' (with keyword unsupported)", case.note);
                 return Ok(());
             }
 
@@ -337,9 +319,7 @@ fn json_schema_tests_check(actual: &Value, expected: &Value) -> bool {
     let expected = &expected[0]["x"];
 
     match (actual, expected) {
-        (Value::Array(actual), Value::Array(expected))
-            if actual.len() == expected.len() && actual.len() == 2 =>
-        {
+        (Value::Array(actual), Value::Array(expected)) if actual.len() == expected.len() && actual.len() == 2 => {
             // Only check the result since error messages may be different.
             actual[0] == expected[0]
         }
@@ -390,8 +370,8 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
         let test: YamlTest = serde_yaml::from_str(&yaml_str)?;
 
         for mut case in test.cases {
-            let is_json_schema_test = case.note.starts_with("json_verify_schema")
-                || case.note.starts_with("json_match_schema");
+            let is_json_schema_test =
+                case.note.starts_with("json_verify_schema") || case.note.starts_with("json_match_schema");
             let mut skip_rvm_validation = skip_rvm_for_folder;
 
             if case.note == PARTIAL_OBJECT_OVERRIDE_NOTE {
@@ -466,15 +446,11 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
             print!("{:4}: {:90}", entry.2, case.note);
             entry.2 += 1;
             match (eval_test_case(&case, is_rego_v0_test), &case.want_result) {
-                (Ok(actual), Some(expected))
-                    if is_json_schema_test && json_schema_tests_check(&actual, &expected) =>
-                {
+                (Ok(actual), Some(expected)) if is_json_schema_test && json_schema_tests_check(&actual, &expected) => {
                     if skip_rvm_validation {
                         log_rvm_skip(&case.note, folder_name.as_deref());
                         entry.0 += 1;
-                    } else if let Err(rvm_err) =
-                        maybe_verify_rvm_case(&case, is_rego_v0_test, &actual)
-                    {
+                    } else if let Err(rvm_err) = maybe_verify_rvm_case(&case, is_rego_v0_test, &actual) {
                         println!("\n{} failed.", case.note);
                         println!("{}", serde_yaml::to_string(&case)?);
                         println!("{rvm_err}");
@@ -489,9 +465,7 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
                     if skip_rvm_validation {
                         log_rvm_skip(&case.note, folder_name.as_deref());
                         entry.0 += 1;
-                    } else if let Err(rvm_err) =
-                        maybe_verify_rvm_case(&case, is_rego_v0_test, &actual)
-                    {
+                    } else if let Err(rvm_err) = maybe_verify_rvm_case(&case, is_rego_v0_test, &actual) {
                         println!("\n{} failed.", case.note);
                         println!("{}", serde_yaml::to_string(&case)?);
                         println!("{rvm_err}");
@@ -508,9 +482,7 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
                     entry.0 += 1;
                 }
                 (Ok(actual), None)
-                    if actual == Value::new_array()
-                        && case.want_error.is_none()
-                        && case.error.is_none() =>
+                    if actual == Value::new_array() && case.want_error.is_none() && case.error.is_none() =>
                 {
                     entry.0 += 1;
                 }

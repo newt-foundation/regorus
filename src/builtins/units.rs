@@ -4,13 +4,15 @@
 use alloc::borrow::Cow;
 use core::str::FromStr;
 
-use crate::ast::{Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{ensure_args_count, ensure_string};
-use crate::lexer::Span;
-use crate::number::Number;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    builtins,
+    builtins::utils::{ensure_args_count, ensure_string},
+    lexer::Span,
+    number::Number,
+    value::Value,
+    *,
+};
 
 use anyhow::{bail, Result};
 
@@ -98,12 +100,11 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     if let Some(e) = ten_exp(suffix) {
         let combined = combine_decimal_exponent(canonical_part.as_ref(), e)
             .ok_or_else(|| params[0].span().error("could not parse number"))?;
-        let number = Number::from_str(&combined)
-            .map_err(|_| params[0].span().error("could not parse number"))?;
+        let number = Number::from_str(&combined).map_err(|_| params[0].span().error("could not parse number"))?;
         Ok(Value::from(number))
     } else if let Some(e) = two_exp(suffix) {
-        let mut number = Number::from_str(canonical_part.as_ref())
-            .map_err(|_| params[0].span().error("could not parse number"))?;
+        let mut number =
+            Number::from_str(canonical_part.as_ref()).map_err(|_| params[0].span().error("could not parse number"))?;
         number.mul_assign(&Number::two_pow(e)?)?;
         Ok(Value::from(number))
     } else {

@@ -102,12 +102,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                             format!("{:?}", tok.0),
                             k[idx],
                             "{}",
-                            source.message(
-                                tok.1.line,
-                                tok.1.col,
-                                "mismatch-error",
-                                "token kind mismatch"
-                            )
+                            source.message(tok.1.line, tok.1.col, "mismatch-error", "token kind mismatch")
                         );
                     }
 
@@ -203,10 +198,7 @@ fn tab() -> Result<()> {
     check_loc(&tok)?;
     println!("{:?}", &tok);
     println!("{}", source.message(tok.1.line, tok.1.col, "", ""));
-    assert_eq!(
-        tok.1.col, 56,
-        "tab within rawstring not accounted correctly"
-    );
+    assert_eq!(tok.1.col, 56, "tab within rawstring not accounted correctly");
 
     Ok(())
 }
@@ -216,10 +208,7 @@ fn invalid_line() -> Result<()> {
     let rego = "";
     let source = Source::from_contents("case.rego".to_string(), rego.to_string())?;
 
-    assert_eq!(
-        source.message(2, 0, "", ""),
-        "case.rego: invalid line 2 specified"
-    );
+    assert_eq!(source.message(2, 0, "", ""), "case.rego: invalid line 2 specified");
 
     Ok(())
 }

@@ -4,13 +4,15 @@
 use anyhow::Result;
 use clap::Args;
 
-use super::c::{TestCCommand, TestCNoStdCommand};
-use super::cpp::TestCppCommand;
-use super::csharp::{build_nuget_package, BuildNugetConfig, TestCsharpCommand};
-use super::ffi;
-use super::java::{BuildJavaCommand, TestJavaCommand};
-use super::python::{BuildPythonCommand, TestPythonCommand};
-use super::wasm::{BuildWasmCommand, TestWasmCommand};
+use super::{
+    c::{TestCCommand, TestCNoStdCommand},
+    cpp::TestCppCommand,
+    csharp::{build_nuget_package, BuildNugetConfig, TestCsharpCommand},
+    ffi,
+    java::{BuildJavaCommand, TestJavaCommand},
+    python::{BuildPythonCommand, TestPythonCommand},
+    wasm::{BuildWasmCommand, TestWasmCommand},
+};
 use crate::tasks::util::workspace_root;
 
 /// Builds every published binding with opinionated defaults.

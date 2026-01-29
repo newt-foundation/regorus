@@ -1,13 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use regorus::languages::rego::compiler::Compiler;
-use regorus::rvm::tests::test_utils::test_round_trip_serialization;
-use regorus::rvm::vm::RegoVM;
-use regorus::*;
+use regorus::{
+    languages::rego::compiler::Compiler,
+    rvm::{tests::test_utils::test_round_trip_serialization, vm::RegoVM},
+    *,
+};
 
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -103,10 +106,7 @@ fn eval_test_case_interpreter(dir: &Path, case: &TestCase) -> Result<(Value, Dur
     Ok((value, setup_duration))
 }
 
-fn eval_test_case_rvm(
-    dir: &Path,
-    case: &TestCase,
-) -> Result<(Value, Duration, Duration, Duration)> {
+fn eval_test_case_rvm(dir: &Path, case: &TestCase) -> Result<(Value, Duration, Duration, Duration)> {
     let setup_start = Instant::now();
     let mut engine = setup_engine(dir, case)?;
 
@@ -126,13 +126,8 @@ fn eval_test_case_rvm(
     let compile_duration = compile_start.elapsed();
 
     // Test round-trip serialization
-    test_round_trip_serialization(program.as_ref()).map_err(|e| {
-        anyhow::anyhow!(
-            "Round-trip serialization test failed for case '{}': {}",
-            case.note,
-            e
-        )
-    })?;
+    test_round_trip_serialization(program.as_ref())
+        .map_err(|e| anyhow::anyhow!("Round-trip serialization test failed for case '{}': {}", case.note, e))?;
 
     // Create RVM and load the program
     let mut vm = RegoVM::new();
@@ -148,21 +143,12 @@ fn eval_test_case_rvm(
     // Make result json compatible. (E.g: avoid sets).
     let value = Value::from_json_str(&result.to_string())?;
 
-    Ok((
-        value,
-        setup_and_compile_duration,
-        compile_duration,
-        execution_duration,
-    ))
+    Ok((value, setup_and_compile_duration, compile_duration, execution_duration))
 }
 
 fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
     let mut nfailures = 0;
-    for entry in WalkDir::new(dir)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(dir).sort_by_file_name().into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.to_string_lossy().ends_with(".yaml") {
             continue;
@@ -184,10 +170,8 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
 
             // Test with interpreter
             let start = Instant::now();
-            let (interpreter_raw, interpreter_setup_duration) =
-                eval_test_case_interpreter(dir, case)?;
-            let interpreter_results =
-                align_result_with_expected(interpreter_raw, &case.want_result);
+            let (interpreter_raw, interpreter_setup_duration) = eval_test_case_interpreter(dir, case)?;
+            let interpreter_results = align_result_with_expected(interpreter_raw, &case.want_result);
             let interpreter_duration = start.elapsed();
 
             if interpreter_results != case.want_result {
@@ -238,10 +222,7 @@ fn run_aci_tests(dir: &Path, filter: Option<&str>) -> Result<()> {
             let rvm_compile = format_duration(rvm_compile_duration);
             let rvm_run = format_duration(execution_duration);
 
-            println!(
-                "    Interp total {:>10} (setup {:>10})",
-                interp_total, interp_setup,
-            );
+            println!("    Interp total {:>10} (setup {:>10})", interp_total, interp_setup,);
             println!(
                 "    RVM    total {:>10} (prep {:>10}, compile {:>10}, run {:>10})",
                 rvm_total, rvm_prep, rvm_compile, rvm_run,
@@ -261,11 +242,7 @@ fn run_aci_tests_coverage(dir: &Path) -> Result<()> {
 
     let mut added = std::collections::BTreeSet::new();
 
-    for entry in WalkDir::new(dir)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(dir).sort_by_file_name().into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.to_string_lossy().ends_with(".yaml") {
             continue;

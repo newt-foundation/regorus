@@ -1,17 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::fmt;
-use core::str::FromStr as _;
-use serde::de::{self, EnumAccess, VariantAccess as _, Visitor};
-use serde::ser::{SerializeSeq as _, SerializeTuple as _};
-use serde::{Deserialize, Serialize};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    format,
+    string::String,
+    vec::Vec,
+};
+use core::{fmt, str::FromStr as _};
+use serde::{
+    de::{self, EnumAccess, VariantAccess as _, Visitor},
+    ser::{SerializeSeq as _, SerializeTuple as _},
+    Deserialize, Serialize,
+};
 
-use crate::number::Number;
-use crate::value::Value;
+use crate::{number::Number, value::Value};
 
 const VARIANT_NULL: u32 = 0;
 const VARIANT_BOOL: u32 = 1;
@@ -36,31 +38,14 @@ impl<'a> Serialize for BinaryValueRef<'a> {
     {
         match *self.0 {
             Value::Null => serializer.serialize_unit_variant("BinaryValue", VARIANT_NULL, "Null"),
-            Value::Bool(b) => {
-                serializer.serialize_newtype_variant("BinaryValue", VARIANT_BOOL, "Bool", &b)
-            }
+            Value::Bool(b) => serializer.serialize_newtype_variant("BinaryValue", VARIANT_BOOL, "Bool", &b),
             Value::Number(ref n) => {
                 if let Some(value) = n.as_i64() {
-                    serializer.serialize_newtype_variant(
-                        "BinaryValue",
-                        VARIANT_NUMBER_I64,
-                        "NumberI64",
-                        &value,
-                    )
+                    serializer.serialize_newtype_variant("BinaryValue", VARIANT_NUMBER_I64, "NumberI64", &value)
                 } else if let Some(value) = n.as_u64() {
-                    serializer.serialize_newtype_variant(
-                        "BinaryValue",
-                        VARIANT_NUMBER_U64,
-                        "NumberU64",
-                        &value,
-                    )
+                    serializer.serialize_newtype_variant("BinaryValue", VARIANT_NUMBER_U64, "NumberU64", &value)
                 } else if let Some(value) = n.as_f64() {
-                    serializer.serialize_newtype_variant(
-                        "BinaryValue",
-                        VARIANT_NUMBER_F64,
-                        "NumberF64",
-                        &value,
-                    )
+                    serializer.serialize_newtype_variant("BinaryValue", VARIANT_NUMBER_F64, "NumberF64", &value)
                 } else {
                     serializer.serialize_newtype_variant(
                         "BinaryValue",
@@ -70,33 +55,25 @@ impl<'a> Serialize for BinaryValueRef<'a> {
                     )
                 }
             }
-            Value::String(ref s) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_STRING,
-                "String",
-                s.as_ref(),
-            ),
+            Value::String(ref s) => {
+                serializer.serialize_newtype_variant("BinaryValue", VARIANT_STRING, "String", s.as_ref())
+            }
             Value::Array(ref items) => serializer.serialize_newtype_variant(
                 "BinaryValue",
                 VARIANT_ARRAY,
                 "Array",
                 &BinaryValueSlice(items.as_slice()),
             ),
-            Value::Set(ref items) => serializer.serialize_newtype_variant(
-                "BinaryValue",
-                VARIANT_SET,
-                "Set",
-                &BinarySetRef(items.as_ref()),
-            ),
+            Value::Set(ref items) => {
+                serializer.serialize_newtype_variant("BinaryValue", VARIANT_SET, "Set", &BinarySetRef(items.as_ref()))
+            }
             Value::Object(ref entries) => serializer.serialize_newtype_variant(
                 "BinaryValue",
                 VARIANT_OBJECT,
                 "Object",
                 &BinaryObjectRef(entries.as_ref()),
             ),
-            Value::Undefined => {
-                serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined")
-            }
+            Value::Undefined => serializer.serialize_unit_variant("BinaryValue", VARIANT_UNDEFINED, "Undefined"),
         }
     }
 }
@@ -225,9 +202,8 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             }
             (BinaryVariant::Number, variant) => {
                 let numeric = variant.newtype_variant::<&'de str>()?;
-                let number = Number::from_str(numeric).map_err(|_| {
-                    de::Error::custom(format!("Invalid numeric string '{numeric}'"))
-                })?;
+                let number = Number::from_str(numeric)
+                    .map_err(|_| de::Error::custom(format!("Invalid numeric string '{numeric}'")))?;
                 Ok(BinaryValue(Value::from(number)))
             }
             (BinaryVariant::NumberI64, variant) => {

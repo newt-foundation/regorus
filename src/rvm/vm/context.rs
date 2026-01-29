@@ -1,11 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::instructions::{ComprehensionMode, LoopMode};
-use crate::value::Value;
-use crate::Rc;
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::vec::Vec;
+use crate::{
+    rvm::instructions::{ComprehensionMode, LoopMode},
+    value::Value,
+    Rc,
+};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 /// Loop execution context for managing iteration state
 #[derive(Debug, Clone)]

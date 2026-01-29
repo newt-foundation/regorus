@@ -2,17 +2,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{boxed::Box, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
-use super::literals::{
-    BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral,
+use super::{
+    literals::{BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral},
+    operators::{ArrayOperator, ConditionOperator},
+    references::AttributeReference,
+    span::EmptySpan,
 };
-use super::operators::{ArrayOperator, ConditionOperator};
-use super::references::AttributeReference;
-use super::span::EmptySpan;
 
 /// ABAC condition expression
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

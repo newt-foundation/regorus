@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    ffi::{OsStr, OsString},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{bail, Context, Result};
 
@@ -21,9 +23,7 @@ pub fn run_command(mut command: Command, label: &str) -> Result<()> {
     let display = format_command(&command);
     println!("$ {}", display);
 
-    let status = command
-        .status()
-        .with_context(|| format!("failed to spawn {}", label))?;
+    let status = command.status().with_context(|| format!("failed to spawn {}", label))?;
     if !status.success() {
         bail!("{} failed with status {}", label, status);
     }
@@ -136,12 +136,8 @@ pub fn dotnet_host_arch() -> &'static str {
 /// Loads the list of passing OPA tests from the repository.
 pub fn opa_passing_arguments(root: &Path) -> Result<Vec<String>> {
     let listing = root.join("tests/opa.passing");
-    let contents = fs::read_to_string(&listing).with_context(|| {
-        format!(
-            "failed to read list of passing OPA tests from {}",
-            listing.display()
-        )
-    })?;
+    let contents = fs::read_to_string(&listing)
+        .with_context(|| format!("failed to read list of passing OPA tests from {}", listing.display()))?;
 
     Ok(contents
         .split_whitespace()

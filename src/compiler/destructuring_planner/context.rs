@@ -4,8 +4,7 @@
 
 //! Context traits shared across planner submodules.
 
-use alloc::collections::BTreeSet;
-use alloc::string::String;
+use alloc::{collections::BTreeSet, string::String};
 
 /// Scoping mode for variable binding decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

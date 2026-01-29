@@ -29,8 +29,7 @@ embedded users configure both their ExecutionTimerConfig and a single global
 time source without paying for per-interpreter callbacks or unsafe code.
 */
 
-use core::num::NonZeroU32;
-use core::time::Duration;
+use core::{num::NonZeroU32, time::Duration};
 
 use spin::Mutex;
 
@@ -123,9 +122,7 @@ static LIMITS_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
 #[cfg(test)]
 pub fn acquire_limits_test_lock() -> StdMutexGuard<'static, ()> {
-    LIMITS_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    LIMITS_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Returns the duration supplied by the chosen source for this build.
@@ -170,13 +167,10 @@ pub fn set_time_source(source: &'static dyn TimeSource) -> Result<(), TimeSource
 /// # Examples
 ///
 /// ```
-/// use std::num::NonZeroU32;
-/// use std::time::Duration;
 /// use regorus::utils::limits::{
-///     fallback_execution_timer_config,
-///     set_fallback_execution_timer_config,
-///     ExecutionTimerConfig,
+///     fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
 /// };
+/// use std::{num::NonZeroU32, time::Duration};
 ///
 /// let config = ExecutionTimerConfig {
 ///     limit: Duration::from_secs(1),
@@ -304,9 +298,11 @@ impl ExecutionTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::num::NonZeroU32;
-    use core::sync::atomic::{AtomicU64, Ordering};
-    use core::time::Duration;
+    use core::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
 
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
@@ -419,11 +415,7 @@ mod tests {
 
         for step in 0..8 {
             let now = Duration::from_millis((step + 1) as u64);
-            assert_eq!(
-                timer.tick(1, now),
-                Ok(()),
-                "ticks with disabled limit must succeed"
-            );
+            assert_eq!(timer.tick(1, now), Ok(()), "ticks with disabled limit must succeed");
         }
 
         assert_eq!(timer.last_elapsed(), Duration::ZERO);

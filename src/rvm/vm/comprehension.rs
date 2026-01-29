@@ -1,36 +1,29 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
-use crate::value::Value;
-use crate::Rc;
-use alloc::collections::BTreeMap;
-use alloc::format;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use crate::{
+    rvm::instructions::{ComprehensionBeginParams, ComprehensionMode},
+    value::Value,
+    Rc,
+};
+use alloc::{collections::BTreeMap, format, sync::Arc, vec::Vec};
 
-use super::context::{ComprehensionContext, IterationState};
-use super::errors::{Result, VmError};
-use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
-use super::machine::RegoVM;
+use super::{
+    context::{ComprehensionContext, IterationState},
+    errors::{Result, VmError},
+    execution_model::{ExecutionFrame, ExecutionMode, FrameKind},
+    machine::RegoVM,
+};
 
 impl RegoVM {
-    pub(super) fn execute_comprehension_begin(
-        &mut self,
-        params: &ComprehensionBeginParams,
-    ) -> Result<()> {
+    pub(super) fn execute_comprehension_begin(&mut self, params: &ComprehensionBeginParams) -> Result<()> {
         match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.execute_comprehension_begin_run_to_completion(params)
-            }
+            ExecutionMode::RunToCompletion => self.execute_comprehension_begin_run_to_completion(params),
             ExecutionMode::Suspendable => self.execute_comprehension_begin_suspendable(params),
         }
     }
 
-    fn execute_comprehension_begin_run_to_completion(
-        &mut self,
-        params: &ComprehensionBeginParams,
-    ) -> Result<()> {
+    fn execute_comprehension_begin_run_to_completion(&mut self, params: &ComprehensionBeginParams) -> Result<()> {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
@@ -116,10 +109,7 @@ impl RegoVM {
         Ok(())
     }
 
-    fn execute_comprehension_begin_suspendable(
-        &mut self,
-        params: &ComprehensionBeginParams,
-    ) -> Result<()> {
+    fn execute_comprehension_begin_suspendable(&mut self, params: &ComprehensionBeginParams) -> Result<()> {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
@@ -216,26 +206,14 @@ impl RegoVM {
         Ok(())
     }
 
-    pub(super) fn execute_comprehension_yield(
-        &mut self,
-        value_reg: u8,
-        key_reg: Option<u8>,
-    ) -> Result<()> {
+    pub(super) fn execute_comprehension_yield(&mut self, value_reg: u8, key_reg: Option<u8>) -> Result<()> {
         match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.execute_comprehension_yield_run_to_completion(value_reg, key_reg)
-            }
-            ExecutionMode::Suspendable => {
-                self.execute_comprehension_yield_suspendable(value_reg, key_reg)
-            }
+            ExecutionMode::RunToCompletion => self.execute_comprehension_yield_run_to_completion(value_reg, key_reg),
+            ExecutionMode::Suspendable => self.execute_comprehension_yield_suspendable(value_reg, key_reg),
         }
     }
 
-    fn execute_comprehension_yield_run_to_completion(
-        &mut self,
-        value_reg: u8,
-        key_reg: Option<u8>,
-    ) -> Result<()> {
+    fn execute_comprehension_yield_run_to_completion(&mut self, value_reg: u8, key_reg: Option<u8>) -> Result<()> {
         let mut comprehension_context = if let Some(context) = self.comprehension_stack.pop() {
             context
         } else {
@@ -296,23 +274,19 @@ impl RegoVM {
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
             match *iter_state {
                 IterationState::Object {
-                    ref mut current_key,
-                    ..
+                    ref mut current_key, ..
                 } => {
-                    let tracked_key =
-                        if comprehension_context.key_reg != comprehension_context.value_reg {
-                            self.get_register(comprehension_context.key_reg)?.clone()
-                        } else {
-                            self.get_register(comprehension_context.value_reg)?.clone()
-                        };
+                    let tracked_key = if comprehension_context.key_reg != comprehension_context.value_reg {
+                        self.get_register(comprehension_context.key_reg)?.clone()
+                    } else {
+                        self.get_register(comprehension_context.value_reg)?.clone()
+                    };
                     *current_key = Some(tracked_key);
                 }
                 IterationState::Set {
-                    ref mut current_item,
-                    ..
+                    ref mut current_item, ..
                 } => {
-                    *current_item =
-                        Some(self.get_register(comprehension_context.value_reg)?.clone());
+                    *current_item = Some(self.get_register(comprehension_context.value_reg)?.clone());
                 }
                 IterationState::Array { .. } => {}
             }
@@ -337,11 +311,7 @@ impl RegoVM {
         Ok(())
     }
 
-    fn execute_comprehension_yield_suspendable(
-        &mut self,
-        value_reg: u8,
-        key_reg: Option<u8>,
-    ) -> Result<()> {
+    fn execute_comprehension_yield_suspendable(&mut self, value_reg: u8, key_reg: Option<u8>) -> Result<()> {
         let comprehension_index = (0..self.execution_stack.len())
             .rev()
             .find(|&idx| {
@@ -365,13 +335,13 @@ impl RegoVM {
             iteration_key,
             iteration_value,
         ) = {
-            let frame =
-                self.execution_stack
-                    .get(comprehension_index)
-                    .ok_or(VmError::InvalidIteration {
-                        value: Value::String(Arc::from("No active comprehension")),
-                        pc: self.pc,
-                    })?;
+            let frame = self
+                .execution_stack
+                .get(comprehension_index)
+                .ok_or(VmError::InvalidIteration {
+                    value: Value::String(Arc::from("No active comprehension")),
+                    pc: self.pc,
+                })?;
 
             if let FrameKind::Comprehension { ref context, .. } = frame.kind {
                 let value_to_add = self.get_register(value_reg)?.clone();
@@ -440,22 +410,19 @@ impl RegoVM {
         };
 
         let (iteration_state_snapshot, body_start, comprehension_end) = {
-            let frame = self.execution_stack.get_mut(comprehension_index).ok_or(
-                VmError::InvalidIteration {
+            let frame = self
+                .execution_stack
+                .get_mut(comprehension_index)
+                .ok_or(VmError::InvalidIteration {
                     value: Value::String(Arc::from("No active comprehension")),
                     pc: self.pc,
-                },
-            )?;
+                })?;
 
-            if let &mut FrameKind::Comprehension {
-                ref mut context, ..
-            } = &mut frame.kind
-            {
+            if let &mut FrameKind::Comprehension { ref mut context, .. } = &mut frame.kind {
                 if let Some(iter_state) = context.iteration_state.as_mut() {
                     match *iter_state {
                         IterationState::Object {
-                            ref mut current_key,
-                            ..
+                            ref mut current_key, ..
                         } => {
                             let tracked_key = if context.key_reg != context.value_reg {
                                 iteration_key.clone()
@@ -465,8 +432,7 @@ impl RegoVM {
                             *current_key = Some(tracked_key);
                         }
                         IterationState::Set {
-                            ref mut current_item,
-                            ..
+                            ref mut current_item, ..
                         } => {
                             *current_item = Some(iteration_value.clone());
                         }
@@ -500,10 +466,7 @@ impl RegoVM {
                     self.frame_pc_overridden = true;
                 }
             } else if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
-                if let &mut FrameKind::Comprehension {
-                    ref mut context, ..
-                } = &mut frame.kind
-                {
+                if let &mut FrameKind::Comprehension { ref mut context, .. } = &mut frame.kind {
                     context.iteration_state = None;
                 }
                 frame.pc = usize::from(comprehension_end);
@@ -521,9 +484,7 @@ impl RegoVM {
         }
     }
 
-    pub(super) fn handle_comprehension_condition_failure_run_to_completion(
-        &mut self,
-    ) -> Result<bool> {
+    pub(super) fn handle_comprehension_condition_failure_run_to_completion(&mut self) -> Result<bool> {
         if let Some(mut context) = self.comprehension_stack.pop() {
             self.advance_comprehension_after_failure(&mut context)?;
             self.comprehension_stack.push(context);
@@ -535,10 +496,7 @@ impl RegoVM {
 
     pub(super) fn handle_comprehension_condition_failure_suspendable(&mut self) -> Result<bool> {
         if let Some(mut frame) = self.execution_stack.pop() {
-            let handled = if let &mut FrameKind::Comprehension {
-                ref mut context, ..
-            } = &mut frame.kind
-            {
+            let handled = if let &mut FrameKind::Comprehension { ref mut context, .. } = &mut frame.kind {
                 self.advance_comprehension_after_failure(context)?;
                 true
             } else {
@@ -553,19 +511,11 @@ impl RegoVM {
         Ok(false)
     }
 
-    fn advance_comprehension_after_failure(
-        &mut self,
-        context: &mut ComprehensionContext,
-    ) -> Result<()> {
+    fn advance_comprehension_after_failure(&mut self, context: &mut ComprehensionContext) -> Result<()> {
         if let Some(iter_state) = context.iteration_state.as_mut() {
-            self.capture_comprehension_iteration_position(
-                iter_state,
-                context.key_reg,
-                context.value_reg,
-            )?;
+            self.capture_comprehension_iteration_position(iter_state, context.key_reg, context.value_reg)?;
             iter_state.advance();
-            let has_next =
-                self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
+            let has_next = self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
             if has_next {
                 self.pc = usize::from(context.body_start.saturating_sub(1));
             } else {
@@ -587,8 +537,7 @@ impl RegoVM {
     ) -> Result<()> {
         match *iter_state {
             IterationState::Object {
-                ref mut current_key,
-                ..
+                ref mut current_key, ..
             } => {
                 let tracked_key = if key_reg != value_reg {
                     self.get_register(key_reg)?.clone()
@@ -598,8 +547,7 @@ impl RegoVM {
                 *current_key = Some(tracked_key);
             }
             IterationState::Set {
-                ref mut current_item,
-                ..
+                ref mut current_item, ..
             } => {
                 *current_item = Some(self.get_register(value_reg)?.clone());
             }
@@ -645,10 +593,7 @@ impl RegoVM {
             } = frame;
 
             match frame_kind {
-                FrameKind::Comprehension {
-                    return_pc: _,
-                    context,
-                } => {
+                FrameKind::Comprehension { return_pc: _, context } => {
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {
                         self.pc.saturating_add(1)
@@ -670,10 +615,7 @@ impl RegoVM {
                         parent.pc = return_pc;
                     }
                     // Keep the loop frame available so we can restore it if we discover a mismatch.
-                    unwound_frames.push(ExecutionFrame::new(
-                        frame_pc,
-                        FrameKind::Loop { return_pc, context },
-                    ));
+                    unwound_frames.push(ExecutionFrame::new(frame_pc, FrameKind::Loop { return_pc, context }));
                 }
                 other_kind => {
                     let message = format!(
@@ -683,8 +625,7 @@ impl RegoVM {
                         unwound_frames.len()
                     );
                     // Put the unexpected frame back on the stack along with any loops we unwound.
-                    self.execution_stack
-                        .push(ExecutionFrame::new(frame_pc, other_kind));
+                    self.execution_stack.push(ExecutionFrame::new(frame_pc, other_kind));
                     while let Some(restored) = unwound_frames.pop() {
                         self.execution_stack.push(restored);
                     }

@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 #![allow(clippy::pattern_type_mismatch)]
-use crate::ast::{Expr, Ref};
-use crate::lexer::Span;
-use crate::number::Number;
-use crate::Rc;
-use crate::Value;
-use crate::*;
+use crate::{
+    ast::{Expr, Ref},
+    lexer::Span,
+    number::Number,
+    Rc, Value, *,
+};
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -44,9 +44,7 @@ pub fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
         Value::Number(n) => n.clone(),
         _ => {
             let span = arg.span();
-            bail!(
-                span.error(format!("`{fcn}` expects numeric argument. Got `{v}` instead").as_str())
-            )
+            bail!(span.error(format!("`{fcn}` expects numeric argument. Got `{v}` instead").as_str()))
         }
     })
 }
@@ -61,9 +59,9 @@ pub fn validate_integer_arg(
 ) -> Result<bool> {
     if !numeric_value.is_integer() {
         if strict {
-            bail!(param.span().error(
-                format!("`{fcn}` expects integer arguments. Got `{original_value}`").as_str()
-            ));
+            bail!(param
+                .span()
+                .error(format!("`{fcn}` expects integer arguments. Got `{original_value}`").as_str()));
         }
         return Ok(false);
     }
@@ -73,20 +71,18 @@ pub fn validate_integer_arg(
             if int_value < 0 {
                 if strict {
                     bail!(param.span().error(
-                        format!("`{fcn}` expects non-negative integer arguments. Got `{original_value}`")
-                            .as_str(),
+                        format!("`{fcn}` expects non-negative integer arguments. Got `{original_value}`").as_str(),
                     ));
                 }
                 return Ok(false);
             }
         } else if !numeric_value.is_positive() {
             if strict {
-                bail!(param.span().error(
-                    format!(
-                        "`{fcn}` expects non-negative integer arguments. Got `{original_value}`"
+                bail!(
+                    param.span().error(
+                        format!("`{fcn}` expects non-negative integer arguments. Got `{original_value}`").as_str(),
                     )
-                    .as_str(),
-                ));
+                );
             }
             return Ok(false);
         }
@@ -105,20 +101,12 @@ pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
     })
 }
 
-pub fn ensure_string_element<'a>(
-    fcn: &str,
-    arg: &Expr,
-    v: &'a Value,
-    idx: usize,
-) -> Result<&'a str> {
+pub fn ensure_string_element<'a>(fcn: &str, arg: &Expr, v: &'a Value, idx: usize) -> Result<&'a str> {
     Ok(match &v {
         Value::String(s) => s.as_ref(),
         _ => {
             let span = arg.span();
-            bail!(span.error(
-                format!("`{fcn}` expects string collection. Element {idx} is not a string.")
-                    .as_str()
-            ))
+            bail!(span.error(format!("`{fcn}` expects string collection. Element {idx} is not a string.").as_str()))
         }
     })
 }

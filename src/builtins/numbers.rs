@@ -8,13 +8,15 @@
     clippy::pattern_type_mismatch
 )]
 
-use crate::ast::{ArithOp, Expr, Ref};
-use crate::builtins;
-use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric};
-use crate::lexer::Span;
-use crate::number::Number;
-use crate::value::Value;
-use crate::*;
+use crate::{
+    ast::{ArithOp, Expr, Ref},
+    builtins,
+    builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric},
+    lexer::Span,
+    number::Number,
+    value::Value,
+    *,
+};
 
 use anyhow::{bail, Result};
 
@@ -63,23 +65,17 @@ pub fn arithmetic_operation(
 
 fn abs(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "abs", params, args, 1)?;
-    Ok(Value::from(
-        ensure_numeric("abs", &params[0], &args[0])?.abs(),
-    ))
+    Ok(Value::from(ensure_numeric("abs", &params[0], &args[0])?.abs()))
 }
 
 fn ceil(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "ceil", params, args, 1)?;
-    Ok(Value::from(
-        ensure_numeric("ceil", &params[0], &args[0])?.ceil(),
-    ))
+    Ok(Value::from(ensure_numeric("ceil", &params[0], &args[0])?.ceil()))
 }
 
 fn floor(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     ensure_args_count(span, "floor", params, args, 1)?;
-    Ok(Value::from(
-        ensure_numeric("floor", &params[0], &args[0])?.floor(),
-    ))
+    Ok(Value::from(ensure_numeric("floor", &params[0], &args[0])?.floor()))
 }
 
 fn range(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
@@ -166,9 +162,7 @@ fn range_step(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -
 fn round(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "round";
     ensure_args_count(span, name, params, args, 1)?;
-    Ok(Value::from(
-        ensure_numeric(name, &params[0], &args[0])?.round(),
-    ))
+    Ok(Value::from(ensure_numeric(name, &params[0], &args[0])?.round()))
 }
 
 #[cfg(feature = "std")]

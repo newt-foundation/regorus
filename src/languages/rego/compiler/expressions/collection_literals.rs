@@ -1,26 +1,21 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::as_conversions,
-    clippy::pattern_type_mismatch
-)]
+#![allow(clippy::indexing_slicing, clippy::as_conversions, clippy::pattern_type_mismatch)]
 
 use super::{Compiler, Register, Result};
-use crate::ast::ExprRef;
-use crate::lexer::Span;
-use crate::rvm::instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams};
-use crate::rvm::Instruction;
-use crate::{Rc, Value};
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use crate::{
+    ast::ExprRef,
+    lexer::Span,
+    rvm::{
+        instructions::{ArrayCreateParams, ObjectCreateParams, SetCreateParams},
+        Instruction,
+    },
+    Rc, Value,
+};
+use alloc::{collections::BTreeMap, vec::Vec};
 
 impl<'a> Compiler<'a> {
-    pub(super) fn compile_array_literal(
-        &mut self,
-        items: &[ExprRef],
-        span: &Span,
-    ) -> Result<Register> {
+    pub(super) fn compile_array_literal(&mut self, items: &[ExprRef], span: &Span) -> Result<Register> {
         let mut element_registers = Vec::with_capacity(items.len());
         for item in items {
             let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
@@ -32,19 +27,12 @@ impl<'a> Compiler<'a> {
             dest,
             elements: element_registers,
         };
-        let params_index = self
-            .program
-            .instruction_data
-            .add_array_create_params(params);
+        let params_index = self.program.instruction_data.add_array_create_params(params);
         self.emit_instruction(Instruction::ArrayCreate { params_index }, span);
         Ok(dest)
     }
 
-    pub(super) fn compile_set_literal(
-        &mut self,
-        items: &[ExprRef],
-        span: &Span,
-    ) -> Result<Register> {
+    pub(super) fn compile_set_literal(&mut self, items: &[ExprRef], span: &Span) -> Result<Register> {
         let mut element_registers = Vec::with_capacity(items.len());
         for item in items {
             let item_reg = self.compile_rego_expr_with_span(item, item.span(), false)?;
@@ -70,8 +58,7 @@ impl<'a> Compiler<'a> {
 
         let mut value_regs = Vec::with_capacity(fields.len());
         for (_, _key_expr, value_expr) in fields {
-            let value_reg =
-                self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
+            let value_reg = self.compile_rego_expr_with_span(value_expr, value_expr.span(), false)?;
             value_regs.push(value_reg);
         }
 
@@ -125,10 +112,7 @@ impl<'a> Compiler<'a> {
             literal_key_fields,
             fields: non_literal_key_fields,
         };
-        let params_index = self
-            .program
-            .instruction_data
-            .add_object_create_params(params);
+        let params_index = self.program.instruction_data.add_object_create_params(params);
         self.emit_instruction(Instruction::ObjectCreate { params_index }, span);
         Ok(dest)
     }

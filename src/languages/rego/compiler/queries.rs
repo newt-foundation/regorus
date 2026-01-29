@@ -1,17 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::as_conversions,
-    clippy::pattern_type_mismatch
-)]
+#![allow(clippy::indexing_slicing, clippy::as_conversions, clippy::pattern_type_mismatch)]
 
 use super::{Compiler, CompilerError, ComprehensionType, ContextType, Result};
-use crate::ast::{self, LiteralStmt, Query};
-use crate::rvm::program::RuleType;
-use crate::rvm::Instruction;
-use alloc::format;
-use alloc::vec::Vec;
+use crate::{
+    ast::{self, LiteralStmt, Query},
+    rvm::{program::RuleType, Instruction},
+};
+use alloc::{format, vec::Vec};
 
 impl<'a> Compiler<'a> {
     pub(super) fn compile_query(&mut self, query: &Query) -> Result<()> {
@@ -32,11 +28,7 @@ impl<'a> Compiler<'a> {
             };
 
             let ordered_stmts: Vec<&LiteralStmt> = match schedule {
-                Some(schedule) => schedule
-                    .order
-                    .iter()
-                    .map(|i| &query.stmts[*i as usize])
-                    .collect(),
+                Some(schedule) => schedule.order.iter().map(|i| &query.stmts[*i as usize]).collect(),
                 None => query.stmts.iter().collect(),
             };
             self.hoist_loops_and_compile_statements(&ordered_stmts)
@@ -47,10 +39,7 @@ impl<'a> Compiler<'a> {
         result
     }
 
-    pub(super) fn hoist_loops_and_compile_statements(
-        &mut self,
-        stmts: &[&LiteralStmt],
-    ) -> Result<()> {
+    pub(super) fn hoist_loops_and_compile_statements(&mut self, stmts: &[&LiteralStmt]) -> Result<()> {
         for (idx, stmt) in stmts.iter().enumerate() {
             if !stmt.with_mods.is_empty() {
                 return Err(CompilerError::WithKeywordUnsupported.at(&stmt.span));
@@ -69,12 +58,7 @@ impl<'a> Compiler<'a> {
                     ..
                 } = &stmt.literal
                 {
-                    self.compile_some_in_loop_with_remaining_statements(
-                        key,
-                        value,
-                        collection,
-                        &stmts[idx..],
-                    )?;
+                    self.compile_some_in_loop_with_remaining_statements(key, value, collection, &stmts[idx..])?;
                     return Ok(());
                 }
             }
@@ -217,8 +201,7 @@ impl<'a> Compiler<'a> {
         match &stmt.literal {
             ast::Literal::Expr { expr, .. } => {
                 let assert_condition = !matches!(expr.as_ref(), ast::Expr::AssignExpr { .. });
-                let _condition_reg =
-                    self.compile_rego_expr_with_span(expr, &stmt.span, assert_condition)?;
+                let _condition_reg = self.compile_rego_expr_with_span(expr, &stmt.span, assert_condition)?;
             }
             ast::Literal::SomeIn { .. } => {
                 return Err(CompilerError::SomeInNotHoisted.at(&stmt.span));
@@ -251,12 +234,7 @@ impl<'a> Compiler<'a> {
                     &stmt.span,
                 );
 
-                self.emit_instruction(
-                    Instruction::AssertCondition {
-                        condition: negated_reg,
-                    },
-                    &stmt.span,
-                );
+                self.emit_instruction(Instruction::AssertCondition { condition: negated_reg }, &stmt.span);
             }
         }
         Ok(())

@@ -132,9 +132,7 @@ fn test_azure_storage_account_schema() {
 
     match schema.as_type() {
         Type::Object {
-            properties,
-            required,
-            ..
+            properties, required, ..
         } => {
             // Verify core properties
             assert!(properties.contains_key("name"));
@@ -443,9 +441,7 @@ fn test_azure_virtual_machine_schema() {
                     assert!(vm_props.contains_key("osProfile"));
                     assert!(vm_props.contains_key("networkProfile"));
 
-                    let vm_required = vm_req
-                        .as_ref()
-                        .expect("VM properties required should be present");
+                    let vm_required = vm_req.as_ref().expect("VM properties required should be present");
                     assert!(vm_required.contains(&"hardwareProfile".into()));
                     assert!(vm_required.contains(&"storageProfile".into()));
                     assert!(vm_required.contains(&"osProfile".into()));
@@ -752,10 +748,7 @@ fn test_azure_resource_polymorphic_schema() {
             assert!(vnet_variant.properties.contains_key("properties"));
 
             // Verify Web App variant
-            let webapp_variant = dso
-                .variants
-                .get("Microsoft.Web/sites")
-                .expect("Web App variant");
+            let webapp_variant = dso.variants.get("Microsoft.Web/sites").expect("Web App variant");
             assert!(webapp_variant.properties.contains_key("kind"));
             assert!(webapp_variant.properties.contains_key("properties"));
         }
@@ -960,9 +953,7 @@ fn test_azure_key_vault_schema() {
     let s = Schema::from_json_str(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            properties,
-            required,
-            ..
+            properties, required, ..
         } => {
             // Verify Key Vault specific properties
             assert!(properties.contains_key("name"));
@@ -1197,9 +1188,7 @@ fn test_azure_app_service_plan_schema() {
     let s = Schema::from_json_str(schema).unwrap();
     match s.as_type() {
         Type::Object {
-            properties,
-            required,
-            ..
+            properties, required, ..
         } => {
             // Verify App Service Plan specific properties
             assert!(properties.contains_key("name"));

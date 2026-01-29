@@ -3,12 +3,16 @@
 #![cfg(feature = "rvm")]
 
 use anyhow::Result;
-use regorus::languages::rego::compiler::Compiler;
-use regorus::rvm::program::{generate_tabular_assembly_listing, AssemblyListingConfig, Program};
-use regorus::rvm::tests::test_utils::test_round_trip_serialization;
-use regorus::rvm::vm::RegoVM;
-use regorus::test_utils::{check_output, process_value, value_or_vec_to_vec, ValueOrVec};
-use regorus::{CompiledPolicy, Engine, Rc, Value};
+use regorus::{
+    languages::rego::compiler::Compiler,
+    rvm::{
+        program::{generate_tabular_assembly_listing, AssemblyListingConfig, Program},
+        tests::test_utils::test_round_trip_serialization,
+        vm::RegoVM,
+    },
+    test_utils::{check_output, process_value, value_or_vec_to_vec, ValueOrVec},
+    CompiledPolicy, Engine, Rc, Value,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use test_generator::test_resources;
@@ -88,13 +92,7 @@ fn compile_and_run_rvm(
     input: &Value,
     listing_out: &mut Option<String>,
 ) -> anyhow::Result<Value> {
-    let results = compile_and_run_rvm_with_all_entry_points(
-        compiled_policy,
-        &[entrypoint],
-        data,
-        input,
-        listing_out,
-    )?;
+    let results = compile_and_run_rvm_with_all_entry_points(compiled_policy, &[entrypoint], data, input, listing_out)?;
     results
         .into_iter()
         .next()
@@ -109,18 +107,9 @@ fn compile_and_run_rvm_with_entry_points(
     input: &Value,
     listing_out: &mut Option<String>,
 ) -> anyhow::Result<Value> {
-    let results = compile_and_run_rvm_with_all_entry_points(
-        compiled_policy,
-        entry_points,
-        data,
-        input,
-        listing_out,
-    )?;
+    let results = compile_and_run_rvm_with_all_entry_points(compiled_policy, entry_points, data, input, listing_out)?;
 
-    if let Some(index) = entry_points
-        .iter()
-        .position(|ep| *ep == execute_entry_point)
-    {
+    if let Some(index) = entry_points.iter().position(|ep| *ep == execute_entry_point) {
         results
             .get(index)
             .cloned()
@@ -227,10 +216,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
             if let (None, Some(expected_error)) = (&case.want_result, &case.want_error) {
                 let error_str = compilation_error.to_string();
                 if error_str.contains(expected_error) {
-                    println!(
-                        "✓ RVM compilation error matches expected for case '{}'",
-                        case.note
-                    );
+                    println!("✓ RVM compilation error matches expected for case '{}'", case.note);
                     println!("passed");
                     continue;
                 }
@@ -288,10 +274,8 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                             );
                         }
 
-                        for (index, (actual, expected)) in actual_results
-                            .iter()
-                            .zip(expected_results.iter())
-                            .enumerate()
+                        for (index, (actual, expected)) in
+                            actual_results.iter().zip(expected_results.iter()).enumerate()
                         {
                             let expected_value = match expected {
                                 ValueOrVec::Single(v) => v.clone(),
@@ -361,13 +345,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         &mut last_listing,
                     )
                 } else {
-                    compile_and_run_rvm(
-                        &compiled_policy,
-                        &case.query,
-                        &data,
-                        &input_value,
-                        &mut last_listing,
-                    )
+                    compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value, &mut last_listing)
                 };
 
                 match result {
@@ -413,8 +391,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                             if case.allow_interpreter_success == Some(true) {
                                 println!(
                                     "✓ RVM detected conflict for case '{}' (interpreter success allowed): {}",
-                                    case.note,
-                                    e
+                                    case.note, e
                                 );
                             } else {
                                 panic_with_listing!(
@@ -452,13 +429,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         &mut last_listing,
                     )
                 } else {
-                    compile_and_run_rvm(
-                        &compiled_policy,
-                        &case.query,
-                        &data,
-                        &input_value,
-                        &mut last_listing,
-                    )
+                    compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value, &mut last_listing)
                 };
 
                 match result {

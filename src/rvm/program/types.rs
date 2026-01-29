@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 /// Builtin function information stored in program's builtin info table
@@ -49,9 +48,7 @@ impl SpanInfo {
 
     /// Get source information using the program's source table
     pub fn get_source<'a>(&self, source_table: &'a [SourceFile]) -> Option<&'a str> {
-        source_table
-            .get(self.source_index)
-            .map(|s| s.content.as_str())
+        source_table.get(self.source_index).map(|s| s.content.as_str())
     }
 
     /// Get source name using the program's source table

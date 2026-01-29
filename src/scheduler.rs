@@ -15,21 +15,21 @@
     clippy::pattern_type_mismatch
 )] // scheduler logic indexes arrays and unwraps queues intentionally
 
-use crate::ast::Expr::*;
-use crate::ast::*;
-use crate::lexer::*;
-use crate::lookup::*;
 pub use crate::query::traversal::Scope;
-use crate::query::traversal::{
-    gather_assigned_vars, gather_input_vars, gather_loop_vars, gather_vars, traverse,
+use crate::{
+    ast::{Expr::*, *},
+    lexer::*,
+    lookup::*,
+    query::traversal::{gather_assigned_vars, gather_input_vars, gather_loop_vars, gather_vars, traverse},
+    utils::*,
+    *,
 };
-use crate::utils::*;
-use crate::*;
 
-use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
-use alloc::string::String;
-use core::cmp;
-use core::fmt;
+use alloc::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    string::String,
+};
+use core::{cmp, fmt};
 
 use anyhow::{anyhow, bail, Result};
 
@@ -61,10 +61,7 @@ pub enum SortResult {
     Cycle(String, Vec<usize>),
 }
 
-pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
-    infos: &mut [StmtInfo<Str>],
-    empty: &Str,
-) -> Result<SortResult> {
+pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(infos: &mut [StmtInfo<Str>], empty: &Str) -> Result<SortResult> {
     let num_statements = infos.len();
 
     // Mapping from each var to the list of statements that define it.
@@ -104,10 +101,7 @@ pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
         let can_be_scheduled = if definitions.len() == 1 {
             // Handle the more common case of single definition statements optimally.
             // Check if all the vars used by the definition are previously assigned.
-            definitions[0]
-                .used_vars
-                .iter()
-                .all(|uv| defined_vars.contains(uv))
+            definitions[0].used_vars.iter().all(|uv| defined_vars.contains(uv))
         } else {
             // Set of vars that can be defined in this statement.
             let mut defined_in_stmt = BTreeSet::new();
@@ -217,9 +211,7 @@ pub fn schedule<Str: Clone + cmp::Ord + fmt::Debug>(
     if order.len() != num_statements {
         #[cfg(feature = "std")]
         std::eprintln!("could not schedule all statements {order:?}");
-        return Ok(SortResult::Order(
-            (0..num_statements).map(|i| i as u16).collect(),
-        ));
+        return Ok(SortResult::Order((0..num_statements).map(|i| i as u16).collect()));
     }
 
     // TODO: determine cycles.
@@ -273,8 +265,7 @@ impl Analyzer {
             let module_idx = module_index as u32;
             if m.num_queries > 0 {
                 // Reserve capacity for all queries in this module (0 to num_queries-1)
-                self.schedule_table
-                    .ensure_capacity(module_idx, m.num_queries - 1);
+                self.schedule_table.ensure_capacity(module_idx, m.num_queries - 1);
             }
         }
 
@@ -288,11 +279,7 @@ impl Analyzer {
         })
     }
 
-    pub fn analyze_query_snippet(
-        mut self,
-        modules: &[Ref<Module>],
-        query: &Ref<Query>,
-    ) -> Result<Schedule> {
+    pub fn analyze_query_snippet(mut self, modules: &[Ref<Module>], query: &Ref<Query>) -> Result<Schedule> {
         self.add_rules_and_aliases(modules)?;
 
         // Pre-allocate capacity for all modules based on their num_queries
@@ -300,15 +287,13 @@ impl Analyzer {
             let module_idx = module_index as u32;
             if m.num_queries > 0 {
                 // Reserve capacity for all queries in this module (0 to num_queries-1)
-                self.schedule_table
-                    .ensure_capacity(module_idx, m.num_queries - 1);
+                self.schedule_table.ensure_capacity(module_idx, m.num_queries - 1);
             }
         }
 
         // Query snippets are treated as if they're part of a module appended at the end
         let snippet_module_index = modules.len() as u32;
-        self.schedule_table
-            .ensure_capacity(snippet_module_index, query.qidx);
+        self.schedule_table.ensure_capacity(snippet_module_index, query.qidx);
 
         self.current_module_index = snippet_module_index;
         self.analyze_query(None, None, query, Scope::default())?;
@@ -326,10 +311,7 @@ impl Analyzer {
                 let var = match r.as_ref() {
                     Rule::Default { refr, .. }
                     | Rule::Spec {
-                        head:
-                            RuleHead::Compr { refr, .. }
-                            | RuleHead::Set { refr, .. }
-                            | RuleHead::Func { refr, .. },
+                        head: RuleHead::Compr { refr, .. } | RuleHead::Set { refr, .. } | RuleHead::Func { refr, .. },
                         ..
                     } => get_root_var(refr)?,
                 };
@@ -402,29 +384,19 @@ impl Analyzer {
                 Expr::ArrayCompr { query, term, .. } | Expr::SetCompr { query, term, .. } => {
                     self.analyze_query(None, Some(term.clone()), query, Scope::default())?;
                 }
-                Expr::ObjectCompr {
-                    query, key, value, ..
-                } => self.analyze_query(
-                    Some(key.clone()),
-                    Some(value.clone()),
-                    query,
-                    Scope::default(),
-                )?,
+                Expr::ObjectCompr { query, key, value, .. } => {
+                    self.analyze_query(Some(key.clone()), Some(value.clone()), query, Scope::default())?
+                }
                 _ => (),
             }
         }
         Ok(())
     }
 
-    fn analyze_rule_head(
-        &mut self,
-        head: &RuleHead,
-    ) -> Result<(Option<ExprRef>, Option<ExprRef>, Scope)> {
+    fn analyze_rule_head(&mut self, head: &RuleHead) -> Result<(Option<ExprRef>, Option<ExprRef>, Scope)> {
         let mut scope = Scope::default();
         Ok(match head {
-            RuleHead::Compr { assign, .. } => {
-                (None, assign.as_ref().map(|a| a.value.clone()), scope)
-            }
+            RuleHead::Compr { assign, .. } => (None, assign.as_ref().map(|a| a.value.clone()), scope),
             RuleHead::Set { key, .. } => (key.clone(), None, scope),
             RuleHead::Func { args, assign, .. } => {
                 for a in args.iter() {
@@ -458,10 +430,7 @@ impl Analyzer {
                     scope.locals.insert(v.source_str(), v.clone());
                 }),
                 Literal::SomeIn {
-                    key,
-                    value,
-                    collection,
-                    ..
+                    key, value, collection, ..
                 } => {
                     if let Some(key) = key {
                         gather_vars(key, true, &self.scopes, scope)?;
@@ -477,11 +446,7 @@ impl Analyzer {
                         gather_input_vars(expr, &self.scopes, scope)?;
                         gather_loop_vars(expr, &self.scopes, scope)?;
 
-                        let extra_arg = get_extra_arg(
-                            expr,
-                            Some(self.current_module_path.as_str()),
-                            &self.functions,
-                        );
+                        let extra_arg = get_extra_arg(expr, Some(self.current_module_path.as_str()), &self.functions);
                         if let Some(ea) = extra_arg {
                             gather_vars(&ea, false, &self.scopes, scope)?;
                         }
@@ -551,14 +516,13 @@ impl Analyzer {
                     Var { span: v, .. } => {
                         let var = v.source_str();
                         if scope.locals.contains_key(&var) || scope.unscoped.contains(&var) {
-                            let (rb_used_vars, rb_comprs) =
-                                Self::gather_used_vars_comprs_index_vars(
-                                    refr,
-                                    scope,
-                                    first_use,
-                                    definitions,
-                                    assigned_vars,
-                                )?;
+                            let (rb_used_vars, rb_comprs) = Self::gather_used_vars_comprs_index_vars(
+                                refr,
+                                scope,
+                                first_use,
+                                definitions,
+                                assigned_vars,
+                            )?;
                             definitions.push(Definition {
                                 var: var.clone(),
                                 used_vars: rb_used_vars.clone(),
@@ -603,15 +567,8 @@ impl Analyzer {
                         .map_err(|err| anyhow!("schedule_table out of bounds: {err}"))?
                         .map(|qs| &qs.scope)
                 }
-                Expr::ObjectCompr {
-                    query, key, value, ..
-                } => {
-                    self.analyze_query(
-                        Some(key.clone()),
-                        Some(value.clone()),
-                        query,
-                        Scope::default(),
-                    )?;
+                Expr::ObjectCompr { query, key, value, .. } => {
+                    self.analyze_query(Some(key.clone()), Some(value.clone()), query, Scope::default())?;
                     self.schedule_table
                         .get_checked(self.current_module_index, query.qidx)
                         .map_err(|err| anyhow!("schedule_table out of bounds: {err}"))?
@@ -686,14 +643,7 @@ impl Analyzer {
     ) -> Result<()> {
         let empty_str = lhs.span().source_str().clone_empty();
         match (lhs.as_ref(), rhs.as_ref()) {
-            (
-                Array {
-                    items: lhs_items, ..
-                },
-                Array {
-                    items: rhs_items, ..
-                },
-            ) => {
+            (Array { items: lhs_items, .. }, Array { items: rhs_items, .. }) => {
                 if lhs_items.len() != rhs_items.len() {
                     let span = rhs.span();
                     bail!(span.error("mismatch in number of array elements"));
@@ -716,19 +666,13 @@ impl Analyzer {
             // TODO: object
             _ => {
                 {
-                    let (mut used_vars, mut comprs) = Self::gather_used_vars_comprs_index_vars(
-                        rhs,
-                        scope,
-                        first_use,
-                        definitions,
-                        &None,
-                    )?;
+                    let (mut used_vars, mut comprs) =
+                        Self::gather_used_vars_comprs_index_vars(rhs, scope, first_use, definitions, &None)?;
                     used_vars.append(&mut with_mods_used_vars.clone());
                     comprs.append(&mut with_mods_comprs.clone());
                     self.process_comprs(&comprs[..], scope, first_use, &mut used_vars)?;
                     let check_first_use = *op == AssignOp::ColEq;
-                    let assigned_vars =
-                        self.gather_assigned_vars(lhs, scope, check_first_use, first_use)?;
+                    let assigned_vars = self.gather_assigned_vars(lhs, scope, check_first_use, first_use)?;
 
                     for var in &assigned_vars {
                         let used_vars = used_vars.iter().filter(|v| v != &var).cloned().collect();
@@ -745,19 +689,13 @@ impl Analyzer {
                     }
                 }
                 {
-                    let (mut used_vars, mut comprs) = Self::gather_used_vars_comprs_index_vars(
-                        lhs,
-                        scope,
-                        first_use,
-                        definitions,
-                        &None,
-                    )?;
+                    let (mut used_vars, mut comprs) =
+                        Self::gather_used_vars_comprs_index_vars(lhs, scope, first_use, definitions, &None)?;
                     used_vars.append(&mut with_mods_used_vars);
                     comprs.append(&mut with_mods_comprs);
                     let check_first_use = false;
                     self.process_comprs(&comprs[..], scope, first_use, &mut used_vars)?;
-                    let assigned_vars =
-                        self.gather_assigned_vars(rhs, scope, check_first_use, first_use)?;
+                    let assigned_vars = self.gather_assigned_vars(rhs, scope, check_first_use, first_use)?;
                     for var in &assigned_vars {
                         let used_vars = used_vars.iter().filter(|v| v != &var).cloned().collect();
                         definitions.push(Definition {
@@ -799,13 +737,8 @@ impl Analyzer {
                 with_mods_comprs,
             ),
             _ => {
-                let (mut used_vars, mut comprs) = Self::gather_used_vars_comprs_index_vars(
-                    expr,
-                    scope,
-                    first_use,
-                    definitions,
-                    &None,
-                )?;
+                let (mut used_vars, mut comprs) =
+                    Self::gather_used_vars_comprs_index_vars(expr, scope, first_use, definitions, &None)?;
                 comprs.append(&mut with_mods_comprs);
                 used_vars.append(&mut with_mods_used_vars);
                 self.process_comprs(&comprs[..], scope, first_use, &mut used_vars)?;
@@ -896,50 +829,29 @@ impl Analyzer {
                     }
                 }
                 Literal::SomeIn {
-                    key,
-                    value,
-                    collection,
-                    ..
+                    key, value, collection, ..
                 } => {
                     let mut some_vars = vec![];
                     let mut non_vars = vec![];
 
                     if let Some(key) = key {
-                        Self::gather_some_vars(
-                            key,
-                            &scope,
-                            &first_use,
-                            &mut some_vars,
-                            &mut non_vars,
-                        )?;
+                        Self::gather_some_vars(key, &scope, &first_use, &mut some_vars, &mut non_vars)?;
                     }
-                    Self::gather_some_vars(
-                        value,
-                        &scope,
-                        &first_use,
-                        &mut some_vars,
-                        &mut non_vars,
-                    )?;
+                    Self::gather_some_vars(value, &scope, &first_use, &mut some_vars, &mut non_vars)?;
 
                     let mut col_definitions = vec![];
-                    let (mut col_used_vars, mut col_comprs) =
-                        Self::gather_used_vars_comprs_index_vars(
-                            collection,
-                            &mut scope,
-                            &mut first_use,
-                            &mut col_definitions,
-                            &None,
-                        )?;
+                    let (mut col_used_vars, mut col_comprs) = Self::gather_used_vars_comprs_index_vars(
+                        collection,
+                        &mut scope,
+                        &mut first_use,
+                        &mut col_definitions,
+                        &None,
+                    )?;
                     col_used_vars.append(&mut with_mods_used_vars);
                     col_comprs.append(&mut with_mods_comprs.clone());
                     definitions.append(&mut col_definitions);
 
-                    self.process_comprs(
-                        &col_comprs[..],
-                        &mut scope,
-                        &mut first_use,
-                        &mut col_used_vars,
-                    )?;
+                    self.process_comprs(&col_comprs[..], &mut scope, &mut first_use, &mut col_used_vars)?;
 
                     // Add dependency between some-vars and vars used in collection.
                     for (var, _) in &some_vars {
@@ -970,12 +882,7 @@ impl Analyzer {
                             bail!("internal error: non empty definitions");
                         }
                         used_vars.extend(uv);
-                        self.process_comprs(
-                            &comprs[..],
-                            &mut scope,
-                            &mut first_use,
-                            &mut used_vars,
-                        )?;
+                        self.process_comprs(&comprs[..], &mut scope, &mut first_use, &mut used_vars)?;
                     }
                     definitions.push(Definition {
                         var: empty_str.clone(),
@@ -984,11 +891,7 @@ impl Analyzer {
                     // TODO: vars in compr
                 }
                 Literal::Expr { expr, .. } => {
-                    let extra_arg = get_extra_arg(
-                        expr,
-                        Some(self.current_module_path.as_str()),
-                        &self.functions,
-                    );
+                    let extra_arg = get_extra_arg(expr, Some(self.current_module_path.as_str()), &self.functions);
                     if let Some(ref ea) = extra_arg {
                         // Gather vars that are being bound
                         let mut extras_scope = Scope::default();
@@ -1009,12 +912,7 @@ impl Analyzer {
                         used_vars.append(&mut with_mods_used_vars);
                         comprs.append(&mut with_mods_comprs);
 
-                        self.process_comprs(
-                            &comprs[..],
-                            &mut scope,
-                            &mut first_use,
-                            &mut used_vars,
-                        )?;
+                        self.process_comprs(&comprs[..], &mut scope, &mut first_use, &mut used_vars)?;
 
                         if !extras_scope.unscoped.is_empty() {
                             for var in extras_scope.unscoped {
@@ -1135,9 +1033,7 @@ impl Analyzer {
 /// For each module, the globals are:
 /// 1) The set of rule names defined in the package that the module defines
 /// 2) Additionally, the set of aliases imported by the module
-pub fn compute_module_globals(
-    modules: &[Ref<Module>],
-) -> Result<Lookup<crate::Rc<BTreeSet<String>>>> {
+pub fn compute_module_globals(modules: &[Ref<Module>]) -> Result<Lookup<crate::Rc<BTreeSet<String>>>> {
     let mut result = Lookup::new();
     let mut packages: BTreeMap<String, crate::Rc<BTreeSet<String>>> = BTreeMap::new();
 
@@ -1150,10 +1046,7 @@ pub fn compute_module_globals(
             let var = match r.as_ref() {
                 Rule::Default { refr, .. }
                 | Rule::Spec {
-                    head:
-                        RuleHead::Compr { refr, .. }
-                        | RuleHead::Set { refr, .. }
-                        | RuleHead::Func { refr, .. },
+                    head: RuleHead::Compr { refr, .. } | RuleHead::Set { refr, .. } | RuleHead::Func { refr, .. },
                     ..
                 } => get_root_var(refr)?,
             };

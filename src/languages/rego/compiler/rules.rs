@@ -11,19 +11,24 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, ContextType, Result, WorklistEntry};
-use crate::ast::{Expr, Rule, RuleHead};
-use crate::compiler::destructuring_planner::plans::BindingPlan;
-use crate::lexer::Span;
-use crate::rvm::program::{Program, RuleType};
-use crate::rvm::Instruction;
-use crate::utils::get_path_string;
-use crate::Map;
-use crate::{CompiledPolicy, Value};
-use alloc::collections::BTreeSet;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use crate::{
+    ast::{Expr, Rule, RuleHead},
+    compiler::destructuring_planner::plans::BindingPlan,
+    lexer::Span,
+    rvm::{
+        program::{Program, RuleType},
+        Instruction,
+    },
+    utils::get_path_string,
+    CompiledPolicy, Map, Value,
+};
+use alloc::{
+    collections::BTreeSet,
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 
 impl<'a> Compiler<'a> {
     pub(super) fn compute_rule_type(&self, rule_path: &str) -> Result<RuleType> {
@@ -41,9 +46,7 @@ impl<'a> Compiler<'a> {
                     match head {
                         RuleHead::Set { .. } => RuleType::PartialSet,
                         RuleHead::Compr { refr, assign, .. } => match refr.as_ref() {
-                            crate::ast::Expr::RefBrack { .. } if assign.is_some() => {
-                                RuleType::PartialObject
-                            }
+                            crate::ast::Expr::RefBrack { .. } if assign.is_some() => RuleType::PartialObject,
                             crate::ast::Expr::RefBrack { .. } => RuleType::PartialSet,
                             _ => RuleType::Complete,
                         },
@@ -57,10 +60,7 @@ impl<'a> Compiler<'a> {
 
         if rule_types.len() > 1 {
             return Err(CompilerError::General {
-                message: format!(
-                    "internal: rule '{}' has multiple types: {:?}",
-                    rule_path, rule_types
-                ),
+                message: format!("internal: rule '{}' has multiple types: {:?}", rule_path, rule_types),
             }
             .into());
         }
@@ -139,19 +139,15 @@ impl<'a> Compiler<'a> {
                 for (module_index, module) in self.policy.get_modules().iter().enumerate() {
                     for policy_rule in &module.policy {
                         if core::ptr::eq(policy_rule.as_ref(), rule) {
-                            let package_path =
-                                match get_path_string(&module.package.refr, Some("data")) {
-                                    Ok(path) => path,
-                                    Err(e) => {
-                                        return Err(CompilerError::General {
-                                            message: format!(
-                                                "Failed to get package path for module: {}",
-                                                e
-                                            ),
-                                        }
-                                        .into());
+                            let package_path = match get_path_string(&module.package.refr, Some("data")) {
+                                Ok(path) => path,
+                                Err(e) => {
+                                    return Err(CompilerError::General {
+                                        message: format!("Failed to get package path for module: {}", e),
                                     }
-                                };
+                                    .into());
+                                }
+                            };
                             return Ok((package_path, module_index as u32));
                         }
                     }
@@ -168,10 +164,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile from a CompiledPolicy to RVM Program
-    pub fn compile_from_policy(
-        policy: &CompiledPolicy,
-        entry_points: &[&str],
-    ) -> Result<Arc<Program>> {
+    pub fn compile_from_policy(policy: &CompiledPolicy, entry_points: &[&str]) -> Result<Arc<Program>> {
         let mut compiler = Compiler::with_policy(policy);
         compiler.current_rule_path = "".to_string();
         let rules = policy.get_rules();
@@ -194,10 +187,7 @@ impl<'a> Compiler<'a> {
         Ok(program)
     }
 
-    fn compile_worklist_rules(
-        &mut self,
-        rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
-    ) -> Result<()> {
+    fn compile_worklist_rules(&mut self, rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>) -> Result<()> {
         let mut compiled_rules = BTreeSet::new();
         let mut call_stack = Vec::new();
 
@@ -213,9 +203,7 @@ impl<'a> Compiler<'a> {
                             found_start = true;
                         }
                         if found_start {
-                            if let Some((rule_path, _)) =
-                                self.rule_index_map.iter().find(|(_, &idx)| idx == rule_idx)
-                            {
+                            if let Some((rule_path, _)) = self.rule_index_map.iter().find(|(_, &idx)| idx == rule_idx) {
                                 chain.push(rule_path.clone());
                             }
                         }
@@ -271,8 +259,7 @@ impl<'a> Compiler<'a> {
         rule_path: &str,
         rules: &Map<String, Vec<crate::ast::NodeRef<Rule>>>,
     ) -> Result<()> {
-        let (module_package, module_index) =
-            self.find_module_package_and_index_for_rule(rule_path, rules)?;
+        let (module_package, module_index) = self.find_module_package_and_index_for_rule(rule_path, rules)?;
 
         let saved_package = self.current_package.clone();
         let saved_module_index = self.current_module_index;
@@ -283,10 +270,7 @@ impl<'a> Compiler<'a> {
         if let Some(rule_definitions) = rules.get(rule_path) {
             let Some(rule_index) = self.rule_index_map.get(rule_path).copied() else {
                 return Err(CompilerError::General {
-                    message: format!(
-                        "Rule '{}' not found in rule index map during compilation",
-                        rule_path
-                    ),
+                    message: format!("Rule '{}' not found in rule index map during compilation", rule_path),
                 }
                 .into());
             };
@@ -327,8 +311,7 @@ impl<'a> Compiler<'a> {
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
                             self.rule_definition_function_params[rule_index as usize].push(None);
-                            self.rule_definition_destructuring_patterns[rule_index as usize]
-                                .push(None);
+                            self.rule_definition_destructuring_patterns[rule_index as usize].push(None);
 
                             let output_expr = assign.as_ref().map(|assign| assign.value.clone());
                             let key_expr = match refr.as_ref() {
@@ -339,8 +322,7 @@ impl<'a> Compiler<'a> {
                         }
                         RuleHead::Set { key, .. } => {
                             self.rule_definition_function_params[rule_index as usize].push(None);
-                            self.rule_definition_destructuring_patterns[rule_index as usize]
-                                .push(None);
+                            self.rule_definition_destructuring_patterns[rule_index as usize].push(None);
 
                             (None, key.clone())
                         }
@@ -355,8 +337,7 @@ impl<'a> Compiler<'a> {
                             };
 
                             let param_base_register = self.register_counter;
-                            self.register_counter =
-                                self.register_counter.saturating_add(args.len() as u8);
+                            self.register_counter = self.register_counter.saturating_add(args.len() as u8);
 
                             for (arg_idx, arg) in args.iter().enumerate() {
                                 let param_reg = param_base_register + arg_idx as u8;
@@ -371,8 +352,7 @@ impl<'a> Compiler<'a> {
                                 param_names.push(param_name);
 
                                 let context_desc = format!("function parameter {arg_idx}");
-                                let binding_plan =
-                                    self.expect_binding_plan_for_expr(arg, &context_desc)?;
+                                let binding_plan = self.expect_binding_plan_for_expr(arg, &context_desc)?;
 
                                 if let BindingPlan::Parameter { .. } = &binding_plan {
                                     let _ = self
@@ -389,8 +369,7 @@ impl<'a> Compiler<'a> {
                                 last_param_span = Some(arg.span().clone());
                             }
 
-                            self.rule_definition_function_params[rule_index as usize]
-                                .push(Some(param_names.clone()));
+                            self.rule_definition_function_params[rule_index as usize].push(Some(param_names.clone()));
 
                             if let Some(entry) = destructuring_entry {
                                 let success_span = last_param_span.as_ref().unwrap_or(span);
@@ -401,8 +380,7 @@ impl<'a> Compiler<'a> {
                                 self.rule_definition_destructuring_patterns[rule_index as usize]
                                     .push(Some(entry as u32));
                             } else {
-                                self.rule_definition_destructuring_patterns[rule_index as usize]
-                                    .push(None);
+                                self.rule_definition_destructuring_patterns[rule_index as usize].push(None);
                             }
 
                             match rule_param_count {
@@ -478,12 +456,8 @@ impl<'a> Compiler<'a> {
 
                             ::core::convert::identity(body_idx);
 
-                            let previous_value_expr = self
-                                .context_stack
-                                .last()
-                                .and_then(|ctx| ctx.value_expr.clone());
-                            let mut body_value_expr =
-                                body.assign.as_ref().map(|assign| assign.value.clone());
+                            let previous_value_expr = self.context_stack.last().and_then(|ctx| ctx.value_expr.clone());
+                            let mut body_value_expr = body.assign.as_ref().map(|assign| assign.value.clone());
                             if body_value_expr.is_none() && body_idx == 0 {
                                 body_value_expr = previous_value_expr.clone();
                             }
@@ -543,14 +517,11 @@ impl<'a> Compiler<'a> {
             if rule_param_count.is_none() {
                 let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
                 if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
-                    let package_path: Vec<String> =
-                        package_parts.iter().map(|s| s.to_string()).collect();
+                    let package_path: Vec<String> = package_parts.iter().map(|s| s.to_string()).collect();
 
-                    let _ = self.program.add_rule_to_tree(
-                        &package_path,
-                        rule_name,
-                        rule_index as usize,
-                    );
+                    let _ = self
+                        .program
+                        .add_rule_to_tree(&package_path, rule_name, rule_index as usize);
                 }
             }
 

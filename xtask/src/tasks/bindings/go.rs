@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{anyhow, Result};
 use clap::Args;
@@ -42,10 +44,7 @@ impl TestGoCommand {
 
         let binary = go_test_binary(&go_dir);
         if !binary.exists() {
-            return Err(anyhow!(
-                "expected Go test binary at {} after build",
-                binary.display()
-            ));
+            return Err(anyhow!("expected Go test binary at {} after build", binary.display()));
         }
 
         let lib_dir = ffi_dir.join("target").join(profile);

@@ -8,15 +8,18 @@
 
 //! Functions responsible for building destructuring plans.
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::{String, ToString},
+    vec::Vec,
+};
 
-use crate::ast::{Expr, ExprRef};
-use crate::compiler::destructuring_planner::context::OverlayBindingContext;
-use crate::compiler::destructuring_planner::utils::extract_literal_key;
-use crate::compiler::destructuring_planner::{
-    DestructuringPlan, ScopingMode, VariableBindingContext,
+use crate::{
+    ast::{Expr, ExprRef},
+    compiler::destructuring_planner::{
+        context::OverlayBindingContext, utils::extract_literal_key, DestructuringPlan, ScopingMode,
+        VariableBindingContext,
+    },
 };
 
 /// Create a destructuring plan for an expression using a variable binding context.
@@ -66,9 +69,7 @@ pub(crate) fn create_destructuring_plan_with_tracking<T: VariableBindingContext>
         Expr::Array { items, .. } => {
             let mut element_plans = Vec::new();
             for item in items {
-                if let Some(plan) =
-                    create_destructuring_plan_with_tracking(item, context, scoping, newly_bound)
-                {
+                if let Some(plan) = create_destructuring_plan_with_tracking(item, context, scoping, newly_bound) {
                     element_plans.push(plan);
                 } else {
                     // If any element can't be destructured, fail the whole array
@@ -83,12 +84,9 @@ pub(crate) fn create_destructuring_plan_with_tracking<T: VariableBindingContext>
             let mut field_plans = BTreeMap::new();
             let mut dynamic_fields = Vec::new();
             for (_, key_expr, value_expr) in fields {
-                if let Some(value_plan) = create_destructuring_plan_with_tracking(
-                    value_expr,
-                    context,
-                    scoping,
-                    newly_bound,
-                ) {
+                if let Some(value_plan) =
+                    create_destructuring_plan_with_tracking(value_expr, context, scoping, newly_bound)
+                {
                     if let Some(key_value) = extract_literal_key(key_expr) {
                         field_plans.insert(key_value, value_plan);
                     } else {

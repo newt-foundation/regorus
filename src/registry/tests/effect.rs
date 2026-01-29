@@ -143,8 +143,7 @@ fn test_basic_effect_enum_schema() {
     let effect_schema = create_effect_schema();
 
     // Test registration of basic effect enum schema
-    let result =
-        EFFECT_SCHEMA_REGISTRY.register("azure.policy.effect.basic", effect_schema.clone());
+    let result = EFFECT_SCHEMA_REGISTRY.register("azure.policy.effect.basic", effect_schema.clone());
     assert!(result.is_ok());
     assert!(EFFECT_SCHEMA_REGISTRY.contains("azure.policy.effect.basic"));
 
@@ -220,15 +219,9 @@ fn test_multiple_effect_schemas() {
     let audit_name = "azure.policy.audit.multiple.test";
     let modify_name = "azure.policy.modify.multiple.test";
 
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register(deny_name, deny_schema)
-        .is_ok());
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register(audit_name, audit_schema)
-        .is_ok());
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register(modify_name, modify_schema)
-        .is_ok());
+    assert!(EFFECT_SCHEMA_REGISTRY.register(deny_name, deny_schema).is_ok());
+    assert!(EFFECT_SCHEMA_REGISTRY.register(audit_name, audit_schema).is_ok());
+    assert!(EFFECT_SCHEMA_REGISTRY.register(modify_name, modify_schema).is_ok());
 
     // Verify all are registered
     assert!(EFFECT_SCHEMA_REGISTRY.contains(deny_name));
@@ -326,18 +319,10 @@ fn test_effect_schema_with_invalid_names() {
     let effect_schema = create_effect_schema();
 
     // Test invalid names
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register("", effect_schema.clone())
-        .is_err());
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register("   ", effect_schema.clone())
-        .is_err());
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register("\t", effect_schema.clone())
-        .is_err());
-    assert!(EFFECT_SCHEMA_REGISTRY
-        .register("\n", effect_schema)
-        .is_err());
+    assert!(EFFECT_SCHEMA_REGISTRY.register("", effect_schema.clone()).is_err());
+    assert!(EFFECT_SCHEMA_REGISTRY.register("   ", effect_schema.clone()).is_err());
+    assert!(EFFECT_SCHEMA_REGISTRY.register("\t", effect_schema.clone()).is_err());
+    assert!(EFFECT_SCHEMA_REGISTRY.register("\n", effect_schema).is_err());
 }
 
 #[test]
@@ -350,8 +335,7 @@ fn test_effect_schema_duplicate_registration() {
         .is_ok());
 
     // Duplicate registration should fail
-    let duplicate_result =
-        EFFECT_SCHEMA_REGISTRY.register("azure.policy.deny.duplicate", deny_schema);
+    let duplicate_result = EFFECT_SCHEMA_REGISTRY.register("azure.policy.deny.duplicate", deny_schema);
     assert!(duplicate_result.is_err());
 
     // Verify error type
@@ -373,9 +357,7 @@ fn test_azure_policy_effect_removal() {
     ];
 
     for (name, schema) in &effects {
-        assert!(EFFECT_SCHEMA_REGISTRY
-            .register(*name, schema.clone())
-            .is_ok());
+        assert!(EFFECT_SCHEMA_REGISTRY.register(*name, schema.clone()).is_ok());
     }
 
     // Remove one effect
@@ -395,8 +377,7 @@ fn test_azure_policy_effect_removal() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_effect_schema_access() {
-    use std::sync::Barrier;
-    use std::thread;
+    use std::{sync::Barrier, thread};
 
     let barrier = Rc::new(Barrier::new(3));
     let mut handles = vec![];
@@ -412,18 +393,17 @@ fn test_concurrent_effect_schema_access() {
         let barrier = Rc::clone(&barrier);
         let name: String = (*effect_name).into();
 
-        let handle: thread::JoinHandle<Result<(), SchemaRegistryError>> =
-            thread::spawn(move || {
-                let schema = match i {
-                    0 => create_deny_effect_schema(),
-                    1 => create_audit_effect_schema(),
-                    2 => create_modify_effect_schema(),
-                    _ => unreachable!(),
-                };
+        let handle: thread::JoinHandle<Result<(), SchemaRegistryError>> = thread::spawn(move || {
+            let schema = match i {
+                0 => create_deny_effect_schema(),
+                1 => create_audit_effect_schema(),
+                2 => create_modify_effect_schema(),
+                _ => unreachable!(),
+            };
 
-                barrier.wait();
-                EFFECT_SCHEMA_REGISTRY.register(name, schema)
-            });
+            barrier.wait();
+            EFFECT_SCHEMA_REGISTRY.register(name, schema)
+        });
 
         handles.push(handle);
     }
