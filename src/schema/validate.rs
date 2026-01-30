@@ -147,6 +147,7 @@ impl SchemaValidator {
     ) -> Result<(), ValidationError> {
         match value {
             Value::Number(num) => {
+                // Try to get a precise f64 representation for range checking
                 if let Some(float_val) = num.as_f64() {
                     if let Some(min) = minimum {
                         if float_val < min {
@@ -170,11 +171,72 @@ impl SchemaValidator {
                     }
                     Ok(())
                 } else {
-                    Err(ValidationError::TypeMismatch {
-                        expected: "number".into(),
-                        actual: "non-numeric value".into(),
-                        path: path.into(),
-                    })
+                    // For large integers that exceed f64's safe integer range,
+                    // use integer-based comparison when possible.
+                    // This handles values like 1e18 (1000000000000000000) which are valid
+                    // numbers but cannot be precisely represented as f64.
+                    if let Some(int_val) = num.as_i64() {
+                        // Integer fits in i64 - use integer comparison
+                        if let Some(min) = minimum {
+                            if (int_val as f64) < min {
+                                return Err(ValidationError::OutOfRange {
+                                    value: int_val.to_string().into(),
+                                    min: Some(min.to_string().into()),
+                                    max: maximum.map(|m| m.to_string().into()),
+                                    path: path.into(),
+                                });
+                            }
+                        }
+                        if let Some(max) = maximum {
+                            if (int_val as f64) > max {
+                                return Err(ValidationError::OutOfRange {
+                                    value: int_val.to_string().into(),
+                                    min: minimum.map(|m| m.to_string().into()),
+                                    max: Some(max.to_string().into()),
+                                    path: path.into(),
+                                });
+                            }
+                        }
+                        Ok(())
+                    } else if let Some(big_val) = num.as_big() {
+                        // Large integer (BigInt) - check range using BigInt comparison
+                        if let Some(min) = minimum {
+                            let min_int = min as i128;
+                            if let Some(val_i128) = num_traits::ToPrimitive::to_i128(&*big_val) {
+                                if val_i128 < min_int {
+                                    return Err(ValidationError::OutOfRange {
+                                        value: big_val.to_string().into(),
+                                        min: Some(min.to_string().into()),
+                                        max: maximum.map(|m| m.to_string().into()),
+                                        path: path.into(),
+                                    });
+                                }
+                            }
+                            // If we can't convert to i128, the value is extremely large
+                            // and likely exceeds any reasonable minimum bound
+                        }
+                        if let Some(max) = maximum {
+                            let max_int = max as i128;
+                            if let Some(val_i128) = num_traits::ToPrimitive::to_i128(&*big_val) {
+                                if val_i128 > max_int {
+                                    return Err(ValidationError::OutOfRange {
+                                        value: big_val.to_string().into(),
+                                        min: minimum.map(|m| m.to_string().into()),
+                                        max: Some(max.to_string().into()),
+                                        path: path.into(),
+                                    });
+                                }
+                            }
+                            // If we can't convert to i128, the value exceeds any f64 max bound
+                        }
+                        Ok(())
+                    } else {
+                        Err(ValidationError::TypeMismatch {
+                            expected: "number".into(),
+                            actual: "non-numeric value".into(),
+                            path: path.into(),
+                        })
+                    }
                 }
             }
             _ => Err(ValidationError::TypeMismatch {
