@@ -154,7 +154,6 @@ pub mod test_utils;
 pub mod utils;
 mod value;
 
-#[cfg(feature = "newton-crypto")]
 pub mod extensions;
 
 #[cfg(feature = "azure_policy")]

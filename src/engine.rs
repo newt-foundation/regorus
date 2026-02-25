@@ -20,6 +20,9 @@ use crate::{
 use crate::Rc;
 use anyhow::{anyhow, bail, Result};
 
+#[cfg(feature = "newton-identity")]
+use crate::extensions::identity::IdentityData;
+
 /// The Rego evaluation engine.
 #[derive(Debug, Clone)]
 pub struct Engine {
@@ -201,6 +204,12 @@ impl Engine {
     #[cfg_attr(docsrs, doc(cfg(feature = "newton-crypto")))]
     pub fn with_newton_crypto_extensions(&mut self) -> Result<()> {
         crate::extensions::crypto::register_newton_crypto_extensions(self)
+    }
+
+    #[cfg(feature = "newton-identity")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-identity")))]
+    pub fn with_newton_identity_extensions(&mut self, data: IdentityData) -> Result<()> {
+        crate::extensions::identity::register_newton_identity_extensions(self, data)
     }
 
     /// Add a policy.
