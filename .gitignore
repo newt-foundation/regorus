@@ -41,3 +41,15 @@ bindings/ruby/bin/
 
 # JetBrains IDEs files
 .idea/
+
+CLAUDE.md
+.claude/
+
+**/AGENTS.md
+**/CLAUDE.md
+**/.claude
+**/.cursor
+**/PLAN.md
+**/.claude-sessions
+**/.omc
+
