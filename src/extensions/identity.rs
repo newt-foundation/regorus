@@ -17,6 +17,8 @@ const PARSE_FORMAT: &str = "%Y-%m-%d";
 
 #[derive(Debug, Clone)]
 pub struct IdentityData {
+    /// the reference time of "now" for all time based checks as a YYYY-MM-DD string
+    pub reference_date: String,
     /// either created, pending, completed, approved, failed, expired, declined, or needs review
     pub status: String,
     /// the country code selected by the user during the process
@@ -157,9 +159,8 @@ fn age_gte(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("age_gte expects a positive valued age")
             }
 
+            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
             let birthdate = NaiveDate::parse_from_str(&data.birthdate, PARSE_FORMAT)?;
-
-            let now = Local::now().to_utc().date_naive();
 
             match now.years_since(birthdate) {
                 Some(years) => Ok(Value::from(min_age <= years.into())),
@@ -171,7 +172,7 @@ fn age_gte(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
 }
 
 fn not_expired(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    let now = Local::now().to_utc().date_naive();
+    let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
     let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
 
     Ok(Value::from(now.le(&expiration)))
@@ -184,7 +185,7 @@ fn valid_for(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("valid_for expects a positive number of days")
             }
 
-            let now = Local::now().to_utc().date_naive();
+            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
             let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
 
             Ok(Value::from(num_days <= (expiration - now).num_days()))
@@ -200,7 +201,7 @@ fn issued_since(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("issued_since expects a positive number of days")
             }
 
-            let now = Local::now().to_utc().date_naive();
+            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
             let issuance = NaiveDate::parse_from_str(&data.issue_date, PARSE_FORMAT)?;
 
             Ok(Value::from(num_days <= (now - issuance).num_days()))
