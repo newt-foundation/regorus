@@ -4,7 +4,7 @@ Newton-specific Rego built-in functions for checking identity data within the re
 
 ## Overview
 
-The Newton crypto extensions provide Rego built-in functions for checking user age, location, and approval status. These functions require passed in data from the environment initializing the engine. The intent is to allow policy writers to check against data that they know the policy evaluator can source without having direct access to it in a personally identifying way.
+The Newton identity extensions provide Rego built-in functions for checking user age, location, and approval status. These functions require passed in data from the environment initializing the engine. The intent is to allow policy writers to check against data that they know the policy evaluator can source without having direct access to it in a personally identifying way.
 
 ## Feature Flag
 
@@ -200,7 +200,7 @@ authorized if {
 
 ### newton.identity.age_gte
 
-Requires identity_data.birthdate to be at least the required number of years ago at time of policy evaluation.
+Requires identity_data.birthdate to be at least the required number of years ago with respect to the reference date.
 
 **Signature:**
 
@@ -235,7 +235,7 @@ authorized if {
 
 ### newton.identity.not_expired
 
-Requires identity_data.expiration_date to be after the current time at time of policy evaluation.
+Requires identity_data.expiration_date to be after the current time with respect to the reference date.
 
 **Signature:**
 
@@ -245,9 +245,9 @@ result := newton.identity.not_expired()
 
 **Returns:**
 
-| Type   | Description                                                                                 |
-|--------|---------------------------------------------------------------------------------------------|
-| bool   | true if the document expiration date is in the future at time of evaluation otherwise false |
+| Type   | Description                                                                                              |
+|--------|----------------------------------------------------------------------------------------------------------|
+| bool   | true if the document expiration date is in the future with respect to the reference date otherwise false |
 
 **Example:**
 
@@ -264,7 +264,7 @@ authorized if {
 
 ### newton.identity.valid_for
 
-Requires identity_data.expiration_date to be at least the required number of days in the future at time of policy evaluation.
+Requires identity_data.expiration_date to be at least the required number of days in the future with respect to the reference date.
 
 **Signature:**
 
@@ -299,7 +299,7 @@ authorized if {
 
 ### newton.identity.issued_since
 
-Requires identity_data.issue_date to be at least the required number of days in the past at time of policy evaluation.
+Requires identity_data.issue_date to be at least the required number of days in the past with respect to the reference date.
 
 **Signature:**
 
