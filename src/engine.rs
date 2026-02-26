@@ -20,6 +20,9 @@ use crate::{
 use crate::Rc;
 use anyhow::{anyhow, bail, Result};
 
+#[cfg(feature = "newton-identity")]
+use crate::extensions::identity::IdentityData;
+
 /// The Rego evaluation engine.
 #[derive(Debug, Clone)]
 pub struct Engine {
@@ -201,6 +204,62 @@ impl Engine {
     #[cfg_attr(docsrs, doc(cfg(feature = "newton-crypto")))]
     pub fn with_newton_crypto_extensions(&mut self) -> Result<()> {
         crate::extensions::crypto::register_newton_crypto_extensions(self)
+    }
+
+    /// Register Newton crypto extensions with the engine.
+    ///
+    /// This method registers Newton-specific Rego built-in functions for
+    /// Ethereum cryptography operations, including ECDSA signature recovery.
+    ///
+    /// Available functions:
+    /// | newton.identity.check_approved             | Check the status to ensure the data passed all approval checks before submitting    |
+    /// | newton.identity.address_in_countries       | Check that the country on the submitted document is included in a list of countries |
+    /// | newton.identity.address_in_subdivision     | Check that the address on the submitted document is included in a list of states    |
+    /// | newton.identity.address_not_in_subdivision | Check that the address on the submitted document is not within a list of states     |
+    /// | newton.identity.age_gte                    | Check that the birthdate in the data implies an age greater or equal to the input   |
+    /// | newton.identity.not_expired                | Check that the document expiration date has not passed                              |
+    /// | newton.identity.valid_for                  | Check that the document expiration date is valid for subsequent inputted duration   |
+    /// | newton.identity.issued_since               | Check that the document issuing data was at least the specified time ago            |
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let mut engine = Engine::new();
+    /// 
+    /// let id = IdentityData{
+    ///     reference_date: "2026-01-01".to_string(),
+    ///     status: "approved".to_string(),
+    ///     selected_country_code: "US"".to_string(),
+    ///     address_subdivision: "CA".to_string(),
+    ///     address_country_code: "US".to_string(),
+    ///     birthdate: "1970-01-01".to_string(),
+    ///     expiration_date: "2030-01-01".to_string(),
+    ///     issue_date: "2020-01-01".to_string(),
+    ///     issuing_authority: "CA".to_string(),
+    /// }
+    ///
+    /// // Register Newton crypto extensions
+    /// engine.with_newton_identity_extensions(id)?;
+    ///
+    /// engine.add_policy(
+    ///     "test.rego".to_string(),
+    ///     r#"
+    ///    package test
+    ///    allow if {
+    ///        newton.identity.check_approved()
+    ///        newton.identity.address_in_countries(["US"])
+    ///        newton.identity.address_not_in_subdivision(["NY","NC","HI"])
+    ///    }
+    ///    "#
+    ///     .to_string(),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "newton-identity")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-identity")))]
+    pub fn with_newton_identity_extensions(&mut self, data: IdentityData) -> Result<()> {
+        crate::extensions::identity::register_newton_identity_extensions(self, data)
     }
 
     /// Add a policy.
