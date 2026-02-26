@@ -28,38 +28,40 @@ engine.with_newton_identity_extensions(identity_data)?;
 The identity data input data type has the following structure:
 
 ```rust
-struct IdentityData {
+pub struct IdentityData {
+    /// the reference time of "now" for all time based checks as a YYYY-MM-DD string
+    pub reference_date: String,
     /// either created, pending, completed, approved, failed, expired, declined, or needs review
-    status: String,
+    pub status: String,
     /// the country code selected by the user during the process
-    selected_country_code: String,
+    pub selected_country_code: String,
     /// the state from the document address
-    address_subdivision: String,
+    pub address_subdivision: String,
     /// the country from the document address
-    address_country_code: String,
+    pub address_country_code: String,
     /// the birthdate as a YYYY-MM-DD string
-    birthdate: String,
+    pub birthdate: String,
     /// the expiration date of the document
-    expiration_date: String,
+    pub expiration_date: String,
     /// the issuing date of the document
-    issue_date: String,
+    pub issue_date: String,
     /// the country or state that issued the document
-    issuing_authority: String,
+    pub issuing_authority: String,
 }
 ```
 
 ## Built-in Functions
 
-| Builtin                                  | Description                                                                         |
-|------------------------------------------|-------------------------------------------------------------------------------------|
-| newton.identity.check_approved           | Check the status to ensure the data passed all approval checks before submitting    |
-| newton.identity.address_in_countries    | Check that the country on the submitted document is included in a list of countries |
-| newton.identity.address_in_states        | Check that the address on the submitted document is included in a list of states    |
-| newton.identity.address_not_in_states    | Check that the address on the submitted document is not within a list of states     |
-| newton.identity.age_gte                  | Check that the birthdate in the data implies an age greater or equal to the input   |
-| newton.identity.not_expired              | Check that the document expiration date has not passed                              |
-| newton.identity.valid_for                | Check that the document expiration date is valid for subsequent inputted duration   |
-| newton.identity.issued_since             | Check that the document issuing data was at least the specified time ago            |
+| Builtin                                    | Description                                                                         |
+|--------------------------------------------|-------------------------------------------------------------------------------------|
+| newton.identity.check_approved             | Check the status to ensure the data passed all approval checks before submitting    |
+| newton.identity.address_in_countries       | Check that the country on the submitted document is included in a list of countries |
+| newton.identity.address_in_subdivision     | Check that the address on the submitted document is included in a list of states    |
+| newton.identity.address_not_in_subdivision | Check that the address on the submitted document is not within a list of states     |
+| newton.identity.age_gte                    | Check that the birthdate in the data implies an age greater or equal to the input   |
+| newton.identity.not_expired                | Check that the document expiration date has not passed                              |
+| newton.identity.valid_for                  | Check that the document expiration date is valid for subsequent inputted duration   |
+| newton.identity.issued_since               | Check that the document issuing data was at least the specified time ago            |
 
 ### newton.identity.check_approved
 
@@ -125,27 +127,27 @@ authorized if {
 }
 ```
 
-### newton.identity.address_in_states
+### newton.identity.address_in_subdivision
 
-Requires identity_data.address_country_code to equal "US" and identity_data.address_subdivision to be found within the inputted list of states.
+Requires the ISO subdivision location code for identity_data.address_country_code and identity_data.address_subdivision to be found within the inputted list to check against.
 
 **Signature:**
 
 ```rego
-result := newton.identity.address_in_states(state_code_array)
+result := newton.identity.address_in_subdivision(iso_code_array)
 ```
 
 **Arguments:**
 
-| Argument           | Type     | Description                                                      |
-|--------------------|----------|------------------------------------------------------------------|
-| `state_code_array` | string[] | Array of 2 letter US state codes to match with the identity data |
+| Argument         | Type     | Description                                                        |
+|------------------|----------|--------------------------------------------------------------------|
+| `iso_code_array` | string[] | Array of XX-XX or XX-XXX ISO codes to match with the identity data |
 
 **Returns:**
 
-| Type   | Description                                                  |
-|--------|--------------------------------------------------------------|
-| bool   | true if the address state is within the list otherwise false |
+| Type   | Description                                            |
+|--------|--------------------------------------------------------|
+| bool   | true if the address is within the list otherwise false |
 
 **Example:**
 
@@ -156,31 +158,31 @@ import future.keywords.if
 
 # Verify the identity data matches address requirements
 authorized if {
-    newton.identity.address_in_states(["CA","OR","WA"])
+    newton.identity.address_in_subdivision(["US-CA","US-OR","US-WA"])
 }
 ```
 
-### newton.identity.address_not_in_states
+### newton.identity.address_not_in_subdivision
 
-Requires identity_data.address_subdivision to not be included in the inputted list of states.
+Requires the ISO subdivision location code for identity_data.address_country_code and identity_data.address_subdivision to not be found within the inputted list to check against. Useful when also using newton.identity.address_in_countries to exclude certain subdivisions while including all others within the same country as opposed to submitting a really long list to newton.identity.address_in_subdivision.
 
 **Signature:**
 
 ```rego
-result := newton.identity.address_not_in_states(state_code_array)
+result := newton.identity.address_not_in_subdivision(iso_code_array)
 ```
 
 **Arguments:**
 
-| Argument           | Type     | Description                                                      |
-|--------------------|----------|------------------------------------------------------------------|
-| `state_code_array` | string[] | Array of 2 letter US state codes to match with the identity data |
+| Argument         | Type     | Description                                                          |
+|------------------|----------|----------------------------------------------------------------------|
+| `iso_code_array` | string[] | Array of XX-XX or XX-XXX ISO codes to exclude from the identity data |
 
 **Returns:**
 
-| Type   | Description                                                  |
-|--------|--------------------------------------------------------------|
-| bool   | false if the address state is within the list otherwise true |
+| Type   | Description                                            |
+|--------|--------------------------------------------------------|
+| bool   | true if the address is within the list otherwise false |
 
 **Example:**
 
@@ -191,7 +193,8 @@ import future.keywords.if
 
 # Verify the identity data matches address requirements
 authorized if {
-    newton.identity.address_not_in_states(["NY","NC","HI"])
+    newton.identity.address_in_countries(["US"])
+    newton.identity.address_not_in_subdivision(["US-NY","US-NC","US-HI"])
 }
 ```
 
