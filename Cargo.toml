@@ -95,7 +95,7 @@ rego-extensions = []
 newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
 
 # Newton-specific Rego extensions for Identity checks
-newton-identity = ["dep:alloy-sol-types"]
+newton-identity = ["dep:chrono"]
 
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
@@ -137,7 +137,6 @@ indexmap = { version = "2.12.1", default-features = false, features = ["serde"],
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
 
 # Newton extension dependencies
-alloy-sol-types = { version = "0.8", optional = true, default-features = false }
 alloy-primitives = { version = "0.8", optional = true, default-features = false }
 k256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa"] }
 

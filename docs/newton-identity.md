@@ -53,7 +53,7 @@ struct IdentityData {
 | Builtin                                  | Description                                                                         |
 |------------------------------------------|-------------------------------------------------------------------------------------|
 | newton.identity.check_approved           | Check the status to ensure the data passed all approval checks before submitting    |
-| newton.identity.address_in_countryies    | Check that the country on the submitted document is included in a list of countries |
+| newton.identity.address_in_countries    | Check that the country on the submitted document is included in a list of countries |
 | newton.identity.address_in_states        | Check that the address on the submitted document is included in a list of states    |
 | newton.identity.address_not_in_states    | Check that the address on the submitted document is not within a list of states     |
 | newton.identity.age_gte                  | Check that the birthdate in the data implies an age greater or equal to the input   |
@@ -341,6 +341,4 @@ The newton-identity feature adds the following dependencies:
 
 | Crate            | Version | Purpose                      |
 |------------------|---------|------------------------------|
-| alloy-primitives | 0.8     | Ethereum types               |
-
-This is so that when imported, the IdentityData struct can be signed via EIP712 to verify it was sent by the correct user.
+| chrono           | 0.4.40  | Datetime calculation         |

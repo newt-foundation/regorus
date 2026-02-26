@@ -7,9 +7,7 @@
 
 extern crate alloc;
 
-use std::sync::Arc;
-use alloc::{boxed::Box, string::ToString, vec::Vec};
-use alloy_sol_types::sol;
+use alloc::{boxed::Box, string::ToString, vec::Vec, sync::Arc, string::String};
 use chrono::prelude::*;
 
 use crate::{Engine, Value};
@@ -17,24 +15,24 @@ use anyhow::{bail, Result};
 
 const PARSE_FORMAT: &str = "%Y-%m-%d";
 
-sol! {
-    #[derive(Debug)]
-    struct IdentityData {
-        /// either created, pending, completed, approved, failed, expired, declined, or needs review
-        string status;
-        /// the country code selected by the user during the process
-        string selected_country_code;
-        /// the state from the document address
-        string address_subdivision;
-        /// the country from the document address
-        string address_country_code;
-        /// the birthdate as a YYYY-MM-DD string
-        string birthdate;
-        /// the expiration date of the document as a YYYY-MM-DD string
-        string expiration_date;
-        /// the issuing date of the document as a YYYY-MM-DD string
-        string issue_date;
-    }
+#[derive(Debug, Clone)]
+pub struct IdentityData {
+    /// either created, pending, completed, approved, failed, expired, declined, or needs review
+    pub status: String,
+    /// the country code selected by the user during the process
+    pub selected_country_code: String,
+    /// the state from the document address
+    pub address_subdivision: String,
+    /// the country from the document address
+    pub address_country_code: String,
+    /// the birthdate as a YYYY-MM-DD string
+    pub birthdate: String,
+    /// the expiration date of the document
+    pub expiration_date: String,
+    /// the issuing date of the document
+    pub issue_date: String,
+    /// the country or state that issued the document
+    pub issuing_authority: String,
 }
 
 /// Registers all Newton identity extensions with the engine.
@@ -159,22 +157,24 @@ fn age_gte(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("age_gte expects a positive valued age")
             }
 
-            let now = Local::now().fixed_offset();
-            let birthdate = DateTime::parse_from_str(&data.birthdate, PARSE_FORMAT)?;
-            let local_birthdate = birthdate.with_timezone(&now.timezone());
+            let birthdate = NaiveDate::parse_from_str(&data.birthdate, PARSE_FORMAT)?;
 
-            Ok(Value::from(min_age*365 <= (now - local_birthdate).num_days()))
+            let now = Local::now().to_utc().date_naive();
+
+            match now.years_since(birthdate) {
+                Some(years) => Ok(Value::from(min_age <= years.into())),
+                _ => bail!("age_gte recieved invalid birthdate")
+            }
         }
         _ => bail!("age_gte expects a number"),
     }
 }
 
 fn not_expired(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    let now = Local::now().fixed_offset();
-    let expiration = DateTime::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
-    let local_expiration = expiration.with_timezone(&now.timezone());
+    let now = Local::now().to_utc().date_naive();
+    let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
 
-    Ok(Value::from(now.le(&local_expiration)))
+    Ok(Value::from(now.le(&expiration)))
 }
 
 fn valid_for(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
@@ -184,11 +184,10 @@ fn valid_for(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("valid_for expects a positive number of days")
             }
 
-            let now = Local::now().fixed_offset();
-            let expiration = DateTime::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
-            let local_expiration = expiration.with_timezone(&now.timezone());
+            let now = Local::now().to_utc().date_naive();
+            let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
 
-            Ok(Value::from(num_days <= (local_expiration - now).num_days()))
+            Ok(Value::from(num_days <= (expiration - now).num_days()))
         }
         _ => bail!("valid_for expects a number"),
     }
@@ -201,11 +200,10 @@ fn issued_since(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
                 bail!("issued_since expects a positive number of days")
             }
 
-            let now = Local::now().fixed_offset();
-            let issuance = DateTime::parse_from_str(&data.issue_date, PARSE_FORMAT)?;
-            let local_issuance = issuance.with_timezone(&now.timezone());
+            let now = Local::now().to_utc().date_naive();
+            let issuance = NaiveDate::parse_from_str(&data.issue_date, PARSE_FORMAT)?;
 
-            Ok(Value::from(num_days <= (now - local_issuance).num_days()))
+            Ok(Value::from(num_days <= (now - issuance).num_days()))
         }
         _ => bail!("issued_since expects a number"),
     }
