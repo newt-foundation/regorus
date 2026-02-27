@@ -8,44 +8,24 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, string::ToString, format, vec::Vec, string::String};
-use chrono::prelude::*;
 
 use crate::{Engine, Value};
 use anyhow::{bail, Result};
 
-const PARSE_FORMAT: &str = "%Y-%m-%d";
-
 #[derive(Debug, Clone, Default)]
 pub struct IdentityData {
-    /// the reference time of "now" for all time based checks as a YYYY-MM-DD string
-    pub reference_date: String,
-    /// either created, pending, completed, approved, failed, expired, declined, or needs review
-    pub status: String,
-    /// the country code selected by the user during the process
-    pub selected_country_code: String,
     /// the state from the document address
     pub address_subdivision: String,
     /// the country from the document address
     pub address_country_code: String,
-    /// the birthdate as a YYYY-MM-DD string
-    pub birthdate: String,
-    /// the expiration date of the document
-    pub expiration_date: String,
-    /// the issuing date of the document
-    pub issue_date: String,
-    /// the country or state that issued the document
-    pub issuing_authority: String,
+    /// flag for if the user was over 18 at time of screening
+    pub is_over_18: bool,
+    /// flag for if the user was over 21 at time of screening
+    pub is_over_21: bool,
 }
 
 /// Registers all Newton identity extensions with the engine.
 pub fn register_newton_identity_extensions(engine: &mut Engine, data: IdentityData) -> Result<()> {
-    let id_approve = data.clone();
-    engine.add_extension(
-        "newton.identity.check_approved".to_string(),
-        0,
-        Box::new(move |params: Vec<Value>| check_approved(params, &id_approve)),
-    )?;
-    
     let id_country = data.clone();
     engine.add_extension(
         "newton.identity.address_in_countries".to_string(),
@@ -67,39 +47,21 @@ pub fn register_newton_identity_extensions(engine: &mut Engine, data: IdentityDa
         Box::new(move |params: Vec<Value>| address_not_in_subdivision(params, &id_not_state)),
     )?;
 
-    let id_age = data.clone();
+    let id_over_18 = data.clone();
     engine.add_extension(
-        "newton.identity.age_gte".to_string(),
-        1,
-        Box::new(move |params: Vec<Value>| age_gte(params, &id_age)),
-    )?;
-
-    let id_not_expired = data.clone();
-    engine.add_extension(
-        "newton.identity.not_expired".to_string(),
+        "newton.identity.is_over_18".to_string(),
         0,
-        Box::new(move |params: Vec<Value>| not_expired(params, &id_not_expired)),
+        Box::new(move |params: Vec<Value>| over_18(params, &id_over_18)),
     )?;
 
-    let id_valid_for = data.clone();
+    let id_over_21 = data.clone();
     engine.add_extension(
-        "newton.identity.valid_for".to_string(),
-        1,
-        Box::new(move |params: Vec<Value>| valid_for(params, &id_valid_for)),
-    )?;
-
-    let id_issued_since = data.clone();
-    engine.add_extension(
-        "newton.identity.issued_since".to_string(),
-        1,
-        Box::new(move |params: Vec<Value>| issued_since(params, &id_issued_since)),
+        "newton.identity.is_over_21".to_string(),
+        0,
+        Box::new(move |params: Vec<Value>| over_21(params, &id_over_21)),
     )?;
 
     Ok(())
-}
-
-fn check_approved(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    Ok(Value::from(data.status == "approved"))
 }
 
 fn address_in_countries(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
@@ -160,62 +122,12 @@ fn address_not_in_subdivision(params: Vec<Value>, data: &IdentityData) -> Result
     }
 }
 
-fn age_gte(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    match params[0].as_i64() {
-        Ok(min_age) => {
-            if min_age <= 0 {
-                bail!("age_gte expects a positive valued age")
-            }
-
-            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
-            let birthdate = NaiveDate::parse_from_str(&data.birthdate, PARSE_FORMAT)?;
-
-            match now.years_since(birthdate) {
-                Some(years) => Ok(Value::from(min_age <= years.into())),
-                _ => bail!("age_gte received invalid birthdate or reference date")
-            }
-        }
-        _ => bail!("age_gte expects a number"),
-    }
+fn over_18(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
+    Ok(Value::from(data.is_over_18))
 }
 
-fn not_expired(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
-    let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
-
-    Ok(Value::from(now.le(&expiration)))
-}
-
-fn valid_for(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    match params[0].as_i64() {
-        Ok(num_days) => {
-            if num_days <= 0 {
-                bail!("valid_for expects a positive number of days")
-            }
-
-            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
-            let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
-
-            Ok(Value::from(num_days <= (expiration - now).num_days()))
-        }
-        _ => bail!("valid_for expects a number"),
-    }
-}
-
-fn issued_since(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
-    match params[0].as_i64() {
-        Ok(num_days) => {
-            if num_days <= 0 {
-                bail!("issued_since expects a positive number of days")
-            }
-
-            let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
-            let issuance = NaiveDate::parse_from_str(&data.issue_date, PARSE_FORMAT)?;
-
-            Ok(Value::from(num_days <= (now - issuance).num_days()))
-        }
-        _ => bail!("issued_since expects a number"),
-    }
+fn over_21(_params: Vec<Value>, data: &IdentityData) -> Result<Value> {
+    Ok(Value::from(data.is_over_21))
 }
 
 
@@ -223,17 +135,6 @@ fn issued_since(params: Vec<Value>, data: &IdentityData) -> Result<Value> {
 mod tests {
     use super::*;
     use alloc::vec;
-
-    #[test]
-    fn test_check_approved() {
-        let id_approved = IdentityData{ status: "approved".to_string(), ..Default::default() };
-
-        assert!(check_approved(vec![], &id_approved).unwrap().as_bool().unwrap());
-
-        let id_unapproved = IdentityData{ status: "pending".to_string(), ..Default::default() };
-
-        assert!(!check_approved(vec![], &id_unapproved).unwrap().as_bool().unwrap());
-    }
 
     #[test]
     fn test_address_in_countries() {
@@ -346,131 +247,24 @@ mod tests {
     }
 
     #[test]
-    fn test_age_gte() {
-        let id_30 = IdentityData{ reference_date: "2026-02-25".to_string(), birthdate: "1996-01-01".to_string(), ..Default::default() };
-        let params1 = vec![Value::from(21)];
+    fn test_over_18() {
+        let id_approved = IdentityData{ is_over_18: true, ..Default::default() };
 
-        assert!(age_gte(params1, &id_30).unwrap().as_bool().unwrap());
+        assert!(over_18(vec![], &id_approved).unwrap().as_bool().unwrap());
 
-        let params2 = vec![Value::from(31)];
+        let id_unapproved = IdentityData{ is_over_18: false, ..Default::default() };
 
-        assert!(!age_gte(params2, &id_30).unwrap().as_bool().unwrap());
-
-        let params2 = vec![Value::from(30)];
-
-        assert!(age_gte(params2.clone(), &id_30).unwrap().as_bool().unwrap());
-
-        let id_malformed1 = IdentityData{ birthdate: "2026-02-25".to_string(), reference_date: "1996-01-01".to_string(), ..Default::default() };
-
-        assert_eq!(format!("{}",age_gte(params2.clone(), &id_malformed1).unwrap_err()), "age_gte received invalid birthdate or reference date");
-
-        let id_malformed2 = IdentityData{ birthdate: "2066-02-25".to_string(), reference_date: "2026-02-25".to_string(), ..Default::default() };
-
-        assert_eq!(format!("{}",age_gte(params2.clone(), &id_malformed2).unwrap_err()), "age_gte received invalid birthdate or reference date");
-
-        let id_malformed3 = IdentityData{ birthdate: "".to_string(), reference_date: "2026-02-25".to_string(), ..Default::default() };
-
-        assert_eq!(format!("{}",age_gte(params2.clone(), &id_malformed3).unwrap_err()), "premature end of input");
-
-        let id_malformed4 = IdentityData{ birthdate: "03/28/2025".to_string(), reference_date: "2026-02-25".to_string(), ..Default::default() };
-
-        assert_eq!(format!("{}",age_gte(params2.clone(), &id_malformed4).unwrap_err()), "input contains invalid characters");
-
-        let params_malformed1 = vec![Value::from(-10)];
-
-        assert_eq!(format!("{}",age_gte(params_malformed1, &id_30).unwrap_err()), "age_gte expects a positive valued age");
-
-        let params_malformed2 = vec![Value::from("test")];
-
-        assert_eq!(format!("{}",age_gte(params_malformed2, &id_30).unwrap_err()), "age_gte expects a number");
-
-        let id_pathological1 = IdentityData{ birthdate: "2000-02-29".to_string(), reference_date: "2026-02-28".to_string(), ..Default::default() };
-        let params_pathological1 = vec![Value::from(26)];
-
-        assert!(!age_gte(params_pathological1, &id_pathological1).unwrap().as_bool().unwrap());
-
-        let id_pathological2 = IdentityData{ birthdate: "2001-03-01".to_string(), reference_date: "2028-02-29".to_string(), ..Default::default() };
-        let params_pathological2 = vec![Value::from(27)];
-
-        assert!(!age_gte(params_pathological2, &id_pathological2).unwrap().as_bool().unwrap());
+        assert!(!over_18(vec![], &id_unapproved).unwrap().as_bool().unwrap());
     }
 
     #[test]
-    fn test_not_expired() {
-        let id_year = IdentityData{ reference_date: "2026-02-25".to_string(), expiration_date: "2027-02-25".to_string(), ..Default::default() };
+    fn test_over_21() {
+        let id_approved = IdentityData{ is_over_21: true, ..Default::default() };
 
-        assert!(not_expired(vec![], &id_year).unwrap().as_bool().unwrap());
+        assert!(over_21(vec![], &id_approved).unwrap().as_bool().unwrap());
 
-        let id_expired = IdentityData{ reference_date: "2026-02-25".to_string(), expiration_date: "2000-02-25".to_string(), ..Default::default() };
+        let id_unapproved = IdentityData{ is_over_21: false, ..Default::default() };
 
-        assert!(!not_expired(vec![], &id_expired).unwrap().as_bool().unwrap());
-    }
-
-    #[test]
-    fn test_valid_for() {
-        let id_year = IdentityData{ reference_date: "2026-02-25".to_string(), expiration_date: "2027-02-25".to_string(), ..Default::default() };
-        let params1 = vec![Value::from(100)];
-
-        assert!(valid_for(params1, &id_year).unwrap().as_bool().unwrap());
-
-        let params2 = vec![Value::from(366)];
-
-        assert!(!valid_for(params2, &id_year).unwrap().as_bool().unwrap());
-
-        let params2 = vec![Value::from(365)];
-
-        assert!(valid_for(params2.clone(), &id_year).unwrap().as_bool().unwrap());
-
-        let params_malformed1 = vec![Value::from(-10)];
-
-        assert_eq!(format!("{}",valid_for(params_malformed1, &id_year).unwrap_err()), "valid_for expects a positive number of days");
-
-        let params_malformed2 = vec![Value::from("test")];
-
-        assert_eq!(format!("{}",valid_for(params_malformed2, &id_year).unwrap_err()), "valid_for expects a number");
-
-        let id_expired = IdentityData{ expiration_date: "2000-02-29".to_string(), reference_date: "2026-02-28".to_string(), ..Default::default() };
-        let params3 = vec![Value::from(100)];
-
-        assert!(!valid_for(params3, &id_expired).unwrap().as_bool().unwrap());
-
-        let id_pathological = IdentityData{ expiration_date: "2029-03-01".to_string(), reference_date: "2028-02-29".to_string(), ..Default::default() };
-        let params_pathological = vec![Value::from(364)];
-
-        assert!(valid_for(params_pathological, &id_pathological).unwrap().as_bool().unwrap());
-    }
-
-    #[test]
-    fn test_issued_since() {
-        let id_year = IdentityData{ reference_date: "2026-02-25".to_string(), issue_date: "2025-02-25".to_string(), ..Default::default() };
-        let params1 = vec![Value::from(100)];
-
-        assert!(issued_since(params1, &id_year).unwrap().as_bool().unwrap());
-
-        let params2 = vec![Value::from(366)];
-
-        assert!(!issued_since(params2, &id_year).unwrap().as_bool().unwrap());
-
-        let params2 = vec![Value::from(365)];
-
-        assert!(issued_since(params2.clone(), &id_year).unwrap().as_bool().unwrap());
-
-        let params_malformed1 = vec![Value::from(-10)];
-
-        assert_eq!(format!("{}",issued_since(params_malformed1, &id_year).unwrap_err()), "issued_since expects a positive number of days");
-
-        let params_malformed2 = vec![Value::from("test")];
-
-        assert_eq!(format!("{}",issued_since(params_malformed2, &id_year).unwrap_err()), "issued_since expects a number");
-
-        let id_expired = IdentityData{ reference_date: "2000-02-29".to_string(), issue_date: "2026-02-28".to_string(), ..Default::default() };
-        let params3 = vec![Value::from(100)];
-
-        assert!(!issued_since(params3, &id_expired).unwrap().as_bool().unwrap());
-
-        let id_pathological = IdentityData{ reference_date: "2029-03-01".to_string(), issue_date: "2028-02-29".to_string(), ..Default::default() };
-        let params_pathological = vec![Value::from(366)];
-
-        assert!(issued_since(params_pathological, &id_pathological).unwrap().as_bool().unwrap());
+        assert!(!over_21(vec![], &id_unapproved).unwrap().as_bool().unwrap());
     }
 }
