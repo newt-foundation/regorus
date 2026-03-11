@@ -8,4 +8,4 @@ publish = false
 
 [dependencies]
 anyhow = { version = "1.0.83", default-features = false }
-regorus = { path = "../..", default-features = false, features = ["opa-no-std", "newton-tlsn"] }
+regorus = { path = "../..", default-features = false, features = ["opa-no-std"] }
