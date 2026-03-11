@@ -32,6 +32,7 @@ use crate::{Engine, Value};
 /// transcript expansion to prevent memory-exhaustion DoS from malicious
 /// presentations.
 const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PRESENTATION_BYTES: usize = MAX_TRANSCRIPT_BYTES;
 
 /// Registers all Newton TLSNotary extensions with the engine.
 pub fn register_newton_tlsn_extensions(engine: &mut Engine) -> Result<()> {
@@ -68,12 +69,16 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
         .as_string()
         .map_err(|_| anyhow!("notary public key must be a string"))?;
 
+    // base64 input expands to ~75% when decoded; cap input length proportionally
+    if presentation_b64.as_ref().len() > MAX_TRANSCRIPT_BYTES * 4 / 3 + 4 {
+        bail!("presentation base64 input is too large");
+    }
     let presentation_bytes = decode_base64(presentation_b64.as_ref())?;
     // Guard against oversized presentations before expensive deserialization.
     // base64 decodes to ~75% of input size, so MAX_TRANSCRIPT_BYTES covers this.
-    if presentation_bytes.len() > MAX_TRANSCRIPT_BYTES {
+    if presentation_bytes.len() > MAX_PRESENTATION_BYTES {
         bail!(
-            "presentation size ({}) exceeds maximum ({MAX_TRANSCRIPT_BYTES})",
+            "presentation size ({}) exceeds maximum ({MAX_PRESENTATION_BYTES})",
             presentation_bytes.len()
         );
     }
@@ -393,8 +398,9 @@ fn verify_transcript_proof(
 /// Verification therefore has to handle two serialization formats in the same
 /// pipeline.
 fn decode_presentation(bytes: &[u8]) -> Result<PresentationEnvelope> {
-    let (presentation, consumed) = decode_from_slice::<PresentationEnvelope, _>(bytes, standard())
-        .map_err(|e| anyhow!("invalid TLSNotary presentation encoding: {e}"))?;
+    let (presentation, consumed) =
+        decode_from_slice::<PresentationEnvelope, _>(bytes, standard().with_limit::<16_777_216>())
+            .map_err(|e| anyhow!("invalid TLSNotary presentation encoding: {e}"))?;
 
     if consumed != bytes.len() {
         bail!("TLSNotary presentation has trailing bytes");
