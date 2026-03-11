@@ -26,6 +26,13 @@ use tiny_keccak::Hasher as _;
 
 use crate::{Engine, Value};
 
+/// Maximum presentation / transcript size we are willing to allocate (16 MiB).
+///
+/// Checked before base64-decoded presentation deserialization *and* before
+/// transcript expansion to prevent memory-exhaustion DoS from malicious
+/// presentations.
+const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Registers all Newton TLSNotary extensions with the engine.
 pub fn register_newton_tlsn_extensions(engine: &mut Engine) -> Result<()> {
     engine.add_extension(
@@ -62,6 +69,14 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
         .map_err(|_| anyhow!("notary public key must be a string"))?;
 
     let presentation_bytes = decode_base64(presentation_b64.as_ref())?;
+    // Guard against oversized presentations before expensive deserialization.
+    // base64 decodes to ~75% of input size, so MAX_TRANSCRIPT_BYTES covers this.
+    if presentation_bytes.len() > MAX_TRANSCRIPT_BYTES {
+        bail!(
+            "presentation size ({}) exceeds maximum ({MAX_TRANSCRIPT_BYTES})",
+            presentation_bytes.len()
+        );
+    }
     let trusted_notary_pubkey = decode_hex(notary_pubkey_hex.as_ref())?;
     let presentation = decode_presentation(&presentation_bytes)?;
 
@@ -73,6 +88,7 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
             String::new(),
             String::new(),
             String::new(),
+            false,
         ));
     };
 
@@ -87,18 +103,18 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
             ))
         }
     };
-    // NOTE: `identity_name` originates from `IdentityProofEnvelope.name` which
-    // is not directly signed.  However, `verify_identity_commitment` (called
-    // earlier in `verify_presentation`) proves that `identity.opening` matches
-    // the attested certificate commitment.  The opening contains the raw
-    // certificate data — including the server name — so an attacker who
-    // rewrites `identity.name` would need a valid opening that hashes to the
-    // same commitment, which is computationally infeasible.  The comparison
-    // below is therefore a consistency check, not the sole binding.
-    if let Some(identity_name) = verified_presentation.identity_name {
+    // `identity_name` originates from `IdentityProofEnvelope.name`.  The
+    // `verify_identity_commitment` call in `verify_presentation` proves that
+    // `identity.opening` matches the attested certificate commitment, but the
+    // `name` field itself is metadata not directly covered by the commitment
+    // hash.  When `identity` is absent, `server_name` comes solely from the
+    // prover-authored HTTP Host header.  We expose `identity_verified` in the
+    // result so Rego policies can decide whether to trust `server_name`.
+    let identity_verified = if let Some(identity_name) = verified_presentation.identity_name {
         let normalized_identity = normalize_host(&identity_name);
         let normalized_host = normalize_host(&server_name);
         if !normalized_identity.eq_ignore_ascii_case(&normalized_host) {
@@ -107,9 +123,13 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
             ));
         }
-    }
+        true
+    } else {
+        false
+    };
 
     let request_target = match extract_request_target(
         &verified_presentation.transcript.sent,
@@ -122,6 +142,7 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
             ))
         }
     };
@@ -136,6 +157,7 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
             ))
         }
     };
@@ -145,6 +167,7 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
         server_name,
         response_body,
         request_target,
+        identity_verified,
     ))
 }
 
@@ -409,12 +432,22 @@ fn build_result(
     server_name: String,
     response_body: String,
     request_target: String,
+    identity_verified: bool,
 ) -> Value {
     let mut map = BTreeMap::new();
     map.insert(Value::from("verified"), Value::from(verified));
     map.insert(Value::from("server_name"), Value::from(server_name));
     map.insert(Value::from("response_body"), Value::from(response_body));
     map.insert(Value::from("request_target"), Value::from(request_target));
+    // `identity_verified` is true when the presentation includes a certificate
+    // identity proof whose opening matches the attested cert commitment AND
+    // whose name matches the HTTP Host header.  When false, `server_name`
+    // comes solely from the (prover-authored) HTTP Host header.  Rego policies
+    // that need server-identity assurance MUST check `identity_verified == true`.
+    map.insert(
+        Value::from("identity_verified"),
+        Value::from(identity_verified),
+    );
     Value::from_map(map)
 }
 
@@ -581,12 +614,6 @@ fn decompress_partial_transcript(
         received_authed: transcript.recv_idx.clone(),
     })
 }
-
-/// Maximum transcript size we are willing to allocate (16 MiB).
-///
-/// Presentation-controlled `total_len` values could otherwise trigger
-/// unbounded memory allocation before any content validation.
-const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
 
 #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 fn expand_ranges(
