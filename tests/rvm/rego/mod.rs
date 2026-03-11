@@ -92,7 +92,13 @@ fn compile_and_run_rvm(
     input: &Value,
     listing_out: &mut Option<String>,
 ) -> anyhow::Result<Value> {
-    let results = compile_and_run_rvm_with_all_entry_points(compiled_policy, &[entrypoint], data, input, listing_out)?;
+    let results = compile_and_run_rvm_with_all_entry_points(
+        compiled_policy,
+        &[entrypoint],
+        data,
+        input,
+        listing_out,
+    )?;
     results
         .into_iter()
         .next()
@@ -107,9 +113,18 @@ fn compile_and_run_rvm_with_entry_points(
     input: &Value,
     listing_out: &mut Option<String>,
 ) -> anyhow::Result<Value> {
-    let results = compile_and_run_rvm_with_all_entry_points(compiled_policy, entry_points, data, input, listing_out)?;
+    let results = compile_and_run_rvm_with_all_entry_points(
+        compiled_policy,
+        entry_points,
+        data,
+        input,
+        listing_out,
+    )?;
 
-    if let Some(index) = entry_points.iter().position(|ep| *ep == execute_entry_point) {
+    if let Some(index) = entry_points
+        .iter()
+        .position(|ep| *ep == execute_entry_point)
+    {
         results
             .get(index)
             .cloned()
@@ -216,7 +231,10 @@ fn yaml_test_impl(file: &str) -> Result<()> {
             if let (None, Some(expected_error)) = (&case.want_result, &case.want_error) {
                 let error_str = compilation_error.to_string();
                 if error_str.contains(expected_error) {
-                    println!("✓ RVM compilation error matches expected for case '{}'", case.note);
+                    println!(
+                        "✓ RVM compilation error matches expected for case '{}'",
+                        case.note
+                    );
                     println!("passed");
                     continue;
                 }
@@ -274,8 +292,10 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                             );
                         }
 
-                        for (index, (actual, expected)) in
-                            actual_results.iter().zip(expected_results.iter()).enumerate()
+                        for (index, (actual, expected)) in actual_results
+                            .iter()
+                            .zip(expected_results.iter())
+                            .enumerate()
                         {
                             let expected_value = match expected {
                                 ValueOrVec::Single(v) => v.clone(),
@@ -345,7 +365,13 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         &mut last_listing,
                     )
                 } else {
-                    compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value, &mut last_listing)
+                    compile_and_run_rvm(
+                        &compiled_policy,
+                        &case.query,
+                        &data,
+                        &input_value,
+                        &mut last_listing,
+                    )
                 };
 
                 match result {
@@ -429,7 +455,13 @@ fn yaml_test_impl(file: &str) -> Result<()> {
                         &mut last_listing,
                     )
                 } else {
-                    compile_and_run_rvm(&compiled_policy, &case.query, &data, &input_value, &mut last_listing)
+                    compile_and_run_rvm(
+                        &compiled_policy,
+                        &case.query,
+                        &data,
+                        &input_value,
+                        &mut last_listing,
+                    )
                 };
 
                 match result {

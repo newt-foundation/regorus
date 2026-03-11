@@ -7,8 +7,8 @@ use alloc::{boxed::Box, format, string::ToString};
 
 use crate::{
     languages::azure_rbac::ast::{
-        BinaryExpression, ConditionExpr, ConditionExpression, ConditionOperator, EmptySpan, LogicalExpression,
-        LogicalOperator, UnaryExpression, UnaryOperator,
+        BinaryExpression, ConditionExpr, ConditionExpression, ConditionOperator, EmptySpan,
+        LogicalExpression, LogicalOperator, UnaryExpression, UnaryOperator,
     },
     lexer::{AzureRbacTokenKind, Lexer, Source, Token, TokenKind},
 };
@@ -16,7 +16,9 @@ use crate::{
 use super::error::ConditionParseError;
 
 /// Parse a condition expression string into AST
-pub fn parse_condition_expression(condition_str: &str) -> Result<ConditionExpression, ConditionParseError> {
+pub fn parse_condition_expression(
+    condition_str: &str,
+) -> Result<ConditionExpression, ConditionParseError> {
     if condition_str.trim().is_empty() {
         return Err(ConditionParseError::UnsupportedCondition(
             "Empty condition expression".to_string(),
@@ -173,7 +175,9 @@ impl<'source> ConditionParser<'source> {
     }
 
     /// Parse comparison/binary expression
-    pub(super) fn parse_comparison_expression(&mut self) -> Result<ConditionExpr, ConditionParseError> {
+    pub(super) fn parse_comparison_expression(
+        &mut self,
+    ) -> Result<ConditionExpr, ConditionParseError> {
         let left = self.parse_primary_expression()?;
 
         // Check for binary operator

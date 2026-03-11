@@ -25,7 +25,12 @@ pub fn create_some_in_binding_plan<T: VariableBindingContext>(
 ) -> Result<BindingPlan> {
     let key_plan = if let Some(key) = key_expr {
         let mut newly_bound = BTreeSet::new();
-        let plan = create_destructuring_plan_with_tracking(key, context, ScopingMode::RespectParent, &mut newly_bound);
+        let plan = create_destructuring_plan_with_tracking(
+            key,
+            context,
+            ScopingMode::RespectParent,
+            &mut newly_bound,
+        );
         if let Some(plan) = plan {
             validate_pattern_bindings(key, &newly_bound, context)?;
             Some(plan)

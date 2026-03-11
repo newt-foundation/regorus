@@ -30,8 +30,14 @@ pub enum LookupIndexError {
 impl fmt::Display for LookupIndexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            LookupIndexError::ModuleOutOfBounds { module_idx, modules } => {
-                write!(f, "module_idx {module_idx} out of bounds (modules={modules})")
+            LookupIndexError::ModuleOutOfBounds {
+                module_idx,
+                modules,
+            } => {
+                write!(
+                    f,
+                    "module_idx {module_idx} out of bounds (modules={modules})"
+                )
             }
             LookupIndexError::NodeOutOfBounds {
                 module_idx,
@@ -96,7 +102,12 @@ impl<T: Clone> Lookup<T> {
 
     /// Set data using direct indices with bounds checking.
     /// Returns Ok(()) if written, Err if either index is out of bounds.
-    pub(crate) fn set_checked(&mut self, module_idx: u32, node_idx: u32, value: T) -> LookupResult<()> {
+    pub(crate) fn set_checked(
+        &mut self,
+        module_idx: u32,
+        node_idx: u32,
+        value: T,
+    ) -> LookupResult<()> {
         let slot = self.slot_mut(module_idx, node_idx)?;
         *slot = Some(value);
         Ok(())

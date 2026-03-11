@@ -43,7 +43,11 @@ pub fn policies_with_inputs() -> Vec<(String, Vec<String>)> {
         ),
         (
             "azure_vm_policy.rego",
-            vec!["azure_vm_input.json", "azure_vm_input2.json", "azure_vm_input3.json"],
+            vec![
+                "azure_vm_input.json",
+                "azure_vm_input2.json",
+                "azure_vm_input3.json",
+            ],
         ),
         (
             "azure_storage_policy.rego",
@@ -63,7 +67,11 @@ pub fn policies_with_inputs() -> Vec<(String, Vec<String>)> {
         ),
         (
             "azure_nsg_policy.rego",
-            vec!["azure_nsg_input.json", "azure_nsg_input2.json", "azure_nsg_input3.json"],
+            vec![
+                "azure_nsg_input.json",
+                "azure_nsg_input2.json",
+                "azure_nsg_input3.json",
+            ],
         ),
     ];
 

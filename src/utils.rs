@@ -46,7 +46,11 @@ pub fn get_path_string(refr: &Expr, document: Option<&str>) -> Result<String> {
 
 pub type FunctionTable = BTreeMap<String, (Vec<Ref<Rule>>, u8, Ref<Module>)>;
 
-fn get_extra_arg_impl(expr: &Expr, module: Option<&str>, functions: &FunctionTable) -> Result<Option<Ref<Expr>>> {
+fn get_extra_arg_impl(
+    expr: &Expr,
+    module: Option<&str>,
+    functions: &FunctionTable,
+) -> Result<Option<Ref<Expr>>> {
     if let Expr::Call { fcn, params, .. } = expr {
         let full_path = get_path_string(fcn, module)?;
         let n_args = if let Some((_, n_args, _)) = functions.get(&full_path) {
@@ -68,7 +72,11 @@ fn get_extra_arg_impl(expr: &Expr, module: Option<&str>, functions: &FunctionTab
     Ok(None)
 }
 
-pub fn get_extra_arg(expr: &Expr, module: Option<&str>, functions: &FunctionTable) -> Option<Ref<Expr>> {
+pub fn get_extra_arg(
+    expr: &Expr,
+    module: Option<&str>,
+    functions: &FunctionTable,
+) -> Option<Ref<Expr>> {
     get_extra_arg_impl(expr, module, functions).unwrap_or_default()
 }
 
@@ -88,13 +96,17 @@ pub fn gather_functions(modules: &[Ref<Module>]) -> Result<FunctionTable> {
 
                 if let Some((functions, arity, _)) = table.get_mut(&full_path) {
                     if args.len() as u8 != *arity {
-                        bail!(
-                            span.error(format!("{full_path} was previously defined with {arity} arguments.").as_str())
-                        );
+                        bail!(span.error(
+                            format!("{full_path} was previously defined with {arity} arguments.")
+                                .as_str()
+                        ));
                     }
                     functions.push(rule.clone());
                 } else {
-                    table.insert(full_path, (vec![rule.clone()], args.len() as u8, module.clone()));
+                    table.insert(
+                        full_path,
+                        (vec![rule.clone()], args.len() as u8, module.clone()),
+                    );
                 }
             }
         }

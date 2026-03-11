@@ -6,8 +6,9 @@ mod params;
 mod types;
 
 pub use params::{
-    ArrayCreateParams, BuiltinCallParams, ChainedIndexParams, ComprehensionBeginParams, FunctionCallParams,
-    InstructionData, LoopStartParams, ObjectCreateParams, SetCreateParams, VirtualDataDocumentLookupParams,
+    ArrayCreateParams, BuiltinCallParams, ChainedIndexParams, ComprehensionBeginParams,
+    FunctionCallParams, InstructionData, LoopStartParams, ObjectCreateParams, SetCreateParams,
+    VirtualDataDocumentLookupParams,
 };
 pub use types::{ComprehensionMode, LiteralOrRegister, LoopMode};
 

@@ -27,18 +27,18 @@ where
     let mut schemas = Vec::new();
 
     for item in array.into_iter() {
-        let schema = if let Some(name) = item.as_str() {
-            // Look up schema by name in the registry
-            RESOURCE_SCHEMA_REGISTRY
-                .get(name)
-                .ok_or_else(|| D::Error::custom(format!("Resource schema '{}' not found in registry", name)))?
-        } else {
-            // Treat as a direct schema definition
-            Rc::new(
-                Schema::deserialize(item.clone())
-                    .map_err(|e| D::Error::custom(format!("Failed to deserialize schema: {}", e)))?,
-            )
-        };
+        let schema =
+            if let Some(name) = item.as_str() {
+                // Look up schema by name in the registry
+                RESOURCE_SCHEMA_REGISTRY.get(name).ok_or_else(|| {
+                    D::Error::custom(format!("Resource schema '{}' not found in registry", name))
+                })?
+            } else {
+                // Treat as a direct schema definition
+                Rc::new(Schema::deserialize(item.clone()).map_err(|e| {
+                    D::Error::custom(format!("Failed to deserialize schema: {}", e))
+                })?)
+            };
 
         // Assert that the schema represents an object type
         if !matches!(schema.as_type(), crate::schema::Type::Object { .. }) {
@@ -53,7 +53,9 @@ where
 
 /// Deserialize effects from either an object of schemas or schema names.
 /// If specified as schema names, look them up from EFFECT_SCHEMA_REGISTRY.
-pub fn deserialize_effects<'de, D>(deserializer: D) -> Result<BTreeMap<String, Rc<Schema>>, D::Error>
+pub fn deserialize_effects<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Rc<Schema>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -65,9 +67,9 @@ where
     for (key, item) in object.into_iter() {
         if let Some(name) = item.as_str() {
             // Look up schema by name in the registry
-            let schema = EFFECT_SCHEMA_REGISTRY
-                .get(name)
-                .ok_or_else(|| D::Error::custom(format!("Effect schema '{}' not found in registry", name)))?;
+            let schema = EFFECT_SCHEMA_REGISTRY.get(name).ok_or_else(|| {
+                D::Error::custom(format!("Effect schema '{}' not found in registry", name))
+            })?;
             effects.insert(key, schema);
         } else {
             // Treat as a direct schema definition

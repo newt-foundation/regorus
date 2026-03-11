@@ -11,7 +11,10 @@ type String = Rc<str>;
 pub enum TargetCompileError {
     /// Multiple different targets specified across modules
     #[error("Multiple different targets specified: '{existing}' and '{conflicting}'")]
-    ConflictingTargets { existing: String, conflicting: String },
+    ConflictingTargets {
+        existing: String,
+        conflicting: String,
+    },
     /// Target not found in registry
     #[error("Target '{0}' not found in registry")]
     TargetNotFound(String),
@@ -29,7 +32,9 @@ pub enum TargetCompileError {
     },
 
     /// No effects have rules defined for the target
-    #[error("Target '{target_name}' requires a rule with name {effect_names} in package '{package}'")]
+    #[error(
+        "Target '{target_name}' requires a rule with name {effect_names} in package '{package}'"
+    )]
     NoEffectRules {
         target_name: String,
         package: String,

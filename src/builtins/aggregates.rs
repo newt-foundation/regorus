@@ -34,7 +34,9 @@ fn count(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
         Value::String(a) => a.encode_utf16().count(),
         a if strict => {
             let span = params[0].span();
-            bail!(span.error(format!("`count` requires array/object/set/string argument. Got `{a}`.").as_str()))
+            bail!(span.error(
+                format!("`count` requires array/object/set/string argument. Got `{a}`.").as_str()
+            ))
         }
         _ => return Ok(Value::Undefined),
     })))

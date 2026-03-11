@@ -217,7 +217,8 @@ fn test_basic_resource_enum_schema() {
     let resource_schema = create_resource_schema();
 
     // Test registration of basic resource enum schema
-    let result = RESOURCE_SCHEMA_REGISTRY.register("azure.resource.types.basic", resource_schema.clone());
+    let result =
+        RESOURCE_SCHEMA_REGISTRY.register("azure.resource.types.basic", resource_schema.clone());
     assert!(result.is_ok());
     assert!(RESOURCE_SCHEMA_REGISTRY.contains("azure.resource.types.basic"));
 
@@ -250,7 +251,8 @@ fn test_storage_resource_schema() {
     let storage_schema = create_storage_resource_schema();
 
     // Test registration of storage resource schema
-    let result = RESOURCE_SCHEMA_REGISTRY.register("azure.resource.storage.test", storage_schema.clone());
+    let result =
+        RESOURCE_SCHEMA_REGISTRY.register("azure.resource.storage.test", storage_schema.clone());
     assert!(result.is_ok());
     assert!(RESOURCE_SCHEMA_REGISTRY.contains("azure.resource.storage.test"));
 
@@ -267,7 +269,8 @@ fn test_network_resource_schema() {
     let network_schema = create_network_resource_schema();
 
     // Test registration of network resource schema
-    let result = RESOURCE_SCHEMA_REGISTRY.register("azure.resource.network.test", network_schema.clone());
+    let result =
+        RESOURCE_SCHEMA_REGISTRY.register("azure.resource.network.test", network_schema.clone());
     assert!(result.is_ok());
     assert!(RESOURCE_SCHEMA_REGISTRY.contains("azure.resource.network.test"));
 
@@ -290,9 +293,15 @@ fn test_multiple_resource_schemas() {
     let storage_name = "azure.resource.storage.multiple";
     let network_name = "azure.resource.network.multiple";
 
-    assert!(RESOURCE_SCHEMA_REGISTRY.register(vm_name, vm_schema).is_ok());
-    assert!(RESOURCE_SCHEMA_REGISTRY.register(storage_name, storage_schema).is_ok());
-    assert!(RESOURCE_SCHEMA_REGISTRY.register(network_name, network_schema).is_ok());
+    assert!(RESOURCE_SCHEMA_REGISTRY
+        .register(vm_name, vm_schema)
+        .is_ok());
+    assert!(RESOURCE_SCHEMA_REGISTRY
+        .register(storage_name, storage_schema)
+        .is_ok());
+    assert!(RESOURCE_SCHEMA_REGISTRY
+        .register(network_name, network_schema)
+        .is_ok());
 
     // Verify all are registered
     assert!(RESOURCE_SCHEMA_REGISTRY.contains(vm_name));
@@ -398,7 +407,8 @@ fn test_resource_schema_validation_patterns() {
     let schema = Schema::from_serde_json_value(complex_resource_schema).unwrap();
     let schema_rc = Rc::new(schema);
 
-    let result = RESOURCE_SCHEMA_REGISTRY.register("azure.template.arm.patterns", schema_rc.clone());
+    let result =
+        RESOURCE_SCHEMA_REGISTRY.register("azure.template.arm.patterns", schema_rc.clone());
     assert!(result.is_ok());
     assert!(RESOURCE_SCHEMA_REGISTRY.contains("azure.template.arm.patterns"));
 
@@ -413,14 +423,18 @@ fn test_resource_schema_with_invalid_names() {
     let resource_schema = create_resource_schema();
 
     // Test invalid names
-    assert!(RESOURCE_SCHEMA_REGISTRY.register("", resource_schema.clone()).is_err());
+    assert!(RESOURCE_SCHEMA_REGISTRY
+        .register("", resource_schema.clone())
+        .is_err());
     assert!(RESOURCE_SCHEMA_REGISTRY
         .register("   ", resource_schema.clone())
         .is_err());
     assert!(RESOURCE_SCHEMA_REGISTRY
         .register("\t", resource_schema.clone())
         .is_err());
-    assert!(RESOURCE_SCHEMA_REGISTRY.register("\n", resource_schema).is_err());
+    assert!(RESOURCE_SCHEMA_REGISTRY
+        .register("\n", resource_schema)
+        .is_err());
 }
 
 #[test]
@@ -433,7 +447,8 @@ fn test_resource_schema_duplicate_registration() {
         .is_ok());
 
     // Duplicate registration should fail
-    let duplicate_result = RESOURCE_SCHEMA_REGISTRY.register("azure.resource.vm.duplicate", vm_schema);
+    let duplicate_result =
+        RESOURCE_SCHEMA_REGISTRY.register("azure.resource.vm.duplicate", vm_schema);
     assert!(duplicate_result.is_err());
 
     // Verify error type
@@ -450,12 +465,20 @@ fn test_azure_resource_removal() {
     // Register multiple Azure Resource schemas with unique names
     let resources = vec![
         ("azure.resource.vm.removal", create_vm_resource_schema()),
-        ("azure.resource.storage.removal", create_storage_resource_schema()),
-        ("azure.resource.network.removal", create_network_resource_schema()),
+        (
+            "azure.resource.storage.removal",
+            create_storage_resource_schema(),
+        ),
+        (
+            "azure.resource.network.removal",
+            create_network_resource_schema(),
+        ),
     ];
 
     for (name, schema) in &resources {
-        assert!(RESOURCE_SCHEMA_REGISTRY.register(*name, schema.clone()).is_ok());
+        assert!(RESOURCE_SCHEMA_REGISTRY
+            .register(*name, schema.clone())
+            .is_ok());
     }
 
     // Remove one resource
@@ -491,17 +514,18 @@ fn test_concurrent_resource_schema_access() {
         let barrier = Rc::clone(&barrier);
         let name: String = (*resource_name).into();
 
-        let handle: thread::JoinHandle<Result<(), SchemaRegistryError>> = thread::spawn(move || {
-            let schema = match i {
-                0 => create_vm_resource_schema(),
-                1 => create_storage_resource_schema(),
-                2 => create_network_resource_schema(),
-                _ => unreachable!(),
-            };
+        let handle: thread::JoinHandle<Result<(), SchemaRegistryError>> =
+            thread::spawn(move || {
+                let schema = match i {
+                    0 => create_vm_resource_schema(),
+                    1 => create_storage_resource_schema(),
+                    2 => create_network_resource_schema(),
+                    _ => unreachable!(),
+                };
 
-            barrier.wait();
-            RESOURCE_SCHEMA_REGISTRY.register(name, schema)
-        });
+                barrier.wait();
+                RESOURCE_SCHEMA_REGISTRY.register(name, schema)
+            });
 
         handles.push(handle);
     }

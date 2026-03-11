@@ -15,7 +15,10 @@ use anyhow::{bail, Result};
 use regex::Regex;
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
-    m.insert("regex.find_all_string_submatch_n", (find_all_string_submatch_n, 3));
+    m.insert(
+        "regex.find_all_string_submatch_n",
+        (find_all_string_submatch_n, 3),
+    );
     m.insert("regex.find_n", (find_n, 3));
     // TODO: m.insert("regex.globs_match", (globs_match, 2));
     m.insert("regex.is_valid", (is_valid, 1));
@@ -25,7 +28,12 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
     m.insert("regex.template_match", (regex_template_match, 4));
 }
 
-fn find_all_string_submatch_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+fn find_all_string_submatch_n(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
     let name = "regex.find_all_string_submatch_n";
     ensure_args_count(span, name, params, args, 3)?;
 
@@ -33,7 +41,8 @@ fn find_all_string_submatch_n(span: &Span, params: &[Ref<Expr>], args: &[Value],
     let value = ensure_string(name, &params[1], &args[1])?;
     let n = ensure_numeric(name, &params[2], &args[2])?;
 
-    let pattern = Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
+    let pattern =
+        Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
 
     if !n.is_integer() {
         bail!(params[2].span().error("n must be an integer"));
@@ -79,7 +88,8 @@ fn find_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
     let value = ensure_string(name, &params[1], &args[1])?;
     let n = ensure_numeric(name, &params[2], &args[2])?;
 
-    let pattern = Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
+    let pattern =
+        Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
 
     if !n.is_integer() {
         bail!(params[2].span().error("n must be an integer"));
@@ -108,20 +118,32 @@ fn find_n(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> R
 fn is_valid(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "regex.is_valid";
     ensure_args_count(span, name, params, args, 1)?;
-    Ok(ensure_string(name, &params[0], &args[0]).map_or(Value::Bool(false), |p| Value::Bool(Regex::new(&p).is_ok())))
+    Ok(ensure_string(name, &params[0], &args[0])
+        .map_or(Value::Bool(false), |p| Value::Bool(Regex::new(&p).is_ok())))
 }
 
-pub fn regex_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+pub fn regex_match(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
     let name = "regex.match";
     ensure_args_count(span, name, params, args, 2)?;
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
 
-    let pattern = Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
+    let pattern =
+        Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
     Ok(Value::Bool(pattern.is_match(&value)))
 }
 
-fn regex_replace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+fn regex_replace(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
     let name = "regex.replace";
     ensure_args_count(span, name, params, args, 3)?;
 
@@ -135,7 +157,9 @@ fn regex_replace(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: boo
         _ => return Ok(Value::Undefined),
     };
 
-    Ok(Value::String(pattern.replace_all(&s, value.as_ref()).into()))
+    Ok(Value::String(
+        pattern.replace_all(&s, value.as_ref()).into(),
+    ))
 }
 
 fn regex_split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
@@ -144,7 +168,8 @@ fn regex_split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     let pattern = ensure_string(name, &params[0], &args[0])?;
     let value = ensure_string(name, &params[1], &args[1])?;
 
-    let pattern = Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
+    let pattern =
+        Regex::new(&pattern).or_else(|_| bail!(params[0].span().error("invalid regex")))?;
     Ok(Value::from_array(
         pattern
             .split(&value)
@@ -158,7 +183,12 @@ fn regex_split(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ))
 }
 
-fn regex_template_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+fn regex_template_match(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
     let name = "regex.template_match";
     ensure_args_count(span, name, params, args, 4)?;
     let template = ensure_string(name, &params[0], &args[0])?;
@@ -171,7 +201,9 @@ fn regex_template_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _stri
     let mut template = template.as_ref();
     let mut value = value.as_ref();
 
-    while let (Some(start), Some(end)) = (template.find(delimiter_start), template.find(delimiter_end)) {
+    while let (Some(start), Some(end)) =
+        (template.find(delimiter_start), template.find(delimiter_end))
+    {
         if start >= end {
             return Ok(Value::Undefined);
         }

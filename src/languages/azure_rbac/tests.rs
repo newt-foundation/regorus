@@ -89,7 +89,10 @@ mod condition_tests {
             ("@Request[attr] InvalidOperator 'value'", "Invalid operator"),
             ("@Request[attr] StringEquals", "Missing right operand"),
             ("StringEquals 'value'", "Missing left operand"),
-            ("@Request[attr] 'value'", "Missing operator between operands"),
+            (
+                "@Request[attr] 'value'",
+                "Missing operator between operands",
+            ),
             ("StringEquals 'value'", "Missing left operand"),
             ("StringEquals", "Binary operator without any operands"),
             (
@@ -111,9 +114,15 @@ mod condition_tests {
             ("NOT", "Standalone NOT without operand"),
             ("Exists", "Exists without operand"),
             ("NotExists", "NotExists without operand"),
-            ("(@Request[attr] StringEquals 'value'", "Unmatched parenthesis"),
+            (
+                "(@Request[attr] StringEquals 'value'",
+                "Unmatched parenthesis",
+            ),
             ("@Request[attr] StringEquals 'unclosed", "Unclosed string"),
-            ("@Request[attr] StringEquals 'value')", "Unexpected closing parenthesis"),
+            (
+                "@Request[attr] StringEquals 'value')",
+                "Unexpected closing parenthesis",
+            ),
         ];
 
         for (expression, description) in invalid_expressions {

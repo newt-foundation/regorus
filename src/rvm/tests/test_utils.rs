@@ -21,15 +21,32 @@ pub fn test_round_trip_serialization(program: &Program) -> Result<(), String> {
 
     // Basic validation: ensure literal section decodes cleanly under the current format.
     if serialized1.len() >= 8 && serialized1.starts_with(&Program::MAGIC) {
-        let version = u32::from_le_bytes([serialized1[4], serialized1[5], serialized1[6], serialized1[7]]);
+        let version = u32::from_le_bytes([
+            serialized1[4],
+            serialized1[5],
+            serialized1[6],
+            serialized1[7],
+        ]);
 
         if version == 2 && serialized1.len() >= 25 {
-            let entry_points_len =
-                u32::from_le_bytes([serialized1[8], serialized1[9], serialized1[10], serialized1[11]]) as usize;
-            let sources_len =
-                u32::from_le_bytes([serialized1[12], serialized1[13], serialized1[14], serialized1[15]]) as usize;
-            let literals_len =
-                u32::from_le_bytes([serialized1[16], serialized1[17], serialized1[18], serialized1[19]]) as usize;
+            let entry_points_len = u32::from_le_bytes([
+                serialized1[8],
+                serialized1[9],
+                serialized1[10],
+                serialized1[11],
+            ]) as usize;
+            let sources_len = u32::from_le_bytes([
+                serialized1[12],
+                serialized1[13],
+                serialized1[14],
+                serialized1[15],
+            ]) as usize;
+            let literals_len = u32::from_le_bytes([
+                serialized1[16],
+                serialized1[17],
+                serialized1[18],
+                serialized1[19],
+            ]) as usize;
             let entry_points_start = 25;
             let sources_start = entry_points_start + entry_points_len;
             let literals_start = sources_start + sources_len;
@@ -42,11 +59,16 @@ pub fn test_round_trip_serialization(program: &Program) -> Result<(), String> {
                 ) {
                     Ok((decoded_literals, _)) => {
                         if binaries_to_values(decoded_literals).is_err() {
-                            return Err("Failed to convert literal table from binary representation".into());
+                            return Err(
+                                "Failed to convert literal table from binary representation".into(),
+                            );
                         }
                     }
                     Err(err) => {
-                        return Err(format!("Failed to decode literal table with bincode: {}", err));
+                        return Err(format!(
+                            "Failed to decode literal table with bincode: {}",
+                            err
+                        ));
                     }
                 }
             }

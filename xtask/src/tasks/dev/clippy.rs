@@ -39,7 +39,13 @@ impl ClippyCommand {
                 run_cargo_step(
                     &workspace,
                     "cargo clippy --all-targets --all-features -- -Dwarnings",
-                    ["clippy", "--all-targets", "--all-features", "--", "-Dwarnings"],
+                    [
+                        "clippy",
+                        "--all-targets",
+                        "--all-features",
+                        "--",
+                        "-Dwarnings",
+                    ],
                 )?;
             }
         }
@@ -51,7 +57,8 @@ impl ClippyCommand {
         )?;
 
         for manifest in BINDING_MANIFESTS {
-            let label = format!("cargo clippy --manifest-path {manifest} --all-targets -- -Dwarnings");
+            let label =
+                format!("cargo clippy --manifest-path {manifest} --all-targets -- -Dwarnings");
             run_cargo_step(
                 &workspace,
                 &label,
@@ -83,12 +90,20 @@ fn run_clippy_with_sarif(workspace: &Path, sarif: &Path) -> Result<()> {
     }
 
     let xtask_target = workspace.join("target").join("xtask");
-    std::fs::create_dir_all(&xtask_target)
-        .with_context(|| format!("failed to ensure xtask scratch directory at {}", xtask_target.display()))?;
+    std::fs::create_dir_all(&xtask_target).with_context(|| {
+        format!(
+            "failed to ensure xtask scratch directory at {}",
+            xtask_target.display()
+        )
+    })?;
     let json_path = xtask_target.join("clippy.json");
 
-    let json_file = File::create(&json_path)
-        .with_context(|| format!("failed to create intermediate clippy output at {}", json_path.display()))?;
+    let json_file = File::create(&json_path).with_context(|| {
+        format!(
+            "failed to create intermediate clippy output at {}",
+            json_path.display()
+        )
+    })?;
 
     let mut cargo = Command::new("cargo");
     cargo.current_dir(workspace);
@@ -104,8 +119,12 @@ fn run_clippy_with_sarif(workspace: &Path, sarif: &Path) -> Result<()> {
         "cargo clippy --all-targets --all-features --message-format=json -- -Dwarnings",
     )?;
 
-    let json_input = File::open(&json_path)
-        .with_context(|| format!("failed to reopen clippy JSON output at {}", json_path.display()))?;
+    let json_input = File::open(&json_path).with_context(|| {
+        format!(
+            "failed to reopen clippy JSON output at {}",
+            json_path.display()
+        )
+    })?;
     let sarif_file = File::create(&sarif_path)
         .with_context(|| format!("failed to create SARIF output at {}", sarif_path.display()))?;
 

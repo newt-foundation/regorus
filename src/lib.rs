@@ -172,8 +172,9 @@ pub use policy_info::PolicyInfo;
 pub use utils::limits::LimitError;
 #[cfg(feature = "allocator-memory-limits")]
 pub use utils::limits::{
-    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters, global_memory_limit,
-    set_global_memory_limit, set_thread_flush_threshold_override, thread_memory_flush_threshold,
+    check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters,
+    global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
+    thread_memory_flush_threshold,
 };
 pub use value::Value;
 

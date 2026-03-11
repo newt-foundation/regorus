@@ -46,7 +46,9 @@ type String = Rc<str>;
 /// ```
 /// This function returns a map with entries for each query containing the resource type
 /// conditions, mapping queries to their respective type names and schemas.
-pub fn infer_resource_type(interpreter: &mut Interpreter) -> Result<InferredResourceTypes, TargetCompileError> {
+pub fn infer_resource_type(
+    interpreter: &mut Interpreter,
+) -> Result<InferredResourceTypes, TargetCompileError> {
     // Check if we have target info
     if let Some(ref target_info) = interpreter.compiled_policy.target_info {
         let target = &target_info.target;

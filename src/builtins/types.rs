@@ -71,7 +71,12 @@ pub fn get_type(value: &Value) -> &str {
     }
 }
 
-pub fn type_name(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
+pub fn type_name(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    _strict: bool,
+) -> Result<Value> {
     ensure_args_count(span, "type_name", params, args, 1)?;
     Ok(Value::String(get_type(&args[0]).into()))
 }

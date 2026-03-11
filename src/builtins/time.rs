@@ -1,6 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(clippy::as_conversions, clippy::unused_trait_names, clippy::pattern_type_mismatch)]
+#![allow(
+    clippy::as_conversions,
+    clippy::unused_trait_names,
+    clippy::pattern_type_mismatch
+)]
 use crate::{
     ast::{Expr, Ref},
     builtins,
@@ -12,7 +16,10 @@ use crate::{
 
 use anyhow::{bail, Result};
 
-use chrono::{DateTime, Datelike, Days, FixedOffset, Local, Months, SecondsFormat, TimeZone, Timelike, Utc, Weekday};
+use chrono::{
+    DateTime, Datelike, Days, FixedOffset, Local, Months, SecondsFormat, TimeZone, Timelike, Utc,
+    Weekday,
+};
 use chrono_tz::Tz;
 
 pub(in crate::builtins) mod compat;
@@ -136,7 +143,12 @@ fn now_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Re
     safe_timestamp_nanos(span, strict, Utc::now().timestamp_nanos_opt())
 }
 
-fn parse_duration_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn parse_duration_ns(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "time.parse_duration_ns";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -157,14 +169,19 @@ fn parse_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> 
     safe_timestamp_nanos(span, strict, datetime.timestamp_nanos_opt())
 }
 
-fn parse_rfc3339_ns(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn parse_rfc3339_ns(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "time.parse_rfc3339_ns";
     ensure_args_count(span, name, params, args, 1)?;
 
     let value = ensure_string(name, &params[0], &args[0])?;
 
-    let datetime =
-        DateTime::parse_from_rfc3339(&value).map_err(|err| anyhow::anyhow!("Failed to parse datetime: {}", err))?;
+    let datetime = DateTime::parse_from_rfc3339(&value)
+        .map_err(|err| anyhow::anyhow!("Failed to parse datetime: {}", err))?;
     safe_timestamp_nanos(span, strict, datetime.timestamp_nanos_opt())
 }
 
@@ -204,28 +221,35 @@ fn safe_timestamp_nanos(span: &Span, strict: bool, nanos: Option<i64>) -> Result
     }
 }
 
-fn parse_epoch(fcn: &str, arg: &Expr, val: &Value) -> Result<(DateTime<FixedOffset>, Option<String>)> {
+fn parse_epoch(
+    fcn: &str,
+    arg: &Expr,
+    val: &Value,
+) -> Result<(DateTime<FixedOffset>, Option<String>)> {
     match val {
         Value::Number(num) => {
-            let ns = num
-                .as_i64()
-                .ok_or_else(|| arg.span().error("could not convert numeric value of `ns` to int64"))?;
+            let ns = num.as_i64().ok_or_else(|| {
+                arg.span()
+                    .error("could not convert numeric value of `ns` to int64")
+            })?;
 
             return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
         }
 
         Value::Array(arr) => match arr.as_slice() {
             [Value::Number(num)] => {
-                let ns = num
-                    .as_i64()
-                    .ok_or_else(|| arg.span().error("could not convert numeric value of `ns` to int64"))?;
+                let ns = num.as_i64().ok_or_else(|| {
+                    arg.span()
+                        .error("could not convert numeric value of `ns` to int64")
+                })?;
 
                 return Ok((Utc.timestamp_nanos(ns).fixed_offset(), None));
             }
             [Value::Number(num), Value::String(tz), rest @ ..] => {
-                let ns = num
-                    .as_i64()
-                    .ok_or_else(|| arg.span().error("could not convert numeric value of `ns` to int64"))?;
+                let ns = num.as_i64().ok_or_else(|| {
+                    arg.span()
+                        .error("could not convert numeric value of `ns` to int64")
+                })?;
 
                 let datetime = match tz.as_ref() {
                     "UTC" | "" => Utc.timestamp_nanos(ns).fixed_offset(),

@@ -11,7 +11,8 @@ use super::{
     dispatch::InstructionOutcome,
     errors::{Result, VmError},
     execution_model::{
-        ExecutionFrame, ExecutionMode, ExecutionState, FrameKind, RuleFrameData, RuleFramePhase, SuspendReason,
+        ExecutionFrame, ExecutionMode, ExecutionState, FrameKind, RuleFrameData, RuleFramePhase,
+        SuspendReason,
     },
     machine::RegoVM,
 };
@@ -41,11 +42,13 @@ impl RegoVM {
         }
 
         let &(ref entry_point_name, entry_point_pc) =
-            entry_points.get(index).ok_or(VmError::InvalidEntryPointIndex {
-                index,
-                max_index: entry_points.len().saturating_sub(1),
-                pc: self.pc,
-            })?;
+            entry_points
+                .get(index)
+                .ok_or(VmError::InvalidEntryPointIndex {
+                    index,
+                    max_index: entry_points.len().saturating_sub(1),
+                    pc: self.pc,
+                })?;
 
         if entry_point_pc >= self.program.instructions.len() {
             return Err(VmError::EntryPointPcOutOfBounds {
@@ -61,12 +64,13 @@ impl RegoVM {
                 self.reset_execution_timer_state();
 
                 self.validate_vm_state()?;
-                let entry_point_pc_u32 =
-                    u32::try_from(entry_point_pc).map_err(|_| VmError::EntryPointPcOutOfBounds {
+                let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
+                    VmError::EntryPointPcOutOfBounds {
                         pc: entry_point_pc,
                         instruction_count: self.program.instructions.len(),
                         entry_point: entry_point_name.clone(),
-                    })?;
+                    }
+                })?;
 
                 self.jump_to(entry_point_pc_u32)
             }
@@ -81,14 +85,14 @@ impl RegoVM {
     }
 
     pub fn execute_entry_point_by_name(&mut self, name: &str) -> Result<Value> {
-        let entry_point_pc = self
-            .program
-            .get_entry_point(name)
-            .ok_or_else(|| VmError::EntryPointNotFound {
-                name: String::from(name),
-                available: self.program.entry_points.keys().cloned().collect(),
-                pc: self.pc,
-            })?;
+        let entry_point_pc =
+            self.program
+                .get_entry_point(name)
+                .ok_or_else(|| VmError::EntryPointNotFound {
+                    name: String::from(name),
+                    available: self.program.entry_points.keys().cloned().collect(),
+                    pc: self.pc,
+                })?;
 
         if entry_point_pc >= self.program.instructions.len() {
             return Err(VmError::EntryPointPcOutOfBounds {
@@ -104,12 +108,13 @@ impl RegoVM {
                 self.reset_execution_timer_state();
 
                 self.validate_vm_state()?;
-                let entry_point_pc_u32 =
-                    u32::try_from(entry_point_pc).map_err(|_| VmError::EntryPointPcOutOfBounds {
+                let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
+                    VmError::EntryPointPcOutOfBounds {
                         pc: entry_point_pc,
                         instruction_count: self.program.instructions.len(),
                         entry_point: String::from(name),
-                    })?;
+                    }
+                })?;
 
                 self.jump_to(entry_point_pc_u32)
             }
@@ -139,14 +144,12 @@ impl RegoVM {
 
             self.execution_timer_tick(1)?;
             self.executed_instructions = self.executed_instructions.saturating_add(1);
-            let instruction = program
-                .instructions
-                .get(self.pc)
-                .cloned()
-                .ok_or(VmError::ProgramCounterOutOfBounds {
+            let instruction = program.instructions.get(self.pc).cloned().ok_or(
+                VmError::ProgramCounterOutOfBounds {
                     pc: self.pc,
                     instruction_count: program.instructions.len(),
-                })?;
+                },
+            )?;
 
             match self.execute_instruction(&program, instruction)? {
                 InstructionOutcome::Continue => {
@@ -159,7 +162,10 @@ impl RegoVM {
                     return Ok(self.registers.first().cloned().unwrap_or(Value::Undefined));
                 }
                 InstructionOutcome::Suspend { reason } => {
-                    return Err(VmError::UnsupportedSuspendInRunToCompletion { reason, pc: self.pc });
+                    return Err(VmError::UnsupportedSuspendInRunToCompletion {
+                        reason,
+                        pc: self.pc,
+                    });
                 }
             }
         }
@@ -173,7 +179,9 @@ impl RegoVM {
         self.execution_state = ExecutionState::Running;
         match self.jump_to(0_u32) {
             Ok(value) => {
-                self.execution_state = ExecutionState::Completed { result: value.clone() };
+                self.execution_state = ExecutionState::Completed {
+                    result: value.clone(),
+                };
                 Ok(value)
             }
             Err(err) => {
@@ -211,7 +219,9 @@ impl RegoVM {
     pub fn resume(&mut self, resume_value: Option<Value>) -> Result<Value> {
         let (reason, mut last_result) = match self.execution_state.clone() {
             ExecutionState::Suspended {
-                reason, last_result, ..
+                reason,
+                last_result,
+                ..
             } => (reason, last_result),
             current_state => {
                 return Err(VmError::InvalidResumeState {
@@ -308,10 +318,13 @@ impl RegoVM {
             });
 
             if should_finalize_rule {
-                let frame = self.execution_stack.pop().ok_or(VmError::MissingExecutionFrame {
-                    context: "finalizing rule",
-                    pc: self.pc,
-                })?;
+                let frame = self
+                    .execution_stack
+                    .pop()
+                    .ok_or(VmError::MissingExecutionFrame {
+                        context: "finalizing rule",
+                        pc: self.pc,
+                    })?;
                 self.finalize_rule_execution_frame(frame, last_result)?;
                 if self.execution_stack.is_empty() {
                     break;
@@ -320,14 +333,19 @@ impl RegoVM {
             }
 
             let frame_pc = {
-                let frame = self.execution_stack.last().ok_or(VmError::MissingExecutionFrame {
-                    context: "determining pc",
-                    pc: self.pc,
-                })?;
+                let frame = self
+                    .execution_stack
+                    .last()
+                    .ok_or(VmError::MissingExecutionFrame {
+                        context: "determining pc",
+                        pc: self.pc,
+                    })?;
                 frame.pc
             };
 
-            if self.execution_mode == ExecutionMode::Suspendable && self.breakpoints.contains(&frame_pc) {
+            if self.execution_mode == ExecutionMode::Suspendable
+                && self.breakpoints.contains(&frame_pc)
+            {
                 self.pc = frame_pc;
                 let snapshot = (*last_result).clone();
                 self.execution_state = ExecutionState::Suspended {
@@ -339,10 +357,13 @@ impl RegoVM {
             }
 
             if frame_pc >= program.instructions.len() {
-                let frame = self.execution_stack.pop().ok_or(VmError::MissingExecutionFrame {
-                    context: "finalizing out-of-range pc",
-                    pc: self.pc,
-                })?;
+                let frame = self
+                    .execution_stack
+                    .pop()
+                    .ok_or(VmError::MissingExecutionFrame {
+                        context: "finalizing out-of-range pc",
+                        pc: self.pc,
+                    })?;
                 self.finalize_rule_execution_frame(frame, last_result)?;
                 if self.execution_stack.is_empty() {
                     break;
@@ -370,14 +391,12 @@ impl RegoVM {
                 self.execution_state = ExecutionState::Error { error: err.clone() };
                 return Err(err);
             }
-            let instruction = program
-                .instructions
-                .get(self.pc)
-                .cloned()
-                .ok_or(VmError::ProgramCounterOutOfBounds {
+            let instruction = program.instructions.get(self.pc).cloned().ok_or(
+                VmError::ProgramCounterOutOfBounds {
                     pc: self.pc,
                     instruction_count: program.instructions.len(),
-                })?;
+                },
+            )?;
             if let Some(frame_info) = self.execution_stack.last() {
                 if let FrameKind::Comprehension { ref context, .. } = frame_info.kind {
                     if context.iteration_state.is_none()
@@ -385,10 +404,13 @@ impl RegoVM {
                         && !matches!(instruction, Instruction::ComprehensionEnd { .. })
                     {
                         let resume_pc = frame_pc;
-                        let _completed = self.execution_stack.pop().ok_or(VmError::MissingExecutionFrame {
-                            context: "unwinding comprehension",
-                            pc: self.pc,
-                        })?;
+                        let _completed =
+                            self.execution_stack
+                                .pop()
+                                .ok_or(VmError::MissingExecutionFrame {
+                                    context: "unwinding comprehension",
+                                    pc: self.pc,
+                                })?;
                         if let Some(parent) = self.execution_stack.last_mut() {
                             parent.pc = resume_pc;
                             self.frame_pc_overridden = true;
@@ -463,7 +485,9 @@ impl RegoVM {
 
     fn handle_completed_frame_kind(&mut self, kind: FrameKind, last_result: &mut Value) {
         match kind {
-            FrameKind::Main { return_value_register } => {
+            FrameKind::Main {
+                return_value_register,
+            } => {
                 *last_result = self
                     .registers
                     .get(usize::from(return_value_register))
@@ -510,7 +534,9 @@ impl RegoVM {
                     }
                     return Ok(());
                 }
-                FrameKind::Main { return_value_register } => {
+                FrameKind::Main {
+                    return_value_register,
+                } => {
                     let ret_index = usize::from(return_value_register);
                     if self.registers.len() <= ret_index {
                         let new_len = ret_index.saturating_add(1);
@@ -549,7 +575,10 @@ impl RegoVM {
                     }
                 }
                 other_kind => {
-                    self.handle_break_non_rule(ExecutionFrame::new(frame.pc, other_kind), last_result);
+                    self.handle_break_non_rule(
+                        ExecutionFrame::new(frame.pc, other_kind),
+                        last_result,
+                    );
                 }
             }
         }
@@ -575,7 +604,8 @@ impl RegoVM {
                     return Ok(true);
                 }
                 other_kind => {
-                    self.execution_stack.push(ExecutionFrame::new(frame.pc, other_kind));
+                    self.execution_stack
+                        .push(ExecutionFrame::new(frame.pc, other_kind));
                 }
             }
         }
@@ -585,7 +615,9 @@ impl RegoVM {
 
     fn handle_break_non_rule(&mut self, frame: ExecutionFrame, last_result: &mut Value) {
         match frame.kind {
-            FrameKind::Main { return_value_register } => {
+            FrameKind::Main {
+                return_value_register,
+            } => {
                 *last_result = self
                     .registers
                     .get(usize::from(return_value_register))
@@ -602,7 +634,11 @@ impl RegoVM {
         }
     }
 
-    fn finalize_rule_execution_frame(&mut self, frame: ExecutionFrame, last_result: &mut Value) -> Result<()> {
+    fn finalize_rule_execution_frame(
+        &mut self,
+        frame: ExecutionFrame,
+        last_result: &mut Value,
+    ) -> Result<()> {
         match frame.kind {
             FrameKind::Rule(data) => {
                 let result = self.finalize_rule_frame_data(data)?;

@@ -63,8 +63,12 @@ pub(super) fn run_binding(relative_dir: &str, binary_name: &str, release: bool) 
     let workspace = workspace_root();
     let source_dir = workspace.join(relative_dir);
     let build_dir = source_dir.join("build");
-    fs::create_dir_all(&build_dir)
-        .with_context(|| format!("failed to create build directory at {}", build_dir.display()))?;
+    fs::create_dir_all(&build_dir).with_context(|| {
+        format!(
+            "failed to create build directory at {}",
+            build_dir.display()
+        )
+    })?;
 
     let build_type = if release { "Release" } else { "Debug" };
     let mut configure = Command::new("cmake");

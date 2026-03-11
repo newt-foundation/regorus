@@ -10,12 +10,20 @@ use walkdir::WalkDir;
 
 fn normalize_printed_paths(mut prints: Vec<String>) -> Vec<String> {
     prints.iter_mut().for_each(|p| {
-        *p = p.replace("\\", "/").replace("//", "/").replace("\r\n", "\n");
+        *p = p
+            .replace("\\", "/")
+            .replace("//", "/")
+            .replace("\r\n", "\n");
     });
     prints
 }
 
-fn run_kata_tests(tests_dir: &Path, name: &Option<String>, coverage: bool, generate: bool) -> Result<()> {
+fn run_kata_tests(
+    tests_dir: &Path,
+    name: &Option<String>,
+    coverage: bool,
+    generate: bool,
+) -> Result<()> {
     let mut num_tests = 0;
     let mut num_queries = 0;
     let mut total_time_ns = 0;
@@ -68,8 +76,9 @@ fn run_kata_tests(tests_dir: &Path, name: &Option<String>, coverage: bool, gener
         let mut prints: Vec<Vec<String>> = if generate {
             vec![]
         } else {
-            let prints_json = std::fs::read_to_string(&prints_file)
-                .map_err(|e| anyhow::Error::msg(format!("could not read {}\n{e}", prints_file.display())))?;
+            let prints_json = std::fs::read_to_string(&prints_file).map_err(|e| {
+                anyhow::Error::msg(format!("could not read {}\n{e}", prints_file.display()))
+            })?;
 
             serde_json::from_str::<Vec<Vec<String>>>(&prints_json)?
                 .into_iter()
@@ -232,6 +241,11 @@ fn stateful_policy_test() -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    run_kata_tests(&Path::new(&cli.test_dir), &cli.name, cli.coverage, cli.generate)?;
+    run_kata_tests(
+        &Path::new(&cli.test_dir),
+        &cli.name,
+        cli.coverage,
+        cli.generate,
+    )?;
     stateful_policy_test()
 }

@@ -43,18 +43,33 @@ impl LiteralStructureCheck {
     pub(crate) fn into_error(self) -> Option<BindingPlannerError> {
         match self {
             LiteralStructureCheck::Match | LiteralStructureCheck::Unknown => None,
-            LiteralStructureCheck::ArrayMismatch { expected, actual, span } => {
-                Some(BindingPlannerError::ArrayLengthMismatch { expected, actual, span })
-            }
-            LiteralStructureCheck::ObjectMismatch { expected, actual, span } => {
-                Some(BindingPlannerError::ObjectLiteralKeysMismatch { expected, actual, span })
-            }
+            LiteralStructureCheck::ArrayMismatch {
+                expected,
+                actual,
+                span,
+            } => Some(BindingPlannerError::ArrayLengthMismatch {
+                expected,
+                actual,
+                span,
+            }),
+            LiteralStructureCheck::ObjectMismatch {
+                expected,
+                actual,
+                span,
+            } => Some(BindingPlannerError::ObjectLiteralKeysMismatch {
+                expected,
+                actual,
+                span,
+            }),
         }
     }
 }
 
 /// Compare a destructuring plan against a literal expression.
-pub(crate) fn check_literal_structure(plan: &DestructuringPlan, expr: &ExprRef) -> LiteralStructureCheck {
+pub(crate) fn check_literal_structure(
+    plan: &DestructuringPlan,
+    expr: &ExprRef,
+) -> LiteralStructureCheck {
     match (plan, expr.as_ref()) {
         (DestructuringPlan::Array { element_plans }, Expr::Array { items, .. }) => {
             if items.len() != element_plans.len() {
@@ -87,7 +102,10 @@ pub(crate) fn check_literal_structure(plan: &DestructuringPlan, expr: &ExprRef) 
             }
 
             if !field_plans.is_empty() {
-                let expected_keys: Vec<String> = field_plans.keys().map(format_literal_key_for_error).collect();
+                let expected_keys: Vec<String> = field_plans
+                    .keys()
+                    .map(format_literal_key_for_error)
+                    .collect();
 
                 let mut literal_fields: Vec<(Value, &ExprRef)> = Vec::new();
                 let mut actual_keys: Vec<String> = Vec::new();
@@ -115,7 +133,9 @@ pub(crate) fn check_literal_structure(plan: &DestructuringPlan, expr: &ExprRef) 
                     if let Some(field_plan) = field_plans.get(&key_value) {
                         match check_literal_structure(field_plan, value_expr) {
                             LiteralStructureCheck::Match => {}
-                            LiteralStructureCheck::Unknown => return LiteralStructureCheck::Unknown,
+                            LiteralStructureCheck::Unknown => {
+                                return LiteralStructureCheck::Unknown
+                            }
                             mismatch => return mismatch,
                         }
                     }
@@ -133,7 +153,9 @@ pub(crate) fn check_literal_structure(plan: &DestructuringPlan, expr: &ExprRef) 
 }
 
 pub(crate) fn ensure_literal_match(plan: &DestructuringPlan, expr: &ExprRef) -> Result<()> {
-    check_literal_structure(plan, expr).into_error().map_or(Ok(()), Err)
+    check_literal_structure(plan, expr)
+        .into_error()
+        .map_or(Ok(()), Err)
 }
 
 pub(crate) fn collect_pattern_var_spans(expr: &ExprRef, spans: &mut Vec<Span>) {
@@ -203,11 +225,16 @@ pub(crate) fn collect_plan_var_spans(plan: &DestructuringPlan, spans: &mut Vec<S
                 collect_plan_var_spans(nested, spans);
             }
         }
-        DestructuringPlan::Ignore | DestructuringPlan::EqualityExpr(_) | DestructuringPlan::EqualityValue(_) => {}
+        DestructuringPlan::Ignore
+        | DestructuringPlan::EqualityExpr(_)
+        | DestructuringPlan::EqualityValue(_) => {}
     }
 }
 
-pub(crate) fn ensure_structural_compatibility(lhs_expr: &ExprRef, rhs_expr: &ExprRef) -> Result<()> {
+pub(crate) fn ensure_structural_compatibility(
+    lhs_expr: &ExprRef,
+    rhs_expr: &ExprRef,
+) -> Result<()> {
     let lhs_is_array = matches!(lhs_expr.as_ref(), Expr::Array { .. });
     let rhs_is_array = matches!(rhs_expr.as_ref(), Expr::Array { .. });
     let lhs_is_object = matches!(lhs_expr.as_ref(), Expr::Object { .. });

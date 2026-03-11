@@ -227,7 +227,12 @@ fn update_global_peak(candidate: i64) -> i64 {
     let mut observed = GLOBAL_PEAK.load(Ordering::Relaxed);
     while candidate > observed {
         // Retry until we manage to publish the higher peak without blocking.
-        match GLOBAL_PEAK.compare_exchange(observed, candidate, Ordering::Relaxed, Ordering::Relaxed) {
+        match GLOBAL_PEAK.compare_exchange(
+            observed,
+            candidate,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
             Ok(_) => return candidate,
             Err(next) => observed = next,
         }

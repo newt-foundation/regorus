@@ -23,7 +23,11 @@ pub enum BindingPlannerError {
         span: Span,
     },
     /// Array length mismatch detected while planning evaluation (no assignments).
-    ArrayLengthMismatch { expected: usize, actual: usize, span: Span },
+    ArrayLengthMismatch {
+        expected: usize,
+        actual: usize,
+        span: Span,
+    },
     /// Object literal keys mismatch detected while planning evaluation (no assignments).
     ObjectLiteralKeysMismatch {
         expected: Vec<String>,

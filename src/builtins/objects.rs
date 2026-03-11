@@ -36,7 +36,9 @@ pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn
 
 fn json_filter_impl(v: &Value, filter: &Value) -> Result<Value> {
     let filters = match filter {
-        Value::Object(fields) if fields.len() == 1 && filter[&Value::Null] == Value::Null => return Ok(v.clone()),
+        Value::Object(fields) if fields.len() == 1 && filter[&Value::Null] == Value::Null => {
+            return Ok(v.clone())
+        }
         Value::Object(fields) if !fields.is_empty() => fields,
         _ => return Ok(v.clone()),
     };
@@ -169,7 +171,12 @@ fn json_remove_impl(v: &Value, filter: &Value) -> Result<Value> {
     }
 }
 
-fn merge_filters(name: &str, param: &Expr, itr: &mut dyn Iterator<Item = &Value>, mut filters: Value) -> Result<Value> {
+fn merge_filters(
+    name: &str,
+    param: &Expr,
+    itr: &mut dyn Iterator<Item = &Value>,
+    mut filters: Value,
+) -> Result<Value> {
     loop {
         match itr.next() {
             Some(Value::String(s)) => {
@@ -388,7 +395,12 @@ fn object_union(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool
     union(&args[0], &args[1])
 }
 
-fn object_union_n(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn object_union_n(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "object.union_n";
     ensure_args_count(span, name, params, args, 1)?;
 
@@ -398,7 +410,9 @@ fn object_union_n(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: boo
     for (idx, a) in arr.iter().enumerate() {
         if a.as_object().is_err() {
             if strict {
-                bail!(params[0].span().error(&format!("item at index {idx} is not an object")));
+                bail!(params[0]
+                    .span()
+                    .error(&format!("item at index {idx} is not an object")));
             }
             return Ok(Value::Undefined);
         }
@@ -425,14 +439,21 @@ fn compile_json_schema(param: &Ref<Expr>, arg: &Value) -> Result<jsonschema::Val
 }
 
 #[cfg(feature = "jsonschema")]
-fn json_verify_schema(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn json_verify_schema(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "json.verify_schema";
     ensure_args_count(span, name, params, args, 1)?;
 
     Ok(Value::from_array(
         match compile_json_schema(&params[0], &args[0]) {
             Ok(_) => [Value::Bool(true), Value::Null],
-            Err(e) if strict => bail!(params[0].span().error(format!("invalid schema: {e}").as_str())),
+            Err(e) if strict => bail!(params[0]
+                .span()
+                .error(format!("invalid schema: {e}").as_str())),
             Err(e) => [Value::Bool(false), Value::String(e.to_string().into())],
         }
         .to_vec(),
@@ -440,7 +461,12 @@ fn json_verify_schema(span: &Span, params: &[Ref<Expr>], args: &[Value], strict:
 }
 
 #[cfg(feature = "jsonschema")]
-fn json_match_schema(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn json_match_schema(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "json.match_schema";
     ensure_args_count(span, name, params, args, 2)?;
 
@@ -454,7 +480,9 @@ fn json_match_schema(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: 
                 Ok(_) => [Value::Bool(true), Value::Null],
                 Err(e) => [Value::Bool(false), Value::from(e.to_string())],
             },
-            Err(e) if strict => bail!(params[1].span().error(format!("invalid schema: {e}").as_str())),
+            Err(e) if strict => bail!(params[1]
+                .span()
+                .error(format!("invalid schema: {e}").as_str())),
             Err(e) => [Value::Bool(false), Value::String(e.to_string().into())],
         }
         .to_vec(),

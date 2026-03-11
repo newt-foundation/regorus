@@ -127,10 +127,12 @@ fn recover_address(signature_bytes: &[u8], hash: &B256) -> Result<Address> {
         _ => bail!("invalid recovery id: {}", v),
     };
 
-    let signature = Signature::from_slice(r_s).map_err(|e| anyhow::anyhow!("invalid signature: {}", e))?;
+    let signature =
+        Signature::from_slice(r_s).map_err(|e| anyhow::anyhow!("invalid signature: {}", e))?;
 
-    let recovered_key = VerifyingKey::recover_from_prehash(hash.as_slice(), &signature, recovery_id)
-        .map_err(|e| anyhow::anyhow!("failed to recover public key: {}", e))?;
+    let recovered_key =
+        VerifyingKey::recover_from_prehash(hash.as_slice(), &signature, recovery_id)
+            .map_err(|e| anyhow::anyhow!("failed to recover public key: {}", e))?;
 
     // Get uncompressed public key bytes (65 bytes: 0x04 prefix + 64 bytes)
     let pubkey_bytes = recovered_key.to_encoded_point(false);

@@ -31,7 +31,8 @@ impl RegoVM {
 
         // Reset registers to clean state
         self.registers.clear();
-        self.registers.resize(self.base_register_count, Value::Undefined);
+        self.registers
+            .resize(self.base_register_count, Value::Undefined);
 
         // Builtin cache entries only live for a single execution
         self.builtins_cache.clear();

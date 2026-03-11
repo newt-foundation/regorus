@@ -43,7 +43,8 @@ impl<'a> Compiler<'a> {
     pub(super) fn finish(mut self) -> Result<Program> {
         self.program.main_entry_point = 0;
 
-        self.program.max_rule_window_size = self.rule_num_registers.iter().cloned().max().unwrap_or(0);
+        self.program.max_rule_window_size =
+            self.rule_num_registers.iter().cloned().max().unwrap_or(0);
         self.program.dispatch_window_size = self.register_counter;
 
         let mut rule_infos_map = BTreeMap::new();
@@ -75,12 +76,14 @@ impl<'a> Compiler<'a> {
 
             let mut rule_info = match function_param_count {
                 Some(param_count) => {
-                    let definition_params = &self.rule_definition_function_params[rule_index as usize];
-                    let param_names = if let Some(Some(first_def_params)) = definition_params.first() {
-                        first_def_params.clone()
-                    } else {
-                        (0..*param_count).map(|i| format!("param_{}", i)).collect()
-                    };
+                    let definition_params =
+                        &self.rule_definition_function_params[rule_index as usize];
+                    let param_names =
+                        if let Some(Some(first_def_params)) = definition_params.first() {
+                            first_def_params.clone()
+                        } else {
+                            (0..*param_count).map(|i| format!("param_{}", i)).collect()
+                        };
 
                     crate::rvm::program::RuleInfo::new_function(
                         rule_path.clone(),

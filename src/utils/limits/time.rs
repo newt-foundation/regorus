@@ -122,7 +122,9 @@ static LIMITS_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
 #[cfg(test)]
 pub fn acquire_limits_test_lock() -> StdMutexGuard<'static, ()> {
-    LIMITS_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    LIMITS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Returns the duration supplied by the chosen source for this build.
@@ -415,7 +417,11 @@ mod tests {
 
         for step in 0..8 {
             let now = Duration::from_millis((step + 1) as u64);
-            assert_eq!(timer.tick(1, now), Ok(()), "ticks with disabled limit must succeed");
+            assert_eq!(
+                timer.tick(1, now),
+                Ok(()),
+                "ticks with disabled limit must succeed"
+            );
         }
 
         assert_eq!(timer.last_elapsed(), Duration::ZERO);

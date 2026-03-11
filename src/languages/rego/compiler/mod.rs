@@ -78,7 +78,10 @@ pub struct WorklistEntry {
 
 impl WorklistEntry {
     pub fn new(rule_path: String, call_stack: Vec<u16>) -> Self {
-        Self { rule_path, call_stack }
+        Self {
+            rule_path,
+            call_stack,
+        }
     }
 
     pub fn entry_point(rule_path: String) -> Self {
@@ -89,7 +92,11 @@ impl WorklistEntry {
     }
 
     /// Create a new entry by extending the call stack with the caller's rule index
-    pub fn with_caller(rule_path: String, current_call_stack: &[u16], caller_rule_index: u16) -> Self {
+    pub fn with_caller(
+        rule_path: String,
+        current_call_stack: &[u16],
+        caller_rule_index: u16,
+    ) -> Self {
         let mut new_call_stack = current_call_stack.to_vec();
         new_call_stack.push(caller_rule_index);
         Self {

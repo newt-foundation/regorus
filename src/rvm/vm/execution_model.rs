@@ -41,7 +41,10 @@ pub(super) enum FrameKind {
     /// Rule execution frame (replaces recursive jump_to calls)
     Rule(RuleFrameData),
     /// Loop iteration frame
-    Loop { return_pc: usize, context: LoopContext },
+    Loop {
+        return_pc: usize,
+        context: LoopContext,
+    },
     /// Comprehension frame
     Comprehension {
         return_pc: usize,

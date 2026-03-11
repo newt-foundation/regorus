@@ -520,7 +520,9 @@ fn test_kubernetes_target_registration() {
 
     // Verify lookup table was populated for Kubernetes kinds
     assert_eq!(target.resource_schema_lookup.len(), 2);
-    assert!(target.resource_schema_lookup.contains_key(&Value::String("Pod".into())));
+    assert!(target
+        .resource_schema_lookup
+        .contains_key(&Value::String("Pod".into())));
     assert!(target
         .resource_schema_lookup
         .contains_key(&Value::String("Service".into())));
@@ -551,7 +553,9 @@ fn test_api_target_registration() {
 
     // Verify lookup table was populated for HTTP operations
     assert_eq!(target.resource_schema_lookup.len(), 2);
-    assert!(target.resource_schema_lookup.contains_key(&Value::String("GET".into())));
+    assert!(target
+        .resource_schema_lookup
+        .contains_key(&Value::String("GET".into())));
     assert!(target
         .resource_schema_lookup
         .contains_key(&Value::String("POST".into())));
@@ -670,13 +674,22 @@ fn test_target_duplicate_registration() {
 fn test_target_removal() {
     // Register multiple targets with unique names
     let targets = vec![
-        ("removal.basic.target", create_basic_target("removal.basic.target")),
-        ("removal.azure.target", create_azure_target("removal.azure.target")),
+        (
+            "removal.basic.target",
+            create_basic_target("removal.basic.target"),
+        ),
+        (
+            "removal.azure.target",
+            create_azure_target("removal.azure.target"),
+        ),
         (
             "removal.kubernetes.target",
             create_kubernetes_target("removal.kubernetes.target"),
         ),
-        ("removal.api.target", create_api_target("removal.api.target")),
+        (
+            "removal.api.target",
+            create_api_target("removal.api.target"),
+        ),
     ];
 
     for (name, target) in &targets {
@@ -712,7 +725,9 @@ fn test_target_list_operations() {
 
     // Register all targets
     for name in &target_names {
-        assert!(TARGET_REGISTRY.register(*name, basic_target.clone()).is_ok());
+        assert!(TARGET_REGISTRY
+            .register(*name, basic_target.clone())
+            .is_ok());
     }
 
     // Test list_names()
@@ -765,18 +780,19 @@ fn test_concurrent_target_access() {
         let barrier = Rc::clone(&barrier);
         let name: String = (*target_name).into();
 
-        let handle: thread::JoinHandle<Result<(), TargetRegistryError>> = thread::spawn(move || {
-            let target = match i {
-                0 => create_basic_target(&name),
-                1 => create_azure_target(&name),
-                2 => create_kubernetes_target(&name),
-                3 => create_api_target(&name),
-                _ => unreachable!(),
-            };
+        let handle: thread::JoinHandle<Result<(), TargetRegistryError>> =
+            thread::spawn(move || {
+                let target = match i {
+                    0 => create_basic_target(&name),
+                    1 => create_azure_target(&name),
+                    2 => create_kubernetes_target(&name),
+                    3 => create_api_target(&name),
+                    _ => unreachable!(),
+                };
 
-            barrier.wait();
-            TARGET_REGISTRY.register(name, target)
-        });
+                barrier.wait();
+                TARGET_REGISTRY.register(name, target)
+            });
 
         handles.push(handle);
     }
@@ -905,7 +921,10 @@ fn test_target_domain_specific_patterns() {
 
     // Verify all are registered
     for domain_target in &domain_targets {
-        assert!(TARGET_REGISTRY.contains(domain_target), "Missing {domain_target}");
+        assert!(
+            TARGET_REGISTRY.contains(domain_target),
+            "Missing {domain_target}"
+        );
         assert!(
             TARGET_REGISTRY.get(domain_target).is_some(),
             "Cannot retrieve {domain_target}"
@@ -1032,11 +1051,12 @@ fn test_microsoft_graph_concurrent_access() {
         let barrier = Rc::clone(&barrier);
         let name: String = (*target_name).into();
 
-        let handle: thread::JoinHandle<Result<(), TargetRegistryError>> = thread::spawn(move || {
-            let target = create_msgraph_target(&name);
-            barrier.wait();
-            TARGET_REGISTRY.register(name, target)
-        });
+        let handle: thread::JoinHandle<Result<(), TargetRegistryError>> =
+            thread::spawn(move || {
+                let target = create_msgraph_target(&name);
+                barrier.wait();
+                TARGET_REGISTRY.register(name, target)
+            });
 
         handles.push(handle);
     }
@@ -1064,10 +1084,12 @@ fn test_microsoft_graph_concurrent_access() {
 
 #[test]
 fn test_azure_relationship_policies_target() {
-    let azure_target = create_azure_relationship_policies_target("azure.relationship.policies.target");
+    let azure_target =
+        create_azure_relationship_policies_target("azure.relationship.policies.target");
 
     // Test registration of Azure relationship policies target
-    let result = TARGET_REGISTRY.register("azure.relationship.policies.target", azure_target.clone());
+    let result =
+        TARGET_REGISTRY.register("azure.relationship.policies.target", azure_target.clone());
     assert!(result.is_ok());
     assert!(TARGET_REGISTRY.contains("azure.relationship.policies.target"));
 
@@ -1123,7 +1145,8 @@ fn test_azure_relationship_policies_with_global_registry() {
 
 #[test]
 fn test_azure_relationship_policies_manage_effect() {
-    let azure_target = create_azure_relationship_policies_target("test.azure.relationship.policies");
+    let azure_target =
+        create_azure_relationship_policies_target("test.azure.relationship.policies");
 
     // Verify manage effect exists and is the only effect for relationship policies
     assert_eq!(azure_target.effects.len(), 1);

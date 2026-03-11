@@ -27,7 +27,9 @@ pub fn populate_target_lookup_fields(target: &mut Target) -> Result<(), TargetEr
 
     // Analyze each schema for constant properties
     for (index, schema) in target.resource_schemas.iter().enumerate() {
-        if let Some(constant_value) = find_constant_property(schema, &target.resource_schema_selector) {
+        if let Some(constant_value) =
+            find_constant_property(schema, &target.resource_schema_selector)
+        {
             // Check if this constant value already exists
             if let Some(existing_index) = value_to_index.get(&constant_value) {
                 return Err(TargetError::DuplicateConstantValue(format!(
@@ -40,7 +42,9 @@ pub fn populate_target_lookup_fields(target: &mut Target) -> Result<(), TargetEr
             }
             // Record the mapping and add to lookup table
             value_to_index.insert(constant_value.clone(), index);
-            target.resource_schema_lookup.insert(constant_value, schema.clone());
+            target
+                .resource_schema_lookup
+                .insert(constant_value, schema.clone());
         } else {
             // Schema doesn't have the constant property
             if target.default_resource_schema.is_some() {
