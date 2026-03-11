@@ -95,7 +95,7 @@ rego-extensions = []
 newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
 
 # Newton-specific Rego extensions for TLSNotary presentation verification
-newton-tlsn = ["dep:bincode", "dep:data-encoding", "dep:p256", "dep:rs_merkle", "dep:sha2", "dep:blake3", "dep:tiny-keccak"]
+newton-tlsn = ["dep:bcs", "dep:bincode", "dep:data-encoding", "dep:p256", "dep:rs_merkle", "dep:sha2", "dep:blake3", "dep:tiny-keccak"]
 
 # Newton-specific Rego extensions for Identity checks
 newton-identity = ["dep:chrono", "std"]
@@ -137,6 +137,7 @@ mimalloc = { path = "mimalloc", optional = true }
 
 # rvm related deps
 indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
+bcs = { version = "0.1.6", optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
 
 # Newton extension dependencies

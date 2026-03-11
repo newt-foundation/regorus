@@ -90,6 +90,14 @@ fn tlsn_verify(params: Vec<Value>) -> Result<Value> {
             ))
         }
     };
+    // NOTE: `identity_name` originates from `IdentityProofEnvelope.name` which
+    // is not directly signed.  However, `verify_identity_commitment` (called
+    // earlier in `verify_presentation`) proves that `identity.opening` matches
+    // the attested certificate commitment.  The opening contains the raw
+    // certificate data — including the server name — so an attacker who
+    // rewrites `identity.name` would need a valid opening that hashes to the
+    // same commitment, which is computationally infeasible.  The comparison
+    // below is therefore a consistency check, not the sole binding.
     if let Some(identity_name) = verified_presentation.identity_name {
         let normalized_identity = normalize_host(&identity_name);
         let normalized_host = normalize_host(&server_name);
@@ -209,7 +217,8 @@ fn verify_attestation<'a>(
         .map_err(|e| anyhow!("invalid P-256 notary public key: {e}"))?;
     let signature = Signature::from_slice(&attestation.signature.data)
         .map_err(|e| anyhow!("invalid P-256 signature: {e}"))?;
-    let message = canonical_serialize(&attestation.header)?;
+    let message =
+        bcs::to_bytes(&attestation.header).map_err(|e| anyhow!("BCS serialization failed: {e}"))?;
 
     Ok(key.verify(&message, &signature).is_ok().then_some(body))
 }
@@ -355,6 +364,11 @@ fn verify_transcript_proof(
     Ok(Some(transcript))
 }
 
+/// TLSNotary prover presentations are bincode-encoded as a whole, while the
+/// nested attestation header is signed over its BCS encoding.
+///
+/// Verification therefore has to handle two serialization formats in the same
+/// pipeline.
 fn decode_presentation(bytes: &[u8]) -> Result<PresentationEnvelope> {
     let (presentation, consumed) = decode_from_slice::<PresentationEnvelope, _>(bytes, standard())
         .map_err(|e| anyhow!("invalid TLSNotary presentation encoding: {e}"))?;
@@ -404,12 +418,8 @@ fn build_result(
     Value::from_map(map)
 }
 
-fn canonical_serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    canonical::to_bytes(value).map_err(|e| anyhow!("canonical serialization failed: {e}"))
-}
-
 fn field_hash<T: Serialize>(alg: HashAlgId, domain_name: &str, value: &T) -> Result<[u8; 32]> {
-    let canonical = canonical_serialize(value)?;
+    let canonical = bcs::to_bytes(value).map_err(|e| anyhow!("BCS serialization failed: {e}"))?;
     let domain = domain_separator(domain_name);
     digest_prefixed(alg, &domain, &canonical)
 }
@@ -457,6 +467,9 @@ fn digest_prefixed(alg: HashAlgId, prefix: &[u8], data: &[u8]) -> Result<[u8; 32
     }
 }
 
+/// `leaf_count` comes from untrusted presentation data, but `rs_merkle`
+/// rejects proofs whose declared leaf count does not match the proof-implied
+/// tree structure.
 fn verify_merkle_proof(
     alg: HashAlgId,
     root: &[u8],
@@ -569,6 +582,12 @@ fn decompress_partial_transcript(
     })
 }
 
+/// Maximum transcript size we are willing to allocate (16 MiB).
+///
+/// Presentation-controlled `total_len` values could otherwise trigger
+/// unbounded memory allocation before any content validation.
+const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024 * 1024;
+
 #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 fn expand_ranges(
     authenticated: &[u8],
@@ -576,6 +595,9 @@ fn expand_ranges(
     total_len: usize,
     label: &str,
 ) -> Result<Vec<u8>> {
+    if total_len > MAX_TRANSCRIPT_BYTES {
+        bail!("{label} transcript length ({total_len}) exceeds maximum ({MAX_TRANSCRIPT_BYTES})");
+    }
     let mut expanded = vec![0; total_len];
     let mut offset = 0_usize;
 
@@ -646,6 +668,7 @@ fn extract_request_target(request: &[u8], authed: &RangeSetEnvelope) -> Result<S
     Ok(target.to_string())
 }
 
+#[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 fn extract_server_name(request: &[u8], authed: &RangeSetEnvelope) -> Result<String> {
     let (host_range, host) = header_value_with_range(request, "host")?
         .ok_or_else(|| anyhow!("HTTP request is missing a Host header"))?;
@@ -1204,408 +1227,6 @@ struct PartialTranscriptData {
     received_authed: RangeSetEnvelope,
 }
 
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::as_conversions,
-    clippy::missing_const_for_fn,
-    clippy::pattern_type_mismatch
-)]
-mod canonical {
-    use alloc::{
-        string::{String, ToString as _},
-        vec::Vec,
-    };
-    use core::fmt;
-    use serde::{ser, Serialize};
-
-    const MAX_CONTAINER_DEPTH: usize = 500;
-    const MAX_SEQUENCE_LENGTH: usize = u32::MAX as usize;
-
-    pub type Result<T> = core::result::Result<T, Error>;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum Error {
-        Custom(String),
-        ExceededMaxLen(usize),
-        ExceededContainerDepthLimit(&'static str),
-        MissingLen,
-        NotSupported(&'static str),
-    }
-
-    impl fmt::Display for Error {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                Self::Custom(message) => f.write_str(message),
-                Self::ExceededMaxLen(len) => write!(f, "exceeded max sequence length: {len}"),
-                Self::ExceededContainerDepthLimit(name) => {
-                    write!(f, "exceeded max container depth while entering: {name}")
-                }
-                Self::MissingLen => f.write_str("sequence missing length"),
-                Self::NotSupported(name) => write!(f, "not supported: {name}"),
-            }
-        }
-    }
-
-    impl ser::Error for Error {
-        fn custom<T: fmt::Display>(msg: T) -> Self {
-            Self::Custom(msg.to_string())
-        }
-    }
-
-    impl core::error::Error for Error {}
-
-    pub fn to_bytes<T>(value: &T) -> Result<Vec<u8>>
-    where
-        T: ?Sized + Serialize,
-    {
-        let mut output = Vec::new();
-        value.serialize(Serializer::new(&mut output, MAX_CONTAINER_DEPTH))?;
-        Ok(output)
-    }
-
-    struct Serializer<'a> {
-        output: &'a mut Vec<u8>,
-        max_remaining_depth: usize,
-    }
-
-    impl<'a> Serializer<'a> {
-        fn new(output: &'a mut Vec<u8>, max_remaining_depth: usize) -> Self {
-            Self {
-                output,
-                max_remaining_depth,
-            }
-        }
-
-        fn output_u32_as_uleb128(&mut self, mut value: u32) {
-            while value >= 0x80 {
-                let byte = (value & 0x7f) as u8;
-                self.output.push(byte | 0x80);
-                value >>= 7;
-            }
-            self.output.push(value as u8);
-        }
-
-        fn output_variant_index(&mut self, value: u32) {
-            self.output_u32_as_uleb128(value);
-        }
-
-        fn output_seq_len(&mut self, len: usize) -> Result<()> {
-            if len > MAX_SEQUENCE_LENGTH {
-                return Err(Error::ExceededMaxLen(len));
-            }
-
-            self.output_u32_as_uleb128(len as u32);
-            Ok(())
-        }
-
-        fn enter_named_container(&mut self, name: &'static str) -> Result<()> {
-            if self.max_remaining_depth == 0 {
-                return Err(Error::ExceededContainerDepthLimit(name));
-            }
-
-            self.max_remaining_depth -= 1;
-            Ok(())
-        }
-    }
-
-    impl ser::Serializer for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-        type SerializeSeq = Self;
-        type SerializeTuple = Self;
-        type SerializeTupleStruct = Self;
-        type SerializeTupleVariant = Self;
-        type SerializeMap = ser::Impossible<(), Error>;
-        type SerializeStruct = Self;
-        type SerializeStructVariant = Self;
-
-        fn serialize_bool(self, value: bool) -> Result<()> {
-            self.serialize_u8(value.into())
-        }
-
-        fn serialize_i8(self, value: i8) -> Result<()> {
-            self.serialize_u8(value as u8)
-        }
-
-        fn serialize_i16(self, value: i16) -> Result<()> {
-            self.serialize_u16(value as u16)
-        }
-
-        fn serialize_i32(self, value: i32) -> Result<()> {
-            self.serialize_u32(value as u32)
-        }
-
-        fn serialize_i64(self, value: i64) -> Result<()> {
-            self.serialize_u64(value as u64)
-        }
-
-        fn serialize_i128(self, value: i128) -> Result<()> {
-            self.serialize_u128(value as u128)
-        }
-
-        fn serialize_u8(self, value: u8) -> Result<()> {
-            self.output.push(value);
-            Ok(())
-        }
-
-        fn serialize_u16(self, value: u16) -> Result<()> {
-            self.output.extend_from_slice(&value.to_le_bytes());
-            Ok(())
-        }
-
-        fn serialize_u32(self, value: u32) -> Result<()> {
-            self.output.extend_from_slice(&value.to_le_bytes());
-            Ok(())
-        }
-
-        fn serialize_u64(self, value: u64) -> Result<()> {
-            self.output.extend_from_slice(&value.to_le_bytes());
-            Ok(())
-        }
-
-        fn serialize_u128(self, value: u128) -> Result<()> {
-            self.output.extend_from_slice(&value.to_le_bytes());
-            Ok(())
-        }
-
-        fn serialize_f32(self, _value: f32) -> Result<()> {
-            Err(Error::NotSupported("serialize_f32"))
-        }
-
-        fn serialize_f64(self, _value: f64) -> Result<()> {
-            Err(Error::NotSupported("serialize_f64"))
-        }
-
-        fn serialize_char(self, _value: char) -> Result<()> {
-            Err(Error::NotSupported("serialize_char"))
-        }
-
-        fn serialize_str(self, value: &str) -> Result<()> {
-            self.serialize_bytes(value.as_bytes())
-        }
-
-        fn serialize_bytes(mut self, value: &[u8]) -> Result<()> {
-            self.output_seq_len(value.len())?;
-            self.output.extend_from_slice(value);
-            Ok(())
-        }
-
-        fn serialize_none(self) -> Result<()> {
-            self.serialize_u8(0)
-        }
-
-        fn serialize_some<T>(self, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            self.output.push(1);
-            value.serialize(self)
-        }
-
-        fn serialize_unit(self) -> Result<()> {
-            Ok(())
-        }
-
-        fn serialize_unit_struct(mut self, name: &'static str) -> Result<()> {
-            self.enter_named_container(name)?;
-            Ok(())
-        }
-
-        fn serialize_unit_variant(
-            mut self,
-            name: &'static str,
-            variant_index: u32,
-            _variant: &'static str,
-        ) -> Result<()> {
-            self.enter_named_container(name)?;
-            self.output_variant_index(variant_index);
-            Ok(())
-        }
-
-        fn serialize_newtype_struct<T>(mut self, name: &'static str, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            self.enter_named_container(name)?;
-            value.serialize(self)
-        }
-
-        fn serialize_newtype_variant<T>(
-            mut self,
-            name: &'static str,
-            variant_index: u32,
-            _variant: &'static str,
-            value: &T,
-        ) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            self.enter_named_container(name)?;
-            self.output_variant_index(variant_index);
-            value.serialize(self)
-        }
-
-        fn serialize_seq(mut self, len: Option<usize>) -> Result<Self::SerializeSeq> {
-            if let Some(len) = len {
-                self.output_seq_len(len)?;
-                Ok(self)
-            } else {
-                Err(Error::MissingLen)
-            }
-        }
-
-        fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
-            Ok(self)
-        }
-
-        fn serialize_tuple_struct(
-            mut self,
-            name: &'static str,
-            _len: usize,
-        ) -> Result<Self::SerializeTupleStruct> {
-            self.enter_named_container(name)?;
-            Ok(self)
-        }
-
-        fn serialize_tuple_variant(
-            mut self,
-            name: &'static str,
-            variant_index: u32,
-            _variant: &'static str,
-            _len: usize,
-        ) -> Result<Self::SerializeTupleVariant> {
-            self.enter_named_container(name)?;
-            self.output_variant_index(variant_index);
-            Ok(self)
-        }
-
-        fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-            Err(Error::NotSupported("serialize_map"))
-        }
-
-        fn serialize_struct(
-            mut self,
-            name: &'static str,
-            _len: usize,
-        ) -> Result<Self::SerializeStruct> {
-            self.enter_named_container(name)?;
-            Ok(self)
-        }
-
-        fn serialize_struct_variant(
-            mut self,
-            name: &'static str,
-            variant_index: u32,
-            _variant: &'static str,
-            _len: usize,
-        ) -> Result<Self::SerializeStructVariant> {
-            self.enter_named_container(name)?;
-            self.output_variant_index(variant_index);
-            Ok(self)
-        }
-
-        fn is_human_readable(&self) -> bool {
-            false
-        }
-    }
-
-    impl ser::SerializeSeq for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_element<T>(&mut self, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ser::SerializeTuple for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_element<T>(&mut self, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ser::SerializeTupleStruct for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_field<T>(&mut self, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ser::SerializeTupleVariant for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_field<T>(&mut self, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ser::SerializeStruct for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_field<T>(&mut self, _key: &'static str, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ser::SerializeStructVariant for Serializer<'_> {
-        type Ok = ();
-        type Error = Error;
-
-        fn serialize_field<T>(&mut self, _key: &'static str, value: &T) -> Result<()>
-        where
-            T: ?Sized + Serialize,
-        {
-            value.serialize(Serializer::new(self.output, self.max_remaining_depth))
-        }
-
-        fn end(self) -> Result<()> {
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -1782,7 +1403,7 @@ mod tests {
                 value: root.to_vec(),
             },
         };
-        let message = canonical_serialize(&header).expect("header serialization");
+        let message = bcs::to_bytes(&header).expect("header serialization");
         let signature: P256Signature = signing_key.sign(&message);
 
         let presentation = PresentationEnvelope {
@@ -2035,5 +1656,22 @@ mod tests {
     #[test]
     fn decode_hex_rejects_odd_lengths() {
         assert!(decode_hex("abc").is_err());
+    }
+
+    #[test]
+    fn tlsn_golden_fixture_placeholder_documents_expected_format() {
+        // TODO: Replace this placeholder with a real TLSNotary prover
+        // presentation fixture. The golden input should stay as base64-wrapped
+        // bincode bytes for `PresentationEnvelope`.
+        const PLACEHOLDER_PRESENTATION_B64: &str = "AA==";
+
+        let bytes = decode_base64(PLACEHOLDER_PRESENTATION_B64)
+            .expect("placeholder fixture should stay valid base64");
+        let err = decode_presentation(&bytes)
+            .expect_err("placeholder fixture is not yet a real TLSNotary presentation");
+
+        assert!(err
+            .to_string()
+            .contains("invalid TLSNotary presentation encoding"));
     }
 }
