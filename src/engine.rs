@@ -263,6 +263,22 @@ impl Engine {
         crate::extensions::identity::register_newton_identity_extensions(self, data)
     }
 
+    /// Register Newton TLSNotary extensions.
+    ///
+    /// This adds the `newton.crypto.tlsn_verify` built-in function that
+    /// verifies TLSNotary presentations against a trusted notary public key.
+    ///
+    /// ```no_run
+    /// # use regorus::Engine;
+    /// let mut engine = Engine::new();
+    /// engine.with_newton_tlsn_extensions().unwrap();
+    /// ```
+    #[cfg(feature = "newton-tlsn")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-tlsn")))]
+    pub fn with_newton_tlsn_extensions(&mut self) -> Result<()> {
+        crate::extensions::tlsn::register_newton_tlsn_extensions(self)
+    }
+
     /// Add a policy.
     ///
     /// The policy file will be parsed and converted to AST representation.
