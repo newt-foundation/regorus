@@ -17,3 +17,9 @@ pub mod identity;
 
 #[cfg(feature = "newton-identity")]
 pub use identity::register_newton_identity_extensions;
+
+#[cfg(feature = "newton-tlsn")]
+pub mod tlsn;
+
+#[cfg(feature = "newton-tlsn")]
+pub use tlsn::register_newton_tlsn_extensions;

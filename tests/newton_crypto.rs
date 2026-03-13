@@ -12,7 +12,8 @@ use regorus::{Engine, Value};
 const TEST_SIGNER_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 
 /// keccak256("hello")
-const TEST_MESSAGE_HASH: &str = "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8";
+const TEST_MESSAGE_HASH: &str =
+    "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8";
 
 /// Signature of TEST_MESSAGE_HASH with the test private key (raw hash signing)
 /// Generated via: cast wallet sign --no-hash --private-key <key> <hash>
@@ -49,7 +50,9 @@ fn recover_signer_from_valid_signature_returns_correct_address() {
 
     engine.add_policy("test.rego".to_string(), policy).unwrap();
 
-    let results = engine.eval_query("data.test.signer".to_string(), false).unwrap();
+    let results = engine
+        .eval_query("data.test.signer".to_string(), false)
+        .unwrap();
 
     assert!(!results.result.is_empty(), "query should return results");
     let value = &results.result[0].expressions[0].value;
@@ -79,7 +82,9 @@ fn recover_signer_personal_with_message_returns_valid_address() {
 
     engine.add_policy("test.rego".to_string(), policy).unwrap();
 
-    let results = engine.eval_query("data.test.signer".to_string(), false).unwrap();
+    let results = engine
+        .eval_query("data.test.signer".to_string(), false)
+        .unwrap();
 
     assert!(!results.result.is_empty(), "query should return results");
     let value = &results.result[0].expressions[0].value;
@@ -113,7 +118,9 @@ fn recover_signer_handles_signature_without_0x_prefix() {
 
     engine.add_policy("test.rego".to_string(), policy).unwrap();
 
-    let results = engine.eval_query("data.test.signer".to_string(), false).unwrap();
+    let results = engine
+        .eval_query("data.test.signer".to_string(), false)
+        .unwrap();
 
     assert!(
         !results.result.is_empty(),
@@ -142,7 +149,9 @@ fn recover_signer_fails_with_invalid_signature_length() {
         signer := newton.crypto.ecdsa_recover_signer(signature, message_hash)
     "#;
 
-    engine.add_policy("test.rego".to_string(), policy.to_string()).unwrap();
+    engine
+        .add_policy("test.rego".to_string(), policy.to_string())
+        .unwrap();
 
     // The query should fail or return undefined due to invalid signature
     let result = engine.eval_query("data.test.signer".to_string(), false);
@@ -183,9 +192,13 @@ fn newton_crypto_extensions_are_registered() {
         has_extension := true
     "#;
 
-    engine.add_policy("test.rego".to_string(), policy.to_string()).unwrap();
+    engine
+        .add_policy("test.rego".to_string(), policy.to_string())
+        .unwrap();
 
-    let results = engine.eval_query("data.test.has_extension".to_string(), false).unwrap();
+    let results = engine
+        .eval_query("data.test.has_extension".to_string(), false)
+        .unwrap();
     assert!(!results.result.is_empty());
     assert_eq!(results.result[0].expressions[0].value, Value::from(true));
 }

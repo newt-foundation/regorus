@@ -154,7 +154,12 @@ fn visit(
     Ok(())
 }
 
-fn reachable_paths(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Result<Value> {
+fn reachable_paths(
+    span: &Span,
+    params: &[Ref<Expr>],
+    args: &[Value],
+    strict: bool,
+) -> Result<Value> {
     let name = "graph.reachable_paths";
     ensure_args_count(span, name, params, args, 2)?;
 

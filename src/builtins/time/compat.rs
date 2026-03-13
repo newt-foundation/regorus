@@ -343,7 +343,8 @@ impl<'a> Iterator for GoTimeFormatItems<'a> {
 
                 if self.reminder.starts_with("05") {
                     self.reminder = &self.reminder[2..];
-                    if !self.reminder.starts_with('.') && self.mode == GoTimeFormatItemsMode::Parse {
+                    if !self.reminder.starts_with('.') && self.mode == GoTimeFormatItemsMode::Parse
+                    {
                         self.queue = &[Fixed(Nanosecond)];
                     }
                     return Some(Numeric(Numeric::Second, Pad::Zero));
@@ -581,12 +582,17 @@ pub fn format<Tz: TimeZone>(date: DateTime<Tz>, fmt: &str) -> String
 where
     Tz::Offset: fmt::Display,
 {
-    date.format_with_items(GoTimeFormatItems::format(fmt)).to_string()
+    date.format_with_items(GoTimeFormatItems::format(fmt))
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::unused_trait_names, clippy::as_conversions)] // test fixtures build durations with unwrap for brevity
+    #![allow(
+        clippy::unwrap_used,
+        clippy::unused_trait_names,
+        clippy::as_conversions
+    )] // test fixtures build durations with unwrap for brevity
     use chrono::{Datelike, Month, TimeZone, Timelike, Weekday};
     use chrono_tz::PST8PDT;
 
@@ -681,16 +687,25 @@ mod tests {
             // largest duration that can be represented by int64 in nanoseconds
             ("9223372036854775807ns", Duration::nanoseconds(i64::MAX)),
             ("9223372036854775.807us", Duration::nanoseconds(i64::MAX)),
-            ("9223372036s854ms775us807ns", Duration::nanoseconds(i64::MAX)),
+            (
+                "9223372036s854ms775us807ns",
+                Duration::nanoseconds(i64::MAX),
+            ),
             ("-9223372036854775808ns", Duration::nanoseconds(i64::MIN)),
             ("-9223372036854775.808us", Duration::nanoseconds(i64::MIN)),
-            ("-9223372036s854ms775us808ns", Duration::nanoseconds(i64::MIN)),
+            (
+                "-9223372036s854ms775us808ns",
+                Duration::nanoseconds(i64::MIN),
+            ),
             // largest negative value
             ("-9223372036854775808ns", Duration::nanoseconds(i64::MIN)),
             // largest negative round trip value, see https://golang.org/issue/48629
             ("-2562047h47m16.854775808s", Duration::nanoseconds(i64::MIN)),
             // huge string; issue 15011.
-            ("0.100000000000000000000h", Duration::try_minutes(6).unwrap()),
+            (
+                "0.100000000000000000000h",
+                Duration::try_minutes(6).unwrap(),
+            ),
             // This value tests the first overflow check in leadingFraction.
             (
                 "0.830103483285477580700h",
@@ -750,7 +765,8 @@ mod tests {
             assert_eq!(time.minute(), 0);
             assert_eq!(time.second(), 57);
 
-            let nanosec = "012345678"[..test_case.frac_digits].to_string() + &"000000000"[..9 - test_case.frac_digits];
+            let nanosec = "012345678"[..test_case.frac_digits].to_string()
+                + &"000000000"[..9 - test_case.frac_digits];
             assert_eq!(time.nanosecond(), nanosec.parse::<u32>().unwrap());
 
             if test_case.has_tz {
@@ -763,8 +779,24 @@ mod tests {
         }
 
         let test_cases = vec![
-            parse_test_case("ANSIC", ANSIC, "Thu Feb  4 21:00:57 2010", false, true, 1, 0),
-            parse_test_case("UnixDate", UNIX_DATE, "Thu Feb  4 21:00:57 PST 2010", true, true, 1, 0),
+            parse_test_case(
+                "ANSIC",
+                ANSIC,
+                "Thu Feb  4 21:00:57 2010",
+                false,
+                true,
+                1,
+                0,
+            ),
+            parse_test_case(
+                "UnixDate",
+                UNIX_DATE,
+                "Thu Feb  4 21:00:57 PST 2010",
+                true,
+                true,
+                1,
+                0,
+            ),
             parse_test_case(
                 "RubyDate",
                 RUBY_DATE,
@@ -774,8 +806,24 @@ mod tests {
                 1,
                 0,
             ),
-            parse_test_case("RFC850", RFC850, "Thursday, 04-Feb-10 21:00:57 PST", true, true, 1, 0),
-            parse_test_case("RFC1123", RFC1123, "Thu, 04 Feb 2010 21:00:57 PST", true, true, 1, 0),
+            parse_test_case(
+                "RFC850",
+                RFC850,
+                "Thursday, 04-Feb-10 21:00:57 PST",
+                true,
+                true,
+                1,
+                0,
+            ),
+            parse_test_case(
+                "RFC1123",
+                RFC1123,
+                "Thu, 04 Feb 2010 21:00:57 PST",
+                true,
+                true,
+                1,
+                0,
+            ),
             // parse_test_case(
             //     "RFC1123",
             //     RFC1123,
@@ -794,7 +842,15 @@ mod tests {
                 1,
                 0,
             ),
-            parse_test_case("RFC3339", RFC3339, "2010-02-04T21:00:57-08:00", true, false, 1, 0),
+            parse_test_case(
+                "RFC3339",
+                RFC3339,
+                "2010-02-04T21:00:57-08:00",
+                true,
+                false,
+                1,
+                0,
+            ),
             // parse_test_case(
             //     "custom: \"2006-01-02 15:04:05-07\"",
             //     "2006-01-02 15:04:05-07",
@@ -805,7 +861,15 @@ mod tests {
             //     0,
             // ),
             // Optional fractional seconds.
-            parse_test_case("ANSIC", ANSIC, "Thu Feb  4 21:00:57.0 2010", false, true, 1, 1),
+            parse_test_case(
+                "ANSIC",
+                ANSIC,
+                "Thu Feb  4 21:00:57.0 2010",
+                false,
+                true,
+                1,
+                1,
+            ),
             parse_test_case(
                 "UnixDate",
                 UNIX_DATE,
@@ -1091,7 +1155,15 @@ mod tests {
                 9,
             ),
             // issue 4502.
-            parse_test_case("", STAMP_NANO, "Feb  4 21:00:57.012345678", false, false, -1, 9),
+            parse_test_case(
+                "",
+                STAMP_NANO,
+                "Feb  4 21:00:57.012345678",
+                false,
+                false,
+                -1,
+                9,
+            ),
             parse_test_case(
                 "",
                 "Jan _2 15:04:05.999",
@@ -1138,9 +1210,33 @@ mod tests {
                 1,
                 0,
             ),
-            parse_test_case("", "2006-01 002 15:04:05", "2010-02 035 21:00:57", false, false, 1, 0),
-            parse_test_case("", "2006-002 15:04:05", "2010-035 21:00:57", false, false, 1, 0),
-            parse_test_case("", "200600201 15:04:05", "201003502 21:00:57", false, false, 1, 0),
+            parse_test_case(
+                "",
+                "2006-01 002 15:04:05",
+                "2010-02 035 21:00:57",
+                false,
+                false,
+                1,
+                0,
+            ),
+            parse_test_case(
+                "",
+                "2006-002 15:04:05",
+                "2010-035 21:00:57",
+                false,
+                false,
+                1,
+                0,
+            ),
+            parse_test_case(
+                "",
+                "200600201 15:04:05",
+                "201003502 21:00:57",
+                false,
+                false,
+                1,
+                0,
+            ),
             // parse_test_case(
             //     "",
             //     "200600204 15:04:05",

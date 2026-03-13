@@ -10,9 +10,9 @@ use alloc::{
 
 use crate::{
     languages::azure_rbac::ast::{
-        AttributeReference, AttributeSource, BooleanLiteral, ConditionExpr, ConditionOperator, EmptySpan,
-        FunctionCallExpression, IdentifierExpression, ListLiteral, NullLiteral, NumberLiteral, SetLiteral,
-        StringLiteral,
+        AttributeReference, AttributeSource, BooleanLiteral, ConditionExpr, ConditionOperator,
+        EmptySpan, FunctionCallExpression, IdentifierExpression, ListLiteral, NullLiteral,
+        NumberLiteral, SetLiteral, StringLiteral,
     },
     lexer::{AzureRbacTokenKind, TokenKind},
 };
@@ -21,7 +21,9 @@ use super::{condition_parser::ConditionParser, ConditionParseError};
 
 impl<'source> ConditionParser<'source> {
     /// Parse primary expression (literals, attribute refs, function calls, parentheses)
-    pub(super) fn parse_primary_expression(&mut self) -> Result<ConditionExpr, ConditionParseError> {
+    pub(super) fn parse_primary_expression(
+        &mut self,
+    ) -> Result<ConditionExpr, ConditionParseError> {
         match self.current.0 {
             // Parenthesized expression
             TokenKind::Symbol if self.current_text() == "(" => {
@@ -38,21 +40,30 @@ impl<'source> ConditionParser<'source> {
             TokenKind::String => {
                 let value = self.current_text().to_string();
                 self.advance()?;
-                Ok(ConditionExpr::StringLiteral(StringLiteral { span: EmptySpan, value }))
+                Ok(ConditionExpr::StringLiteral(StringLiteral {
+                    span: EmptySpan,
+                    value,
+                }))
             }
 
             // Raw string literal
             TokenKind::RawString => {
                 let value = self.current_text().to_string();
                 self.advance()?;
-                Ok(ConditionExpr::StringLiteral(StringLiteral { span: EmptySpan, value }))
+                Ok(ConditionExpr::StringLiteral(StringLiteral {
+                    span: EmptySpan,
+                    value,
+                }))
             }
 
             // Number literal
             TokenKind::Number => {
                 let raw = self.current_text().to_string();
                 self.advance()?;
-                Ok(ConditionExpr::NumberLiteral(NumberLiteral { span: EmptySpan, raw }))
+                Ok(ConditionExpr::NumberLiteral(NumberLiteral {
+                    span: EmptySpan,
+                    raw,
+                }))
             }
 
             // Set literal {'a', 'b', 'c'}
@@ -117,7 +128,9 @@ impl<'source> ConditionParser<'source> {
     }
 
     /// Parse attribute reference @Source[namespace:attribute]
-    pub(super) fn parse_attribute_reference(&mut self) -> Result<ConditionExpr, ConditionParseError> {
+    pub(super) fn parse_attribute_reference(
+        &mut self,
+    ) -> Result<ConditionExpr, ConditionParseError> {
         self.expect(TokenKind::AzureRbac(AzureRbacTokenKind::At))?;
 
         // Parse source (Request, Resource, Principal, Environment, Context)
@@ -193,7 +206,10 @@ impl<'source> ConditionParser<'source> {
     }
 
     /// Parse function call
-    pub(super) fn parse_function_call(&mut self, function: String) -> Result<ConditionExpr, ConditionParseError> {
+    pub(super) fn parse_function_call(
+        &mut self,
+        function: String,
+    ) -> Result<ConditionExpr, ConditionParseError> {
         self.expect_symbol("(")?;
 
         let mut arguments = Vec::new();

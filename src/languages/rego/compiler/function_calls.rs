@@ -35,8 +35,14 @@ enum CallTarget {
 }
 
 impl<'a> Compiler<'a> {
-    pub(super) fn compile_function_call(&mut self, fcn: &ExprRef, params: &[ExprRef], span: Span) -> Result<Register> {
-        let fcn_path = get_path_string(fcn, None).map_err(|_| CompilerError::InvalidFunctionExpression.at(&span))?;
+    pub(super) fn compile_function_call(
+        &mut self,
+        fcn: &ExprRef,
+        params: &[ExprRef],
+        span: Span,
+    ) -> Result<Register> {
+        let fcn_path = get_path_string(fcn, None)
+            .map_err(|_| CompilerError::InvalidFunctionExpression.at(&span))?;
 
         let original_fcn_path = fcn_path.clone();
         let full_fcn_path = if self.policy.inner.rules.contains_key(&fcn_path) {
@@ -127,7 +133,13 @@ impl<'a> Compiler<'a> {
                 .apply_binding_plan(plan, dest, plan_span)
                 .map_err(|err| CompilerError::from(err).at(plan_span))?;
             if let Some(result_reg) = plan_result {
-                self.emit_instruction(Instruction::Move { dest, src: result_reg }, &span);
+                self.emit_instruction(
+                    Instruction::Move {
+                        dest,
+                        src: result_reg,
+                    },
+                    &span,
+                );
             } else {
                 self.emit_instruction(Instruction::LoadBool { dest, value: true }, &span);
             }
@@ -140,7 +152,9 @@ impl<'a> Compiler<'a> {
         if name == "print" {
             Some(2)
         } else {
-            builtins::BUILTINS.get(name).map(|(_, arity)| *arity as usize)
+            builtins::BUILTINS
+                .get(name)
+                .map(|(_, arity)| *arity as usize)
         }
     }
 }

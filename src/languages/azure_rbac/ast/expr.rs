@@ -6,7 +6,9 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    literals::{BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral},
+    literals::{
+        BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral,
+    },
     operators::{ArrayOperator, ConditionOperator},
     references::AttributeReference,
     span::EmptySpan,

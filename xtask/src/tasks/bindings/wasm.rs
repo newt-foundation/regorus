@@ -30,7 +30,12 @@ impl BuildWasmCommand {
     pub fn run(&self) -> Result<()> {
         let workspace = workspace_root();
         let wasm_dir = workspace.join("bindings/wasm");
-        build_wasm(&wasm_dir, self.release, &self.target, self.out_dir.as_deref())
+        build_wasm(
+            &wasm_dir,
+            self.release,
+            &self.target,
+            self.out_dir.as_deref(),
+        )
     }
 }
 
@@ -67,7 +72,12 @@ impl TestWasmCommand {
         let wasm_dir = workspace.join("bindings/wasm");
 
         if !self.skip_build {
-            build_wasm(&wasm_dir, self.release, &self.target, self.out_dir.as_deref())?;
+            build_wasm(
+                &wasm_dir,
+                self.release,
+                &self.target,
+                self.out_dir.as_deref(),
+            )?;
         }
 
         run_wasm_tests(&wasm_dir, self.release)?;

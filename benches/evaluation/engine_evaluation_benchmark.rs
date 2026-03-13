@@ -28,7 +28,10 @@ fn multi_threaded_eval(
     // Initialize policy evaluation counters
     let policy_counters = Arc::new(Mutex::new(HashMap::new()));
     for policy_name in &policy_names {
-        policy_counters.lock().unwrap().insert(policy_name.to_string(), 0);
+        policy_counters
+            .lock()
+            .unwrap()
+            .insert(policy_name.to_string(), 0);
     }
 
     let barrier = Arc::new(Barrier::new(num_threads));

@@ -15,7 +15,11 @@ fn non_string_key() -> Result<()> {
     obj.as_object_mut()?
         .insert(Value::from(std::f64::consts::PI), Value::Null);
     obj.as_object_mut()?.insert(
-        Value::from(vec![Value::Bool(true), Value::Null, Value::from(std::f64::consts::PI)]),
+        Value::from(vec![
+            Value::Bool(true),
+            Value::Null,
+            Value::from(std::f64::consts::PI),
+        ]),
         Value::Null,
     );
 
@@ -92,7 +96,10 @@ fn value_as_index() -> Result<()> {
 
     // Check case of item not present.
     let idx = Value::from(5.0);
-    assert_eq!(&Value::from_json_str("[1, 2, [3, 4, 5]]")?[&idx], &Value::Undefined);
+    assert_eq!(
+        &Value::from_json_str("[1, 2, [3, 4, 5]]")?[&idx],
+        &Value::Undefined
+    );
 
     // Check case of non indexable item.
     assert_eq!(&Value::Undefined[&idx], &Value::Undefined);
@@ -123,7 +130,8 @@ fn usize_as_index() -> Result<()> {
 fn api() -> Result<()> {
     assert!(&Value::from_json_str("{}")?.as_object()?.is_empty());
     let mut v = Value::new_object();
-    v.as_object_mut()?.insert(Value::String("a".into()), Value::from(3.145));
+    v.as_object_mut()?
+        .insert(Value::String("a".into()), Value::from(3.145));
     assert_eq!(v["a"], Value::from(3.145));
     assert_eq!(v.as_object()?.len(), 1);
 

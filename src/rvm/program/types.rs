@@ -48,7 +48,9 @@ impl SpanInfo {
 
     /// Get source information using the program's source table
     pub fn get_source<'a>(&self, source_table: &'a [SourceFile]) -> Option<&'a str> {
-        source_table.get(self.source_index).map(|s| s.content.as_str())
+        source_table
+            .get(self.source_index)
+            .map(|s| s.content.as_str())
     }
 
     /// Get source name using the program's source table

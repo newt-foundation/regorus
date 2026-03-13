@@ -23,14 +23,20 @@ fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
     ensure_args_count(span, name, params, args, 0)?;
     let mut obj = BTreeMap::new();
 
-    obj.insert(Value::String("commit".into()), Value::String(env!("GIT_HASH").into()));
+    obj.insert(
+        Value::String("commit".into()),
+        Value::String(env!("GIT_HASH").into()),
+    );
 
     obj.insert(
         Value::String("regorus-version".into()),
         Value::String(env!("CARGO_PKG_VERSION").into()),
     );
 
-    obj.insert(Value::String("version".into()), Value::String("0.60.0".into()));
+    obj.insert(
+        Value::String("version".into()),
+        Value::String("0.60.0".into()),
+    );
 
     // Emitting environment variables could lead to confidential data being leaked.
     #[cfg(feature = "std")]
@@ -84,7 +90,10 @@ fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         // Guard feature list growth while reporting enabled capabilities.
         enforce_limit()?;
     }
-    obj.insert(Value::String("features".into()), Value::from_array(feature_values));
+    obj.insert(
+        Value::String("features".into()),
+        Value::from_array(feature_values),
+    );
 
     let mut builtins: Vec<&&str> = builtins::BUILTINS.keys().collect();
     builtins.sort();
@@ -95,7 +104,10 @@ fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
         // Guard builtin list growth while reporting registered functions.
         enforce_limit()?;
     }
-    obj.insert(Value::String("builtins".into()), Value::from_array(builtin_values));
+    obj.insert(
+        Value::String("builtins".into()),
+        Value::from_array(builtin_values),
+    );
 
     Ok(Value::from_map(obj))
 }

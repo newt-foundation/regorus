@@ -35,7 +35,12 @@ fn multi_threaded_compiled_eval(
                         id: "policy.rego".into(),
                         content: policy.as_str().into(),
                     };
-                    compile_policy_with_entrypoint(Value::new_object(), &[module], "data.bench.allow".into()).unwrap()
+                    compile_policy_with_entrypoint(
+                        Value::new_object(),
+                        &[module],
+                        "data.bench.allow".into(),
+                    )
+                    .unwrap()
                 })
                 .collect(),
         ))
@@ -46,7 +51,10 @@ fn multi_threaded_compiled_eval(
     // Initialize policy evaluation counters
     let policy_counters = Arc::new(Mutex::new(HashMap::new()));
     for policy_name in &policy_names {
-        policy_counters.lock().unwrap().insert(policy_name.to_string(), 0);
+        policy_counters
+            .lock()
+            .unwrap()
+            .insert(policy_name.to_string(), 0);
     }
     let total_evals = Arc::new(Mutex::new(0usize));
 
@@ -112,9 +120,12 @@ fn multi_threaded_compiled_eval(
                         id: "policy.rego".into(),
                         content: policy.as_str().into(),
                     };
-                    let compiled_policy =
-                        compile_policy_with_entrypoint(Value::new_object(), &[module], "data.bench.allow".into())
-                            .unwrap();
+                    let compiled_policy = compile_policy_with_entrypoint(
+                        Value::new_object(),
+                        &[module],
+                        "data.bench.allow".into(),
+                    )
+                    .unwrap();
                     compiled_policy.eval_with_input(input_value)
                 };
 
@@ -148,7 +159,10 @@ fn multi_threaded_compiled_eval(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let max_threads = num_cpus::get() * 2;
-    println!("Running compiled policy benchmark with max_threads: {}", max_threads);
+    println!(
+        "Running compiled policy benchmark with max_threads: {}",
+        max_threads
+    );
 
     let evals_per_thread = 1000;
 

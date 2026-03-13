@@ -349,7 +349,11 @@ fn test_target_deserialization_boolean_discriminator() {
 
     // Check that boolean discriminator values work
     assert_eq!(target.resource_schema_lookup.len(), 2);
-    assert!(target.resource_schema_lookup.contains_key(&Value::from(true)));
-    assert!(target.resource_schema_lookup.contains_key(&Value::from(false)));
+    assert!(target
+        .resource_schema_lookup
+        .contains_key(&Value::from(true)));
+    assert!(target
+        .resource_schema_lookup
+        .contains_key(&Value::from(false)));
     assert!(target.default_resource_schema.is_none());
 }

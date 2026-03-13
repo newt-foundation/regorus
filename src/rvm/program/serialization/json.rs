@@ -56,7 +56,8 @@ impl Program {
             "rule_tree": self.rule_tree
         });
 
-        serde_json::to_string_pretty(&json_data).map_err(|e| format!("JSON serialization failed: {}", e))
+        serde_json::to_string_pretty(&json_data)
+            .map_err(|e| format!("JSON serialization failed: {}", e))
     }
 
     /// Deserialize program from JSON format
@@ -64,7 +65,9 @@ impl Program {
         let json_data: serde_json::Value =
             serde_json::from_str(data).map_err(|e| format!("JSON parsing failed: {}", e))?;
 
-        let metadata = json_data.get("metadata").ok_or("Missing metadata section")?;
+        let metadata = json_data
+            .get("metadata")
+            .ok_or("Missing metadata section")?;
         let compiler_version = metadata
             .get("compiler_version")
             .and_then(|v| v.as_str())
@@ -85,7 +88,10 @@ impl Program {
             .and_then(|v| v.as_u64())
             .and_then(|v| u8::try_from(v).ok())
             .unwrap_or(0);
-        let rego_v0 = metadata.get("rego_v0").and_then(|v| v.as_bool()).unwrap_or(false);
+        let rego_v0 = metadata
+            .get("rego_v0")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let needs_runtime_recursion_check = metadata
             .get("needs_runtime_recursion_check")
             .and_then(|v| v.as_bool())
@@ -125,8 +131,9 @@ impl Program {
         let instruction_data_json = json_data
             .get("instruction_data")
             .ok_or("Missing instruction_data section")?;
-        let instruction_data: InstructionData = serde_json::from_value(instruction_data_json.clone())
-            .map_err(|e| format!("Failed to deserialize instruction_data: {}", e))?;
+        let instruction_data: InstructionData =
+            serde_json::from_value(instruction_data_json.clone())
+                .map_err(|e| format!("Failed to deserialize instruction_data: {}", e))?;
 
         let literals: Vec<Value> = json_data
             .get("literals")

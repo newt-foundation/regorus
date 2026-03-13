@@ -9,23 +9,26 @@ impl Instruction {
     /// Get detailed display string with parameter resolution for debugging
     pub fn display_with_params(&self, instruction_data: &InstructionData) -> String {
         match *self {
-            Instruction::LoopStart { params_index } => instruction_data.get_loop_params(params_index).map_or_else(
-                || format!("LOOP_START P({}) [INVALID INDEX]", params_index),
-                |params| {
-                    format!(
-                        "LOOP_START {:?} R({}) R({}) R({}) R({}) {} {}",
-                        params.mode,
-                        params.collection,
-                        params.key_reg,
-                        params.value_reg,
-                        params.result_reg,
-                        params.body_start,
-                        params.loop_end
-                    )
-                },
-            ),
-            Instruction::BuiltinCall { params_index } => {
-                instruction_data.get_builtin_call_params(params_index).map_or_else(
+            Instruction::LoopStart { params_index } => {
+                instruction_data.get_loop_params(params_index).map_or_else(
+                    || format!("LOOP_START P({}) [INVALID INDEX]", params_index),
+                    |params| {
+                        format!(
+                            "LOOP_START {:?} R({}) R({}) R({}) R({}) {} {}",
+                            params.mode,
+                            params.collection,
+                            params.key_reg,
+                            params.value_reg,
+                            params.result_reg,
+                            params.body_start,
+                            params.loop_end
+                        )
+                    },
+                )
+            }
+            Instruction::BuiltinCall { params_index } => instruction_data
+                .get_builtin_call_params(params_index)
+                .map_or_else(
                     || format!("BUILTIN_CALL P({}) [INVALID INDEX]", params_index),
                     |params| {
                         let args_str = params
@@ -39,13 +42,13 @@ impl Instruction {
                             params.dest, params.builtin_index, args_str
                         )
                     },
-                )
-            }
+                ),
             Instruction::HostAwait { dest, arg, id } => {
                 format!("HOST_AWAIT R({}) R({}) R({})", dest, arg, id)
             }
-            Instruction::FunctionCall { params_index } => {
-                instruction_data.get_function_call_params(params_index).map_or_else(
+            Instruction::FunctionCall { params_index } => instruction_data
+                .get_function_call_params(params_index)
+                .map_or_else(
                     || format!("FUNCTION_CALL P({}) [INVALID INDEX]", params_index),
                     |params| {
                         let args_str = params
@@ -59,36 +62,42 @@ impl Instruction {
                             params.dest, params.func_rule_index, args_str
                         )
                     },
-                )
-            }
+                ),
             Instruction::ObjectCreate { params_index } => {
-                instruction_data.get_object_create_params(params_index).map_or_else(
-                    || format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index),
-                    |params| {
-                        let mut field_parts = Vec::new();
+                instruction_data
+                    .get_object_create_params(params_index)
+                    .map_or_else(
+                        || format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index),
+                        |params| {
+                            let mut field_parts = Vec::new();
 
-                        // Add literal key fields
-                        for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
-                            field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
-                        }
+                            // Add literal key fields
+                            for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
+                                field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
+                            }
 
-                        // Add non-literal key fields
-                        for &(key_reg, value_reg) in params.field_pairs() {
-                            field_parts.push(format!("R({}):R({})", key_reg, value_reg));
-                        }
+                            // Add non-literal key fields
+                            for &(key_reg, value_reg) in params.field_pairs() {
+                                field_parts.push(format!("R({}):R({})", key_reg, value_reg));
+                            }
 
-                        let fields_str = field_parts.join(" ");
-                        format!(
-                            "OBJECT_CREATE R({}) L({}) [{}]",
-                            params.dest, params.template_literal_idx, fields_str
-                        )
-                    },
-                )
+                            let fields_str = field_parts.join(" ");
+                            format!(
+                                "OBJECT_CREATE R({}) L({}) [{}]",
+                                params.dest, params.template_literal_idx, fields_str
+                            )
+                        },
+                    )
             }
             Instruction::VirtualDataDocumentLookup { params_index } => instruction_data
                 .get_virtual_data_document_lookup_params(params_index)
                 .map_or_else(
-                    || format!("VIRTUAL_DATA_DOCUMENT_LOOKUP P({}) [INVALID INDEX]", params_index),
+                    || {
+                        format!(
+                            "VIRTUAL_DATA_DOCUMENT_LOOKUP P({}) [INVALID INDEX]",
+                            params_index
+                        )
+                    },
                     |params| {
                         let components_str = params
                             .path_components
@@ -197,12 +206,19 @@ impl core::fmt::Display for Instruction {
             Instruction::ObjectCreate { params_index } => {
                 format!("OBJECT_CREATE P({})", params_index)
             }
-            Instruction::Index { dest, container, key } => format!("INDEX R({}) R({}) R({})", dest, container, key),
+            Instruction::Index {
+                dest,
+                container,
+                key,
+            } => format!("INDEX R({}) R({}) R({})", dest, container, key),
             Instruction::IndexLiteral {
                 dest,
                 container,
                 literal_idx,
-            } => format!("INDEX_LITERAL R({}) R({}) L({})", dest, container, literal_idx),
+            } => format!(
+                "INDEX_LITERAL R({}) R({}) L({})",
+                dest, container, literal_idx
+            ),
             Instruction::ChainedIndex { params_index } => {
                 format!("CHAINED_INDEX P({})", params_index)
             }
@@ -233,7 +249,10 @@ impl core::fmt::Display for Instruction {
             Instruction::LoopStart { params_index } => {
                 format!("LOOP_START P({})", params_index)
             }
-            Instruction::LoopNext { body_start, loop_end } => {
+            Instruction::LoopNext {
+                body_start,
+                loop_end,
+            } => {
                 format!("LOOP_NEXT {} {}", body_start, loop_end)
             }
             Instruction::CallRule { dest, rule_index } => {
@@ -245,7 +264,10 @@ impl core::fmt::Display for Instruction {
             Instruction::DestructuringSuccess {} => String::from("DESTRUCTURING_SUCCESS"),
             Instruction::RuleReturn {} => String::from("RULE_RETURN"),
 
-            Instruction::RuleInit { result_reg, rule_index } => {
+            Instruction::RuleInit {
+                result_reg,
+                rule_index,
+            } => {
                 format!("RULE_INIT R({}) {}", result_reg, rule_index)
             }
             Instruction::Halt {} => String::from("HALT"),

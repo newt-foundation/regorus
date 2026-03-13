@@ -27,7 +27,8 @@ fn sleep(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     ensure_args_count(span, name, params, args, 1)?;
 
     let val = ensure_string(name, &params[0], &args[0])?;
-    let dur = time::compat::parse_duration(val.as_ref()).map_err(|e| params[0].span().error(&format!("{e}")))?;
+    let dur = time::compat::parse_duration(val.as_ref())
+        .map_err(|e| params[0].span().error(&format!("{e}")))?;
 
     let std_dur = dur
         .to_std()

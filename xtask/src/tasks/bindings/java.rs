@@ -103,8 +103,12 @@ fn run_java_integration(java_dir: &Path, release: bool) -> Result<()> {
 
 fn locate_java_jar(java_dir: &Path) -> Result<PathBuf> {
     let target_dir = java_dir.join("target");
-    let entries = fs::read_dir(&target_dir)
-        .with_context(|| format!("failed to enumerate built JARs under {}", target_dir.display()))?;
+    let entries = fs::read_dir(&target_dir).with_context(|| {
+        format!(
+            "failed to enumerate built JARs under {}",
+            target_dir.display()
+        )
+    })?;
 
     let mut candidates = Vec::new();
     for entry in entries {

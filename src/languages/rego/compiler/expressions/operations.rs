@@ -151,7 +151,10 @@ impl<'a> Compiler<'a> {
                     num_args: 2,
                     args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
                 };
-                let params_index = self.program.instruction_data.add_builtin_call_params(params);
+                let params_index = self
+                    .program
+                    .instruction_data
+                    .add_builtin_call_params(params);
                 self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
             }
             BinOp::Intersection => {
@@ -162,7 +165,10 @@ impl<'a> Compiler<'a> {
                     num_args: 2,
                     args: [lhs_reg, rhs_reg, 0, 0, 0, 0, 0, 0],
                 };
-                let params_index = self.program.instruction_data.add_builtin_call_params(params);
+                let params_index = self
+                    .program
+                    .instruction_data
+                    .add_builtin_call_params(params);
                 self.emit_instruction(Instruction::BuiltinCall { params_index }, span);
             }
         }
@@ -176,7 +182,8 @@ impl<'a> Compiler<'a> {
         span: &Span,
     ) -> Result<Register> {
         let value_reg = self.compile_rego_expr_with_span(value, value.span(), false)?;
-        let collection_reg = self.compile_rego_expr_with_span(collection, collection.span(), false)?;
+        let collection_reg =
+            self.compile_rego_expr_with_span(collection, collection.span(), false)?;
 
         let dest = self.alloc_register();
         self.emit_instruction(
@@ -220,7 +227,12 @@ impl<'a> Compiler<'a> {
     }
 
     #[cfg(feature = "rego-extensions")]
-    pub(super) fn compile_or_expr(&mut self, lhs: &ExprRef, rhs: &ExprRef, span: &Span) -> Result<Register> {
+    pub(super) fn compile_or_expr(
+        &mut self,
+        lhs: &ExprRef,
+        rhs: &ExprRef,
+        span: &Span,
+    ) -> Result<Register> {
         let lhs_reg = self.compile_rego_expr_with_span(lhs, lhs.span(), false)?;
         let rhs_reg = self.compile_rego_expr_with_span(rhs, rhs.span(), false)?;
 

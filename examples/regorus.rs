@@ -56,7 +56,8 @@ fn rego_eval(
 
     // Load files from given bundles.
     for dir in bundles.iter() {
-        let entries = std::fs::read_dir(dir).or_else(|e| bail!("failed to read bundle {dir}.\n{e}"))?;
+        let entries =
+            std::fs::read_dir(dir).or_else(|e| bail!("failed to read bundle {dir}.\n{e}"))?;
         // Loop through each entry in the bundle folder.
         for entry in entries {
             let entry = entry.or_else(|e| bail!("failed to unwrap entry. {e}"))?;

@@ -38,7 +38,9 @@ fn to_number(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -
             }
         },
         _ => {
-            bail!(span.error(format!("`{name}` expects bool/number/string/null argument.").as_str()));
+            bail!(
+                span.error(format!("`{name}` expects bool/number/string/null argument.").as_str())
+            );
         }
     })
 }

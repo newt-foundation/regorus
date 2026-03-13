@@ -31,7 +31,10 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
     let version = uuid.get_version_num();
 
     let mut result = BTreeMap::new();
-    result.insert(Value::String("version".into()), Value::Number(version.into()));
+    result.insert(
+        Value::String("version".into()),
+        Value::Number(version.into()),
+    );
     result.insert(
         Value::String("variant".into()),
         Value::String(uuid.get_variant().to_string().into()),
@@ -69,8 +72,14 @@ fn parse(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         );
 
         if version == 2 {
-            result.insert(Value::String("id".into()), Value::Number((f1 as u64).into()));
-            result.insert(Value::String("domain".into()), Value::String(domain(f4[1]).into()));
+            result.insert(
+                Value::String("id".into()),
+                Value::Number((f1 as u64).into()),
+            );
+            result.insert(
+                Value::String("domain".into()),
+                Value::String(domain(f4[1]).into()),
+            );
         }
     }
 

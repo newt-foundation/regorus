@@ -26,15 +26,17 @@ impl<'a> Compiler<'a> {
         let key_reg = self.alloc_register();
         let value_reg = self.alloc_register();
 
-        let params_index = self.program.add_comprehension_begin_params(ComprehensionBeginParams {
-            mode,
-            collection_reg: result_reg,
-            result_reg,
-            key_reg,
-            value_reg,
-            body_start: 0,
-            comprehension_end: 0,
-        });
+        let params_index = self
+            .program
+            .add_comprehension_begin_params(ComprehensionBeginParams {
+                mode,
+                collection_reg: result_reg,
+                result_reg,
+                key_reg,
+                value_reg,
+                body_start: 0,
+                comprehension_end: 0,
+            });
 
         self.emit_instruction(Instruction::ComprehensionBegin { params_index }, span);
 
@@ -55,10 +57,11 @@ impl<'a> Compiler<'a> {
         self.emit_instruction(Instruction::ComprehensionEnd {}, span);
         let comprehension_end = self.program.instructions.len() as u16;
 
-        self.program.update_comprehension_begin_params(params_index, |params| {
-            params.body_start = body_start;
-            params.comprehension_end = comprehension_end;
-        });
+        self.program
+            .update_comprehension_begin_params(params_index, |params| {
+                params.body_start = body_start;
+                params.comprehension_end = comprehension_end;
+            });
 
         Ok(result_reg)
     }
@@ -79,7 +82,12 @@ impl<'a> Compiler<'a> {
         )
     }
 
-    pub(super) fn compile_set_comprehension(&mut self, term: &ExprRef, query: &Query, span: &Span) -> Result<Register> {
+    pub(super) fn compile_set_comprehension(
+        &mut self,
+        term: &ExprRef,
+        query: &Query,
+        span: &Span,
+    ) -> Result<Register> {
         self.compile_comprehension(
             ComprehensionMode::Set,
             ComprehensionType::Set,

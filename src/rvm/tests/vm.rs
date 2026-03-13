@@ -298,33 +298,34 @@ mod tests {
             None
         };
 
-        let process_responses = |responses: Vec<HostAwaitResponseSpec>| -> Result<BTreeMap<Value, Vec<Value>>> {
-            let mut processed: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
+        let process_responses =
+            |responses: Vec<HostAwaitResponseSpec>| -> Result<BTreeMap<Value, Vec<Value>>> {
+                let mut processed: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
 
-            for spec in responses {
-                let identifier = process_value(&spec.id)?;
-                let mut values: Vec<Value> = Vec::new();
+                for spec in responses {
+                    let identifier = process_value(&spec.id)?;
+                    let mut values: Vec<Value> = Vec::new();
 
-                if let Some(single) = spec.value.as_ref() {
-                    values.push(process_value(single)?);
+                    if let Some(single) = spec.value.as_ref() {
+                        values.push(process_value(single)?);
+                    }
+
+                    for value in &spec.values {
+                        values.push(process_value(value)?);
+                    }
+
+                    if values.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "HostAwait response specification for id {:?} has no values",
+                            identifier
+                        ));
+                    }
+
+                    processed.entry(identifier).or_default().extend(values);
                 }
 
-                for value in &spec.values {
-                    values.push(process_value(value)?);
-                }
-
-                if values.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "HostAwait response specification for id {:?} has no values",
-                        identifier
-                    ));
-                }
-
-                processed.entry(identifier).or_default().extend(values);
-            }
-
-            Ok(processed)
-        };
+                Ok(processed)
+            };
 
         let processed_host_responses = if let Some(responses) = host_await_responses {
             Some(process_responses(responses)?)
@@ -332,18 +333,19 @@ mod tests {
             None
         };
 
-        let processed_host_responses_run_to_completion = if let Some(responses) = host_await_responses_run_to_completion
-        {
-            Some(process_responses(responses)?)
-        } else {
-            processed_host_responses.clone()
-        };
+        let processed_host_responses_run_to_completion =
+            if let Some(responses) = host_await_responses_run_to_completion {
+                Some(process_responses(responses)?)
+            } else {
+                processed_host_responses.clone()
+            };
 
-        let processed_host_responses_suspendable = if let Some(responses) = host_await_responses_suspendable {
-            Some(process_responses(responses)?)
-        } else {
-            processed_host_responses.clone()
-        };
+        let processed_host_responses_suspendable =
+            if let Some(responses) = host_await_responses_suspendable {
+                Some(process_responses(responses)?)
+            } else {
+                processed_host_responses.clone()
+            };
 
         // Create a Program from instructions and literals
         let mut program = crate::rvm::program::Program::new();
@@ -370,7 +372,12 @@ mod tests {
                 "Complete" => RuleType::Complete,
                 "PartialSet" => RuleType::PartialSet,
                 "PartialObject" => RuleType::PartialObject,
-                _ => return Err(anyhow::anyhow!("Unknown rule type: {}", rule_info_spec.rule_type)),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown rule type: {}",
+                        rule_info_spec.rule_type
+                    ))
+                }
             };
 
             // Convert Vec<Vec<u16>> to Vec<Vec<u32>>
@@ -513,7 +520,9 @@ mod tests {
                         .map(|(k, v)| (k.try_into().unwrap(), v.try_into().unwrap()))
                         .collect(),
                 };
-                program.instruction_data.add_object_create_params(object_create_params);
+                program
+                    .instruction_data
+                    .add_object_create_params(object_create_params);
             }
 
             // Convert array create params
@@ -528,7 +537,9 @@ mod tests {
                         .map(|reg| reg.try_into().unwrap())
                         .collect(),
                 };
-                program.instruction_data.add_array_create_params(array_create_params);
+                program
+                    .instruction_data
+                    .add_array_create_params(array_create_params);
             }
 
             // Convert set create params
@@ -543,12 +554,16 @@ mod tests {
                         .map(|reg| reg.try_into().unwrap())
                         .collect(),
                 };
-                program.instruction_data.add_set_create_params(set_create_params);
+                program
+                    .instruction_data
+                    .add_set_create_params(set_create_params);
             }
 
             // Convert virtual data document lookup params
             for virtual_spec in params_spec.virtual_data_document_lookup_params {
-                use crate::rvm::instructions::{LiteralOrRegister, VirtualDataDocumentLookupParams};
+                use crate::rvm::instructions::{
+                    LiteralOrRegister, VirtualDataDocumentLookupParams,
+                };
 
                 let path_components: Vec<LiteralOrRegister> = virtual_spec
                     .path_components
@@ -561,7 +576,9 @@ mod tests {
                     path_components,
                 };
 
-                program.instruction_data.add_virtual_data_document_lookup_params(params);
+                program
+                    .instruction_data
+                    .add_virtual_data_document_lookup_params(params);
             }
 
             // Convert chained index params
@@ -623,7 +640,10 @@ mod tests {
         // Initialize resolved builtins if we have builtin info
         if !program.builtin_info_table.is_empty() {
             if let Err(e) = program.initialize_resolved_builtins() {
-                return Err(anyhow::anyhow!("Failed to initialize resolved builtins: {}", e));
+                return Err(anyhow::anyhow!(
+                    "Failed to initialize resolved builtins: {}",
+                    e
+                ));
             }
         }
 
@@ -687,7 +707,9 @@ mod tests {
                         }
 
                         match reason {
-                            SuspendReason::HostAwait { dest, identifier, .. } => {
+                            SuspendReason::HostAwait {
+                                dest, identifier, ..
+                            } => {
                                 let dest = *dest;
                                 let identifier = identifier.clone();
 
@@ -732,7 +754,9 @@ mod tests {
                                     response
                                 };
 
-                                last_result = vm.resume(Some(response)).map_err(|e| anyhow::anyhow!("{}", e));
+                                last_result = vm
+                                    .resume(Some(response))
+                                    .map_err(|e| anyhow::anyhow!("{}", e));
                             }
                             SuspendReason::Step => {
                                 if !use_step_mode {
@@ -756,51 +780,54 @@ mod tests {
             }
         };
 
-        let compare_results =
-            |baseline_name: &str, baseline: &Result<Value>, other_name: &str, other: &Result<Value>| -> Result<()> {
-                match (baseline, other) {
-                    (Ok(expected), Ok(actual)) => {
-                        if expected != actual {
-                            return Err(anyhow::anyhow!(
-                                "{} execution result {:?} differed from {} {:?}",
-                                other_name,
-                                actual,
-                                baseline_name,
-                                expected
-                            ));
-                        }
-                        Ok(())
+        let compare_results = |baseline_name: &str,
+                               baseline: &Result<Value>,
+                               other_name: &str,
+                               other: &Result<Value>|
+         -> Result<()> {
+            match (baseline, other) {
+                (Ok(expected), Ok(actual)) => {
+                    if expected != actual {
+                        return Err(anyhow::anyhow!(
+                            "{} execution result {:?} differed from {} {:?}",
+                            other_name,
+                            actual,
+                            baseline_name,
+                            expected
+                        ));
                     }
-                    (Err(expected_err), Err(other_err)) => {
-                        let expected_msg = expected_err.to_string();
-                        let other_msg = other_err.to_string();
-                        if expected_msg != other_msg {
-                            return Err(anyhow::anyhow!(
-                                "{} execution error '{}' differed from {} '{}'",
-                                other_name,
-                                other_msg,
-                                baseline_name,
-                                expected_msg
-                            ));
-                        }
-                        Ok(())
-                    }
-                    (Ok(expected), Err(other_err)) => Err(anyhow::anyhow!(
-                        "{} execution failed with '{}' while {} succeeded with {:?}",
-                        other_name,
-                        other_err,
-                        baseline_name,
-                        expected
-                    )),
-                    (Err(expected_err), Ok(actual)) => Err(anyhow::anyhow!(
-                        "{} execution succeeded with {:?} while {} failed with '{}'",
-                        other_name,
-                        actual,
-                        baseline_name,
-                        expected_err
-                    )),
+                    Ok(())
                 }
-            };
+                (Err(expected_err), Err(other_err)) => {
+                    let expected_msg = expected_err.to_string();
+                    let other_msg = other_err.to_string();
+                    if expected_msg != other_msg {
+                        return Err(anyhow::anyhow!(
+                            "{} execution error '{}' differed from {} '{}'",
+                            other_name,
+                            other_msg,
+                            baseline_name,
+                            expected_msg
+                        ));
+                    }
+                    Ok(())
+                }
+                (Ok(expected), Err(other_err)) => Err(anyhow::anyhow!(
+                    "{} execution failed with '{}' while {} succeeded with {:?}",
+                    other_name,
+                    other_err,
+                    baseline_name,
+                    expected
+                )),
+                (Err(expected_err), Ok(actual)) => Err(anyhow::anyhow!(
+                    "{} execution succeeded with {:?} while {} failed with '{}'",
+                    other_name,
+                    actual,
+                    baseline_name,
+                    expected_err
+                )),
+            }
+        };
 
         let run_to_completion = run_with_mode(
             ExecutionMode::RunToCompletion,
@@ -831,8 +858,18 @@ mod tests {
             return suspendable;
         }
 
-        compare_results("run-to-completion", &run_to_completion, "suspendable", &suspendable)?;
-        compare_results("run-to-completion", &run_to_completion, "step-by-step", &stepwise)?;
+        compare_results(
+            "run-to-completion",
+            &run_to_completion,
+            "suspendable",
+            &suspendable,
+        )?;
+        compare_results(
+            "run-to-completion",
+            &run_to_completion,
+            "step-by-step",
+            &stepwise,
+        )?;
 
         run_to_completion
     }
@@ -885,7 +922,11 @@ mod tests {
             }
 
             for expectation in expectations {
-                let mode_label = if expectation.strict { "strict" } else { "non-strict" };
+                let mode_label = if expectation.strict {
+                    "strict"
+                } else {
+                    "non-strict"
+                };
                 std::println!("  Mode: {}", mode_label);
 
                 let execution_result = execute_vm_instructions(
@@ -916,14 +957,22 @@ mod tests {
                         Err(e) => {
                             let error_msg = std::format!("{}", e);
                             if !error_msg.contains(expected_error) {
-                                std::println!("Test case '{}' failed ({} mode):", test_case.note, mode_label);
+                                std::println!(
+                                    "Test case '{}' failed ({} mode):",
+                                    test_case.note,
+                                    mode_label
+                                );
                                 std::println!("  Expected error containing: '{}'", expected_error);
                                 std::println!("  Actual error: '{}'", error_msg);
                                 panic!("VM test case failed: {}", test_case.note);
                             }
                         }
                         Ok(result) => {
-                            std::println!("Test case '{}' failed ({} mode):", test_case.note, mode_label);
+                            std::println!(
+                                "Test case '{}' failed ({} mode):",
+                                test_case.note,
+                                mode_label
+                            );
                             std::println!("  Expected error containing: '{}'", expected_error);
                             std::println!("  But got successful result: {:?}", result);
                             panic!("VM test case failed: {}", test_case.note);
@@ -944,7 +993,11 @@ mod tests {
                     };
 
                     if actual_result != expected_result {
-                        std::println!("Test case '{}' failed ({} mode):", test_case.note, mode_label);
+                        std::println!(
+                            "Test case '{}' failed ({} mode):",
+                            test_case.note,
+                            mode_label
+                        );
                         std::println!("  Expected: {:?}", expected_result);
                         std::println!("  Actual: {:?}", actual_result);
                         panic!("VM test case failed: {}", test_case.note);

@@ -49,7 +49,10 @@ fn analyze_file(regos: &[String], expected_scopes: &[Scope]) -> Result<()> {
     let mut sources = vec![];
     let mut modules = vec![];
     for (idx, _) in regos.iter().enumerate() {
-        sources.push(Source::from_contents(format!("rego_{idx}"), regos[idx].clone())?);
+        sources.push(Source::from_contents(
+            format!("rego_{idx}"),
+            regos[idx].clone(),
+        )?);
     }
 
     for source in &sources {
@@ -89,9 +92,18 @@ fn analyze_file(regos: &[String], expected_scopes: &[Scope]) -> Result<()> {
         if idx > expected_scopes.len() {
             bail!("extra scope generated.")
         }
-        assert_eq!(to_string_set(scope.locals.keys()), expected_scopes[idx].locals);
-        assert_eq!(to_string_set(scope.unscoped.iter()), expected_scopes[idx].unscoped);
-        assert_eq!(to_string_set(scope.inputs.iter()), expected_scopes[idx].inputs);
+        assert_eq!(
+            to_string_set(scope.locals.keys()),
+            expected_scopes[idx].locals
+        );
+        assert_eq!(
+            to_string_set(scope.unscoped.iter()),
+            expected_scopes[idx].unscoped
+        );
+        assert_eq!(
+            to_string_set(scope.inputs.iter()),
+            expected_scopes[idx].inputs
+        );
         std::println!("scope {idx} matched.")
     }
 

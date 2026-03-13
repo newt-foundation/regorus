@@ -87,7 +87,9 @@ pub fn resolve_target(interpreter: &mut Interpreter) -> Result<(), TargetCompile
                         Some(pkg) => pkg.as_str().into(),
                         None => {
                             return Err(TargetCompileError::TargetNotFound(
-                                format!("No package found for target '{}'", target_name).as_str().into(),
+                                format!("No package found for target '{}'", target_name)
+                                    .as_str()
+                                    .into(),
                             ));
                         }
                     },
@@ -98,7 +100,9 @@ pub fn resolve_target(interpreter: &mut Interpreter) -> Result<(), TargetCompile
                 interpreter.compiled_policy_mut().target_info = Some(target_info);
             }
             None => {
-                return Err(TargetCompileError::TargetNotFound(target_name.as_str().into()));
+                return Err(TargetCompileError::TargetNotFound(
+                    target_name.as_str().into(),
+                ));
             }
         }
     } else {
@@ -127,7 +131,8 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
                 if rule_path.starts_with(&expected_path) && rule_path.len() > expected_path.len() {
                     // Sub-paths are not allowed for effects - they must be exact matches only
                     // This prevents effect rules from being defined at deeper nested paths
-                    let all_effect_names: Vec<String> = target.effects.keys().map(|k| k.to_string()).collect();
+                    let all_effect_names: Vec<String> =
+                        target.effects.keys().map(|k| k.to_string()).collect();
                     let formatted_names = format_effect_names(&all_effect_names);
                     return Err(TargetCompileError::NoEffectRules {
                         target_name: target.name.to_string().into(),
@@ -141,7 +146,8 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
             for rule_path in interpreter.compiled_policy.default_rules.keys() {
                 if rule_path.starts_with(&expected_path) && rule_path.len() > expected_path.len() {
                     // Sub-paths are not allowed for effects - they must be exact matches only
-                    let all_effect_names: Vec<String> = target.effects.keys().map(|k| k.to_string()).collect();
+                    let all_effect_names: Vec<String> =
+                        target.effects.keys().map(|k| k.to_string()).collect();
                     let formatted_names = format_effect_names(&all_effect_names);
                     return Err(TargetCompileError::NoEffectRules {
                         target_name: target.name.to_string().into(),
@@ -163,7 +169,11 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
 
             // Check for exact match in default_rules
             if !has_rules {
-                if let Some(default_rules) = interpreter.compiled_policy.default_rules.get(&expected_path) {
+                if let Some(default_rules) = interpreter
+                    .compiled_policy
+                    .default_rules
+                    .get(&expected_path)
+                {
                     if !default_rules.is_empty() {
                         has_rules = true;
                     }
@@ -178,7 +188,8 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
         // Ensure exactly one effect has rules defined
         match effects_with_rules.len() {
             0 => {
-                let all_effect_names: Vec<String> = target.effects.keys().map(|k| k.to_string()).collect();
+                let all_effect_names: Vec<String> =
+                    target.effects.keys().map(|k| k.to_string()).collect();
                 let formatted_names = format_effect_names(&all_effect_names);
                 return Err(TargetCompileError::NoEffectRules {
                     target_name: target.name.to_string().into(),
@@ -195,16 +206,20 @@ pub fn resolve_effect(interpreter: &mut Interpreter) -> Result<(), TargetCompile
                     None => {
                         // This should not happen since we got the effect_name from target.effects.keys()
                         return Err(TargetCompileError::TargetNotFound(
-                            format!("Effect '{}' not found in target '{}'", effect_name, target.name)
-                                .as_str()
-                                .into(),
+                            format!(
+                                "Effect '{}' not found in target '{}'",
+                                effect_name, target.name
+                            )
+                            .as_str()
+                            .into(),
                         ));
                     }
                 };
 
                 // Update the target info with the correct effect schema, name, and path
                 let expected_path = format!("data.{}.{}", package, effect_name);
-                if let Some(ref mut target_info_mut) = interpreter.compiled_policy_mut().target_info {
+                if let Some(ref mut target_info_mut) = interpreter.compiled_policy_mut().target_info
+                {
                     target_info_mut.effect_schema = effect_schema;
                     target_info_mut.effect_name = effect_name.as_ref().into();
                     target_info_mut.effect_path = expected_path.as_str().into();

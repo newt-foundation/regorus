@@ -17,7 +17,12 @@ impl Program {
     /// path: Package path components (e.g., ["p1", "p2"] for data.p1.p2.rule)
     /// rule_name: Rule name (e.g., "rule")
     /// rule_index: Index of the rule in rule_infos
-    pub fn add_rule_to_tree(&mut self, path: &[String], rule_name: &str, rule_index: usize) -> AnyResult<()> {
+    pub fn add_rule_to_tree(
+        &mut self,
+        path: &[String],
+        rule_name: &str,
+        rule_index: usize,
+    ) -> AnyResult<()> {
         if path.len() >= Program::MAX_PATH_DEPTH {
             return Err(anyhow::anyhow!(
                 "Rule path depth exceeds maximum ({} >= {})",
@@ -78,7 +83,11 @@ impl Program {
                             }
                             Value::Object(_) => {
                                 if let Value::Object(_) = *data_value {
-                                    Self::check_conflicts_recursive(rule_value, data_value, current_path)?;
+                                    Self::check_conflicts_recursive(
+                                        rule_value,
+                                        data_value,
+                                        current_path,
+                                    )?;
                                 } else if data_value != &Value::Undefined {
                                     return Err(crate::rvm::vm::VmError::RuleDataConflict {
                                         message: format!(

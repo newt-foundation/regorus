@@ -495,7 +495,10 @@ fn parse_loop_next(params_text: &str) -> Result<Instruction> {
     let params = parse_params(params_text)?;
     let body_start = get_param_u16(&params, "body_start")?;
     let loop_end = get_param_u16(&params, "loop_end")?;
-    Ok(Instruction::LoopNext { body_start, loop_end })
+    Ok(Instruction::LoopNext {
+        body_start,
+        loop_end,
+    })
 }
 
 fn parse_load_true(params_text: &str) -> Result<Instruction> {
