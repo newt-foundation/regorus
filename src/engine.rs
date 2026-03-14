@@ -21,7 +21,7 @@ use crate::Rc;
 use anyhow::{anyhow, bail, Result};
 
 #[cfg(feature = "newton-identity")]
-use crate::extensions::identity::IdentityData;
+use crate::extensions::identity::KycIdentityData;
 
 /// The Rego evaluation engine.
 #[derive(Debug, Clone)]
@@ -207,49 +207,57 @@ impl Engine {
         crate::extensions::crypto::register_newton_crypto_extensions(self)
     }
 
-    /// Register Newton crypto extensions with the engine.
+    /// Register Newton KYC identity domain extensions with the engine.
     ///
-    /// This method registers Newton-specific Rego built-in functions for
-    /// Ethereum cryptography operations, including ECDSA signature recovery.
+    /// Registers domain-namespaced built-ins under `newton.identity.kyc.*`
+    /// and the generic `newton.identity.get(field)` accessor. Pass `None`
+    /// for `existing_fields` when KYC is the first domain; pass the returned
+    /// handle to subsequent domain registrations so all domains share a
+    /// single `newton.identity.get` accessor.
     ///
-    /// Available functions:
-    /// | newton.identity.check_approved             | Check the status to ensure the data passed all approval checks before submitting    |
-    /// | newton.identity.address_in_countries       | Check that the country on the submitted document is included in a list of countries |
-    /// | newton.identity.address_in_subdivision     | Check that the address on the submitted document is included in a list of states    |
-    /// | newton.identity.address_not_in_subdivision | Check that the address on the submitted document is not within a list of states     |
-    /// | newton.identity.age_gte                    | Check that the birthdate in the data implies an age greater or equal to the input   |
-    /// | newton.identity.not_expired                | Check that the document expiration date has not passed                              |
-    /// | newton.identity.valid_for                  | Check that the document expiration date is valid for subsequent inputted duration   |
-    /// | newton.identity.issued_since               | Check that the document issuing data was at least the specified time ago            |
+    /// # Available functions
+    ///
+    /// | Function | Description |
+    /// |----------|-------------|
+    /// | `newton.identity.kyc.check_approved` | Check approval status |
+    /// | `newton.identity.kyc.address_in_countries` | Check document country against list |
+    /// | `newton.identity.kyc.address_in_subdivision` | Check document address against ISO subdivision list |
+    /// | `newton.identity.kyc.address_not_in_subdivision` | Check document address is not in ISO subdivision list |
+    /// | `newton.identity.kyc.age_gte` | Check birthdate implies age >= input |
+    /// | `newton.identity.kyc.not_expired` | Check document expiration date has not passed |
+    /// | `newton.identity.kyc.valid_for` | Check document is valid for N more days |
+    /// | `newton.identity.kyc.issued_since` | Check document was issued at least N days ago |
+    /// | `newton.identity.get(field)` | Generic accessor for any identity domain field |
     ///
     /// ```
     /// # use regorus::*;
+    /// # use regorus::extensions::identity::KycIdentityData;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
     ///
-    /// let id = IdentityData{
+    /// let id = KycIdentityData {
     ///     reference_date: "2026-01-01".to_string(),
     ///     status: "approved".to_string(),
-    ///     selected_country_code: "US"".to_string(),
+    ///     selected_country_code: "US".to_string(),
     ///     address_subdivision: "CA".to_string(),
     ///     address_country_code: "US".to_string(),
     ///     birthdate: "1970-01-01".to_string(),
     ///     expiration_date: "2030-01-01".to_string(),
     ///     issue_date: "2020-01-01".to_string(),
     ///     issuing_authority: "CA".to_string(),
-    /// }
+    /// };
     ///
-    /// // Register Newton crypto extensions
-    /// engine.with_newton_identity_extensions(id)?;
+    /// // Register Newton KYC identity extensions (first domain, pass None)
+    /// let _shared = engine.with_newton_identity_kyc_extensions(id, None)?;
     ///
     /// engine.add_policy(
     ///     "test.rego".to_string(),
     ///     r#"
     ///    package test
     ///    allow if {
-    ///        newton.identity.check_approved()
-    ///        newton.identity.address_in_countries(["US"])
-    ///        newton.identity.address_not_in_subdivision(["NY","NC","HI"])
+    ///        newton.identity.kyc.check_approved()
+    ///        newton.identity.kyc.address_in_countries(["US"])
+    ///        newton.identity.kyc.address_not_in_subdivision(["NY","NC","HI"])
     ///    }
     ///    "#
     ///     .to_string(),
@@ -259,8 +267,12 @@ impl Engine {
     /// ```
     #[cfg(feature = "newton-identity")]
     #[cfg_attr(docsrs, doc(cfg(feature = "newton-identity")))]
-    pub fn with_newton_identity_extensions(&mut self, data: IdentityData) -> Result<()> {
-        crate::extensions::identity::register_newton_identity_extensions(self, data)
+    pub fn with_newton_identity_kyc_extensions(
+        &mut self,
+        data: KycIdentityData,
+        existing_fields: Option<crate::extensions::identity::SharedIdentityFields>,
+    ) -> Result<crate::extensions::identity::SharedIdentityFields> {
+        crate::extensions::identity::register_kyc_identity_extensions(self, data, existing_fields)
     }
 
     /// Register Newton TLSNotary extensions.
