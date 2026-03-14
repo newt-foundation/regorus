@@ -16,7 +16,10 @@ pub use crypto::register_newton_crypto_extensions;
 pub mod identity;
 
 #[cfg(feature = "newton-identity")]
-pub use identity::register_newton_identity_extensions;
+pub use identity::{
+    register_generic_identity_extensions, register_kyc_identity_extensions, IdentityDomainData,
+    KycIdentityData, SharedIdentityFields,
+};
 
 #[cfg(feature = "newton-tlsn")]
 pub mod tlsn;
