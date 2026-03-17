@@ -66,7 +66,7 @@ pub type SharedIdentityFields = Arc<RwLock<BTreeMap<String, Value>>>;
 ///
 /// The generic `get` accessor enables policy authors to use new domain fields
 /// immediately, without waiting for domain-specific built-in functions.
-pub trait IdentityDomainData: Send + Sync {
+pub trait IdentityDomainData: Send + Sync + std::fmt::Debug {
     /// The domain name used for Rego namespace routing (e.g., "kyc", "social").
     fn domain_name(&self) -> &str;
 
