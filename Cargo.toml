@@ -97,8 +97,8 @@ newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
 # Newton-specific Rego extensions for TLSNotary presentation verification
 newton-tlsn = ["dep:bcs", "dep:bincode", "dep:data-encoding", "dep:p256", "dep:rs_merkle", "dep:sha2", "dep:blake3", "dep:tiny-keccak"]
 
-# Newton-specific Rego extensions for Identity checks
-newton-identity = ["dep:chrono", "std"]
+# Newton-specific Rego extensions for privacy checks
+newton-privacy = ["dep:chrono", "std"]
 
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []

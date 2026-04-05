@@ -20,8 +20,8 @@ use crate::{
 use crate::Rc;
 use anyhow::{anyhow, bail, Result};
 
-#[cfg(feature = "newton-identity")]
-use crate::extensions::identity::KycIdentityData;
+#[cfg(feature = "newton-privacy")]
+use crate::extensions::privacy::KycPrivacyData;
 
 /// The Rego evaluation engine.
 #[derive(Debug, Clone)]
@@ -219,23 +219,23 @@ impl Engine {
     ///
     /// | Function | Description |
     /// |----------|-------------|
-    /// | `newton.identity.kyc.check_approved` | Check approval status |
-    /// | `newton.identity.kyc.address_in_countries` | Check document country against list |
-    /// | `newton.identity.kyc.address_in_subdivision` | Check document address against ISO subdivision list |
-    /// | `newton.identity.kyc.address_not_in_subdivision` | Check document address is not in ISO subdivision list |
-    /// | `newton.identity.kyc.age_gte` | Check birthdate implies age >= input |
-    /// | `newton.identity.kyc.not_expired` | Check document expiration date has not passed |
-    /// | `newton.identity.kyc.valid_for` | Check document is valid for N more days |
-    /// | `newton.identity.kyc.issued_since` | Check document was issued at least N days ago |
-    /// | `newton.identity.get(field)` | Generic accessor for any identity domain field |
+    /// | `newton.privacy.kyc.check_approved` | Check approval status |
+    /// | `newton.privacy.kyc.address_in_countries` | Check document country against list |
+    /// | `newton.privacy.kyc.address_in_subdivision` | Check document address against ISO subdivision list |
+    /// | `newton.privacy.kyc.address_not_in_subdivision` | Check document address is not in ISO subdivision list |
+    /// | `newton.privacy.kyc.age_gte` | Check birthdate implies age >= input |
+    /// | `newton.privacy.kyc.not_expired` | Check document expiration date has not passed |
+    /// | `newton.privacy.kyc.valid_for` | Check document is valid for N more days |
+    /// | `newton.privacy.kyc.issued_since` | Check document was issued at least N days ago |
+    /// | `newton.privacy.get(field)` | Generic accessor for any privacy domain field |
     ///
     /// ```
     /// # use regorus::*;
-    /// # use regorus::extensions::identity::KycIdentityData;
+    /// # use regorus::extensions::privacy::KycPrivacyData;
     /// # fn main() -> anyhow::Result<()> {
     /// let mut engine = Engine::new();
     ///
-    /// let id = KycIdentityData {
+    /// let id = KycPrivacyData {
     ///     reference_date: "2026-01-01".to_string(),
     ///     status: "approved".to_string(),
     ///     selected_country_code: "US".to_string(),
@@ -247,17 +247,17 @@ impl Engine {
     ///     issuing_authority: "CA".to_string(),
     /// };
     ///
-    /// // Register Newton KYC identity extensions (first domain, pass None)
-    /// let _shared = engine.with_newton_identity_kyc_extensions(id, None)?;
+    /// // Register Newton KYC privacy extensions (first domain, pass None)
+    /// let _shared = engine.with_newton_privacy_kyc_extensions(id, None)?;
     ///
     /// engine.add_policy(
     ///     "test.rego".to_string(),
     ///     r#"
     ///    package test
     ///    allow if {
-    ///        newton.identity.kyc.check_approved()
-    ///        newton.identity.kyc.address_in_countries(["US"])
-    ///        newton.identity.kyc.address_not_in_subdivision(["NY","NC","HI"])
+    ///        newton.privacy.kyc.check_approved()
+    ///        newton.privacy.kyc.address_in_countries(["US"])
+    ///        newton.privacy.kyc.address_not_in_subdivision(["NY","NC","HI"])
     ///    }
     ///    "#
     ///     .to_string(),
@@ -265,14 +265,14 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "newton-identity")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "newton-identity")))]
-    pub fn with_newton_identity_kyc_extensions(
+    #[cfg(feature = "newton-privacy")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-privacy")))]
+    pub fn with_newton_privacy_kyc_extensions(
         &mut self,
-        data: KycIdentityData,
-        existing_fields: Option<crate::extensions::identity::SharedIdentityFields>,
-    ) -> Result<crate::extensions::identity::SharedIdentityFields> {
-        crate::extensions::identity::register_kyc_identity_extensions(self, data, existing_fields)
+        data: KycPrivacyData,
+        existing_fields: Option<crate::extensions::privacy::SharedPrivacyFields>,
+    ) -> Result<crate::extensions::privacy::SharedPrivacyFields> {
+        crate::extensions::privacy::register_kyc_privacy_extensions(self, data, existing_fields)
     }
 
     /// Register Newton TLSNotary extensions.

@@ -1,34 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Newton Foundation.
 
-//! Newton identity extensions for Rego policy evaluation.
+//! Newton privacy extensions for Rego policy evaluation.
 //!
-//! Provides domain-flexible identity data checks for policy evaluation.
-//! Each identity domain (KYC, social, credit, professional, etc.) defines its own
+//! Provides domain-flexible privacy data checks for policy evaluation.
+//! Each privacy domain (KYC, social, credit, professional, etc.) defines its own
 //! data struct, Rego built-in functions, and field accessors.
 //!
 //! ## Architecture
 //!
-//! Identity data is domain-namespaced. The `identity_domain` (bytes32) stored on-chain
+//! Privacy data is domain-namespaced. The `identity_domain` (bytes32) stored on-chain
 //! determines which schema is used to deserialize the data and which Rego built-ins
 //! are available. Domain is always required — there is no default.
 //!
 //! Two Rego APIs are provided:
-//! - **Domain-namespaced built-ins** (primary): `newton.identity.kyc.age_gte(21)`,
-//!   `newton.identity.kyc.check_approved()`. These are type-safe, validate inputs,
+//! - **Domain-namespaced built-ins** (primary): `newton.privacy.kyc.age_gte(21)`,
+//!   `newton.privacy.kyc.check_approved()`. These are type-safe, validate inputs,
 //!   and provide specific error messages.
-//! - **Generic field accessor** (escape hatch): `newton.identity.get("field_name")`.
+//! - **Generic field accessor** (escape hatch): `newton.privacy.get("field_name")`.
 //!   Returns the raw field value from the current domain's data. Useful for rapid
 //!   prototyping with new domains before dedicated built-ins are written.
 //!
-//! ## Adding a new identity domain
+//! ## Adding a new privacy domain
 //!
-//! 1. Define a data struct implementing `IdentityDomainData`
+//! 1. Define a data struct implementing `PrivacyDomainData`
 //! 2. Add a registration function `register_<domain>_extensions(engine, data)`
-//! 3. Add an `Engine::with_newton_identity_<domain>_extensions()` convenience method
-//! 4. Wire up deserialization in `crates/chainio/src/identity_data.rs`
+//! 3. Add an `Engine::with_newton_privacy_<domain>_extensions()` convenience method
+//! 4. Wire up deserialization in `crates/chainio/src/privacy_data.rs`
 //!
-//! See `KycIdentityData` below as the canonical example.
+//! See `KycPrivacyData` below as the canonical example.
 
 extern crate alloc;
 
@@ -43,30 +43,30 @@ use anyhow::{bail, Result};
 
 const PARSE_FORMAT: &str = "%Y-%m-%d";
 
-/// Shared identity field storage for the generic `newton.identity.get()` accessor.
+/// Shared privacy field storage for the generic `newton.privacy.get()` accessor.
 ///
-/// When multiple identity domains are registered (e.g., KYC + social), each domain
-/// merges its fields into this shared map. The `newton.identity.get` closure reads
+/// When multiple privacy domains are registered (e.g., KYC + social), each domain
+/// merges its fields into this shared map. The `newton.privacy.get` closure reads
 /// from it, so all domains' fields are accessible through a single extension.
 ///
 /// Pass `None` when registering the first domain, then pass the returned handle
 /// to subsequent domain registrations.
-pub type SharedIdentityFields = Arc<RwLock<BTreeMap<String, Value>>>;
+pub type SharedPrivacyFields = Arc<RwLock<BTreeMap<String, Value>>>;
 
 // ---------------------------------------------------------------------------
 // Domain trait
 // ---------------------------------------------------------------------------
 
-/// Trait that all identity domain data structs must implement.
+/// Trait that all privacy domain data structs must implement.
 ///
 /// Each domain (KYC, social, credit, etc.) provides:
 /// - A domain name for Rego namespace routing
 /// - A reference date for time-based comparisons
-/// - A flat field map for the generic `newton.identity.get()` accessor
+/// - A flat field map for the generic `newton.privacy.get()` accessor
 ///
 /// The generic `get` accessor enables policy authors to use new domain fields
 /// immediately, without waiting for domain-specific built-in functions.
-pub trait IdentityDomainData: Send + Sync + std::fmt::Debug {
+pub trait PrivacyDomainData: Send + Sync + std::fmt::Debug {
     /// The domain name used for Rego namespace routing (e.g., "kyc", "social").
     fn domain_name(&self) -> &str;
 
@@ -82,53 +82,53 @@ pub trait IdentityDomainData: Send + Sync + std::fmt::Debug {
 // Generic registration (works for any domain)
 // ---------------------------------------------------------------------------
 
-/// Registers or updates the generic `newton.identity.get(field_name)` Rego built-in.
+/// Registers or updates the generic `newton.privacy.get(field_name)` Rego built-in.
 ///
 /// This accessor works across any domain by looking up field names in a shared
 /// field map. Returns `undefined` (Rego's "no value") if the field does not
 /// exist, allowing policy authors to use `default` patterns.
 ///
 /// **Multi-domain support:** Pass `None` for the first domain registration.
-/// The returned `SharedIdentityFields` handle should be passed to subsequent
+/// The returned `SharedPrivacyFields` handle should be passed to subsequent
 /// domain registrations so their fields merge into the same map — the
-/// `newton.identity.get` closure reads from it, making all domains' fields
+/// `newton.privacy.get` closure reads from it, making all domains' fields
 /// accessible without re-registering the extension.
 ///
 /// This is the escape hatch for rapid prototyping: a team adds a new domain
 /// struct with fields like `platform`, `handle`, `follower_count` and can
-/// immediately write `newton.identity.get("follower_count") >= 1000` in Rego
-/// without waiting for `newton.identity.social.follower_count_gte()`.
-pub fn register_generic_identity_extensions(
+/// immediately write `newton.privacy.get("follower_count") >= 1000` in Rego
+/// without waiting for `newton.privacy.social.follower_count_gte()`.
+pub fn register_generic_privacy_extensions(
     engine: &mut Engine,
-    data: Box<dyn IdentityDomainData>,
-    existing_fields: Option<SharedIdentityFields>,
-) -> Result<SharedIdentityFields> {
+    data: Box<dyn PrivacyDomainData>,
+    existing_fields: Option<SharedPrivacyFields>,
+) -> Result<SharedPrivacyFields> {
     match existing_fields {
         Some(shared) => {
             // Merge new domain's fields into the existing shared map.
-            // The newton.identity.get closure already reads from this map.
+            // The newton.privacy.get closure already reads from this map.
             let new_fields = data.to_field_map();
             let mut map = shared
                 .write()
-                .map_err(|_| anyhow::anyhow!("identity fields lock poisoned"))?;
+                .map_err(|_| anyhow::anyhow!("privacy fields lock poisoned"))?;
             map.extend(new_fields);
             drop(map);
             Ok(shared)
         }
         None => {
             // First domain: create shared map and register the extension.
-            let shared: SharedIdentityFields = Arc::new(RwLock::new(data.to_field_map()));
+            let shared: SharedPrivacyFields = Arc::new(RwLock::new(data.to_field_map()));
             let fields_ref = shared.clone();
             engine.add_extension(
-                "newton.identity.get".to_string(),
+                "newton.privacy.get".to_string(),
                 1,
                 Box::new(move |params: Vec<Value>| {
                     let field_name = params[0].as_string().map_err(|_| {
-                        anyhow::anyhow!("newton.identity.get expects a string field name")
+                        anyhow::anyhow!("newton.privacy.get expects a string field name")
                     })?;
                     let map = fields_ref
                         .read()
-                        .map_err(|_| anyhow::anyhow!("identity fields lock poisoned"))?;
+                        .map_err(|_| anyhow::anyhow!("privacy fields lock poisoned"))?;
                     match map.get(field_name.as_ref()) {
                         Some(value) => Ok(value.clone()),
                         None => Ok(Value::Undefined),
@@ -144,12 +144,12 @@ pub fn register_generic_identity_extensions(
 // KYC domain
 // ---------------------------------------------------------------------------
 
-/// KYC (Know Your Customer) identity data.
+/// KYC (Know Your Customer) privacy data.
 ///
-/// This is the first implemented identity domain. All 8 original
-/// `newton.identity.*` built-ins have been migrated to the `newton.identity.kyc.*`
+/// This is the first implemented privacy domain. All 8 original
+/// `newton.privacy.*` built-ins have been migrated to the `newton.privacy.kyc.*`
 /// namespace. Domain is always required — these functions are not registered
-/// under the bare `newton.identity.*` prefix.
+/// under the bare `newton.privacy.*` prefix.
 ///
 /// ## Fields
 ///
@@ -165,7 +165,7 @@ pub fn register_generic_identity_extensions(
 /// | `issue_date` | YYYY-MM-DD | Document issuance date |
 /// | `issuing_authority` | String | Issuing country or state |
 #[derive(Debug, Clone, Default)]
-pub struct KycIdentityData {
+pub struct KycPrivacyData {
     pub reference_date: String,
     pub status: String,
     pub selected_country_code: String,
@@ -177,7 +177,7 @@ pub struct KycIdentityData {
     pub issuing_authority: String,
 }
 
-impl IdentityDomainData for KycIdentityData {
+impl PrivacyDomainData for KycPrivacyData {
     fn domain_name(&self) -> &str {
         "kyc"
     }
@@ -222,76 +222,76 @@ impl IdentityDomainData for KycIdentityData {
     }
 }
 
-/// Registers all KYC identity extensions with the engine.
+/// Registers all KYC privacy extensions with the engine.
 ///
-/// Registers 8 domain-namespaced built-ins under `newton.identity.kyc.*`.
-/// Also registers the generic `newton.identity.get(field_name)` accessor
+/// Registers 8 domain-namespaced built-ins under `newton.privacy.kyc.*`.
+/// Also registers the generic `newton.privacy.get(field_name)` accessor
 /// for field-level access without dedicated built-ins.
 ///
 /// Pass `None` for `existing_fields` when KYC is the first domain. Pass
-/// the returned `SharedIdentityFields` to subsequent domain registrations
-/// so all domains share a single `newton.identity.get` accessor.
-pub fn register_kyc_identity_extensions(
+/// the returned `SharedPrivacyFields` to subsequent domain registrations
+/// so all domains share a single `newton.privacy.get` accessor.
+pub fn register_kyc_privacy_extensions(
     engine: &mut Engine,
-    data: KycIdentityData,
-    existing_fields: Option<SharedIdentityFields>,
-) -> Result<SharedIdentityFields> {
+    data: KycPrivacyData,
+    existing_fields: Option<SharedPrivacyFields>,
+) -> Result<SharedPrivacyFields> {
     // Register generic accessor (creates or merges into shared field map)
     let shared =
-        register_generic_identity_extensions(engine, Box::new(data.clone()), existing_fields)?;
+        register_generic_privacy_extensions(engine, Box::new(data.clone()), existing_fields)?;
 
     let id_approve = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.check_approved".to_string(),
+        "newton.privacy.kyc.check_approved".to_string(),
         0,
         Box::new(move |params: Vec<Value>| kyc_check_approved(params, &id_approve)),
     )?;
 
     let id_country = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.address_in_countries".to_string(),
+        "newton.privacy.kyc.address_in_countries".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_address_in_countries(params, &id_country)),
     )?;
 
     let id_state = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.address_in_subdivision".to_string(),
+        "newton.privacy.kyc.address_in_subdivision".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_address_in_subdivision(params, &id_state)),
     )?;
 
     let id_not_state = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.address_not_in_subdivision".to_string(),
+        "newton.privacy.kyc.address_not_in_subdivision".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_address_not_in_subdivision(params, &id_not_state)),
     )?;
 
     let id_age = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.age_gte".to_string(),
+        "newton.privacy.kyc.age_gte".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_age_gte(params, &id_age)),
     )?;
 
     let id_not_expired = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.not_expired".to_string(),
+        "newton.privacy.kyc.not_expired".to_string(),
         0,
         Box::new(move |params: Vec<Value>| kyc_not_expired(params, &id_not_expired)),
     )?;
 
     let id_valid_for = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.valid_for".to_string(),
+        "newton.privacy.kyc.valid_for".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_valid_for(params, &id_valid_for)),
     )?;
 
     let id_issued_since = data.clone();
     engine.add_extension(
-        "newton.identity.kyc.issued_since".to_string(),
+        "newton.privacy.kyc.issued_since".to_string(),
         1,
         Box::new(move |params: Vec<Value>| kyc_issued_since(params, &id_issued_since)),
     )?;
@@ -303,19 +303,19 @@ pub fn register_kyc_identity_extensions(
 // KYC built-in implementations
 // ---------------------------------------------------------------------------
 
-fn kyc_check_approved(_params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_check_approved(_params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     Ok(Value::from(data.status == "approved"))
 }
 
-fn kyc_address_in_countries(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_address_in_countries(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match &params[0].as_array() {
         Ok(countries) => {
             if countries.is_empty() {
-                bail!("newton.identity.kyc.address_in_countries expects a non-empty array")
+                bail!("newton.privacy.kyc.address_in_countries expects a non-empty array")
             }
 
             if data.address_country_code.is_empty() {
-                bail!("newton.identity.kyc.address_in_countries requires non-empty address_country_code");
+                bail!("newton.privacy.kyc.address_in_countries requires non-empty address_country_code");
             }
 
             Ok(Value::from(
@@ -324,20 +324,20 @@ fn kyc_address_in_countries(params: Vec<Value>, data: &KycIdentityData) -> Resul
             ))
         }
         _ => bail!(
-            "newton.identity.kyc.address_in_countries expects an array of string country codes"
+            "newton.privacy.kyc.address_in_countries expects an array of string country codes"
         ),
     }
 }
 
-fn kyc_address_in_subdivision(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_address_in_subdivision(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match &params[0].as_array() {
         Ok(states) => {
             if states.is_empty() {
-                bail!("newton.identity.kyc.address_in_subdivision expects a non-empty array")
+                bail!("newton.privacy.kyc.address_in_subdivision expects a non-empty array")
             }
 
             if data.address_country_code.is_empty() || data.address_subdivision.is_empty() {
-                bail!("newton.identity.kyc.address_in_subdivision requires non-empty address_country_code and address_subdivision");
+                bail!("newton.privacy.kyc.address_in_subdivision requires non-empty address_country_code and address_subdivision");
             }
 
             Ok(Value::from(states.contains(&Value::from(format!(
@@ -346,20 +346,20 @@ fn kyc_address_in_subdivision(params: Vec<Value>, data: &KycIdentityData) -> Res
             )))))
         }
         _ => {
-            bail!("newton.identity.kyc.address_in_subdivision expects an array of string iso codes")
+            bail!("newton.privacy.kyc.address_in_subdivision expects an array of string iso codes")
         }
     }
 }
 
-fn kyc_address_not_in_subdivision(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_address_not_in_subdivision(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match &params[0].as_array() {
         Ok(states) => {
             if states.is_empty() {
-                bail!("newton.identity.kyc.address_not_in_subdivision expects a non-empty array")
+                bail!("newton.privacy.kyc.address_not_in_subdivision expects a non-empty array")
             }
 
             if data.address_country_code.is_empty() || data.address_subdivision.is_empty() {
-                bail!("newton.identity.kyc.address_not_in_subdivision requires non-empty address_country_code and address_subdivision");
+                bail!("newton.privacy.kyc.address_not_in_subdivision requires non-empty address_country_code and address_subdivision");
             }
 
             Ok(Value::from(!states.contains(&Value::from(format!(
@@ -368,16 +368,16 @@ fn kyc_address_not_in_subdivision(params: Vec<Value>, data: &KycIdentityData) ->
             )))))
         }
         _ => {
-            bail!("newton.identity.kyc.address_not_in_subdivision expects an array of string iso codes")
+            bail!("newton.privacy.kyc.address_not_in_subdivision expects an array of string iso codes")
         }
     }
 }
 
-fn kyc_age_gte(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_age_gte(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match params[0].as_i64() {
         Ok(min_age) => {
             if min_age <= 0 {
-                bail!("newton.identity.kyc.age_gte expects a positive valued age")
+                bail!("newton.privacy.kyc.age_gte expects a positive valued age")
             }
 
             let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
@@ -386,26 +386,26 @@ fn kyc_age_gte(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
             match now.years_since(birthdate) {
                 Some(years) => Ok(Value::from(min_age <= years.into())),
                 _ => bail!(
-                    "newton.identity.kyc.age_gte received invalid birthdate or reference date"
+                    "newton.privacy.kyc.age_gte received invalid birthdate or reference date"
                 ),
             }
         }
-        _ => bail!("newton.identity.kyc.age_gte expects a number"),
+        _ => bail!("newton.privacy.kyc.age_gte expects a number"),
     }
 }
 
-fn kyc_not_expired(_params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_not_expired(_params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
     let expiration = NaiveDate::parse_from_str(&data.expiration_date, PARSE_FORMAT)?;
 
     Ok(Value::from(now.le(&expiration)))
 }
 
-fn kyc_valid_for(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_valid_for(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match params[0].as_i64() {
         Ok(num_days) => {
             if num_days <= 0 {
-                bail!("newton.identity.kyc.valid_for expects a positive number of days")
+                bail!("newton.privacy.kyc.valid_for expects a positive number of days")
             }
 
             let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
@@ -413,15 +413,15 @@ fn kyc_valid_for(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
 
             Ok(Value::from(num_days <= (expiration - now).num_days()))
         }
-        _ => bail!("newton.identity.kyc.valid_for expects a number"),
+        _ => bail!("newton.privacy.kyc.valid_for expects a number"),
     }
 }
 
-fn kyc_issued_since(params: Vec<Value>, data: &KycIdentityData) -> Result<Value> {
+fn kyc_issued_since(params: Vec<Value>, data: &KycPrivacyData) -> Result<Value> {
     match params[0].as_i64() {
         Ok(num_days) => {
             if num_days <= 0 {
-                bail!("newton.identity.kyc.issued_since expects a positive number of days")
+                bail!("newton.privacy.kyc.issued_since expects a positive number of days")
             }
 
             let now = NaiveDate::parse_from_str(&data.reference_date, PARSE_FORMAT)?;
@@ -429,7 +429,7 @@ fn kyc_issued_since(params: Vec<Value>, data: &KycIdentityData) -> Result<Value>
 
             Ok(Value::from(num_days <= (now - issuance).num_days()))
         }
-        _ => bail!("newton.identity.kyc.issued_since expects a number"),
+        _ => bail!("newton.privacy.kyc.issued_since expects a number"),
     }
 }
 
@@ -442,17 +442,17 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn kyc_data(overrides: impl FnOnce(&mut KycIdentityData)) -> KycIdentityData {
-        let mut data = KycIdentityData::default();
+    fn kyc_data(overrides: impl FnOnce(&mut KycPrivacyData)) -> KycPrivacyData {
+        let mut data = KycPrivacyData::default();
         overrides(&mut data);
         data
     }
 
-    // -- IdentityDomainData trait tests --
+    // -- PrivacyDomainData trait tests --
 
     #[test]
     fn domain_name_is_kyc() {
-        let data = KycIdentityData::default();
+        let data = KycPrivacyData::default();
         assert_eq!(data.domain_name(), "kyc");
     }
 
@@ -487,16 +487,16 @@ mod tests {
             d.address_country_code = "US".to_string();
         });
 
-        register_generic_identity_extensions(&mut engine, Box::new(data), None).unwrap();
+        register_generic_privacy_extensions(&mut engine, Box::new(data), None).unwrap();
 
         engine
             .add_policy(
                 "test.rego".to_string(),
                 r#"
                 package test
-                status = newton.identity.get("status")
-                country = newton.identity.get("address_country_code")
-                missing = newton.identity.get("nonexistent")
+                status = newton.privacy.get("status")
+                country = newton.privacy.get("address_country_code")
+                missing = newton.privacy.get("nonexistent")
                 "#
                 .to_string(),
             )
@@ -850,7 +850,7 @@ mod tests {
             d.expiration_date = "2030-01-01".to_string();
         });
 
-        register_kyc_identity_extensions(&mut engine, data, None).unwrap();
+        register_kyc_privacy_extensions(&mut engine, data, None).unwrap();
 
         engine
             .add_policy(
@@ -862,10 +862,10 @@ mod tests {
                 default allow = false
 
                 allow if {
-                    newton.identity.kyc.check_approved()
-                    newton.identity.kyc.age_gte(18)
-                    newton.identity.kyc.not_expired()
-                    newton.identity.kyc.address_in_countries(["US", "CA"])
+                    newton.privacy.kyc.check_approved()
+                    newton.privacy.kyc.age_gte(18)
+                    newton.privacy.kyc.not_expired()
+                    newton.privacy.kyc.address_in_countries(["US", "CA"])
                 }
                 "#
                 .to_string(),
@@ -886,18 +886,15 @@ mod tests {
             d.address_country_code = "US".to_string();
         });
 
-        register_kyc_identity_extensions(&mut engine, data, None).unwrap();
+        register_kyc_privacy_extensions(&mut engine, data, None).unwrap();
 
         engine
             .add_policy(
                 "test.rego".to_string(),
                 r#"
                 package test
-                import future.keywords.if
-
-                # Mix domain-specific and generic accessors
-                approved = newton.identity.kyc.check_approved()
-                country = newton.identity.get("address_country_code")
+                status = newton.privacy.get("status")
+                country = newton.privacy.get("address_country_code")
                 "#
                 .to_string(),
             )
@@ -905,67 +902,10 @@ mod tests {
 
         engine.set_input(Value::from_json_str("{}").unwrap());
 
-        let approved = engine.eval_rule("data.test.approved".to_string()).unwrap();
-        assert_eq!(approved, Value::from(true));
-
-        let country = engine.eval_rule("data.test.country".to_string()).unwrap();
-        assert_eq!(country, Value::from("US"));
-    }
-
-    // -- Multi-domain get tests --
-
-    #[test]
-    fn multi_domain_get_merges_fields() {
-        use super::*;
-
-        // Simulate a second domain by registering generic extensions twice
-        // with different field maps, reusing the shared handle.
-        let mut engine = Engine::new();
-
-        let data1 = kyc_data(|d| {
-            d.status = "approved".to_string();
-            d.address_country_code = "US".to_string();
-        });
-
-        // First domain: creates shared map + registers newton.identity.get
-        let shared =
-            register_generic_identity_extensions(&mut engine, Box::new(data1), None).unwrap();
-
-        // Second domain: merges fields into existing shared map (no re-register)
-        let mut second_fields = BTreeMap::new();
-        second_fields.insert("platform".to_string(), Value::from("twitter"));
-        second_fields.insert("follower_count".to_string(), Value::from(5000i64));
-
-        // Merge directly into the shared map (simulates a second domain registration)
-        {
-            let mut map = shared.write().unwrap();
-            map.extend(second_fields);
-        }
-
-        engine
-            .add_policy(
-                "test.rego".to_string(),
-                r#"
-                package test
-                status = newton.identity.get("status")
-                platform = newton.identity.get("platform")
-                followers = newton.identity.get("follower_count")
-                "#
-                .to_string(),
-            )
-            .unwrap();
-
-        engine.set_input(Value::from_json_str("{}").unwrap());
-
-        // Fields from first domain
         let status = engine.eval_rule("data.test.status".to_string()).unwrap();
         assert_eq!(status, Value::from("approved"));
 
-        // Fields from second domain (merged via shared handle)
-        let platform = engine.eval_rule("data.test.platform".to_string()).unwrap();
-        assert_eq!(platform, Value::from("twitter"));
-
-        let followers = engine.eval_rule("data.test.followers".to_string()).unwrap();
-        assert_eq!(followers, Value::from(5000i64));
+        let country = engine.eval_rule("data.test.country".to_string()).unwrap();
+        assert_eq!(country, Value::from("US"));
     }
 }
