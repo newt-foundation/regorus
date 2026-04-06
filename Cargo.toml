@@ -100,6 +100,9 @@ newton-tlsn = ["dep:bcs", "dep:bincode", "dep:data-encoding", "dep:p256", "dep:r
 # Newton-specific Rego extensions for Identity checks
 newton-identity = ["dep:chrono", "std"]
 
+# Newton-specific Rego extensions for confidential data (blacklists, allowlists, sanctions)
+newton-privacy = ["std"]
+
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]

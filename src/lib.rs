@@ -157,7 +157,8 @@ mod value;
 #[cfg(any(
     feature = "newton-crypto",
     feature = "newton-identity",
-    feature = "newton-tlsn"
+    feature = "newton-tlsn",
+    feature = "newton-privacy"
 ))]
 pub mod extensions;
 
