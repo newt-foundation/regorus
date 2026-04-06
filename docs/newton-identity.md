@@ -41,14 +41,14 @@ Two Rego APIs are provided:
 - **Domain-namespaced built-ins** (primary): `newton.identity.kyc.age_gte(21)`. Type-safe, validate inputs, provide specific error messages.
 - **Generic field accessor** (escape hatch): `newton.identity.get("field_name")`. Returns the raw field value from the current domain's data. Useful for rapid prototyping before dedicated built-ins exist.
 
-### IdentityDomainData Trait
+### PolicyDomainData Trait
 
-All domain data structs implement `IdentityDomainData`:
+All domain data structs implement `PolicyDomainData` (unified trait for identity and confidential data):
 
 ```rust
-pub trait IdentityDomainData: Send + Sync {
+pub trait PolicyDomainData: Send + Sync {
     fn domain_name(&self) -> &str;
-    fn reference_date(&self) -> &str;
+    fn rego_prefix(&self) -> &str;  // "identity" or "privacy"
     fn to_field_map(&self) -> BTreeMap<String, Value>;
 }
 ```
