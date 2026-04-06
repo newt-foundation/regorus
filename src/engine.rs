@@ -319,6 +319,21 @@ impl Engine {
         crate::extensions::tlsn::register_newton_tlsn_extensions(self)
     }
 
+    /// Register Newton time utility extensions.
+    ///
+    /// Adds general-purpose date arithmetic builtins usable by any policy:
+    /// `newton.time.days_between`, `newton.time.days_since`,
+    /// `newton.time.is_within_days`, `newton.time.is_before`,
+    /// `newton.time.is_after`, `newton.time.age_years`.
+    ///
+    /// All functions operate on YYYY-MM-DD strings. No system clock —
+    /// reference dates are passed explicitly for BLS determinism.
+    #[cfg(feature = "newton-time")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-time")))]
+    pub fn with_newton_time_extensions(&mut self) -> Result<()> {
+        crate::extensions::time::register_newton_time_extensions(self)
+    }
+
     /// Add a policy.
     ///
     /// The policy file will be parsed and converted to AST representation.

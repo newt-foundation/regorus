@@ -103,6 +103,9 @@ newton-identity = ["dep:chrono", "std"]
 # Newton-specific Rego extensions for confidential data (blacklists, allowlists, sanctions)
 newton-privacy = ["std"]
 
+# Newton-specific Rego extensions for general-purpose date arithmetic
+newton-time = ["dep:chrono", "std"]
+
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]

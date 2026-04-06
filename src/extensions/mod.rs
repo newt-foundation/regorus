@@ -36,3 +36,9 @@ pub use privacy::{
     register_generic_privacy_extensions, ConfidentialDomainData,
     BlacklistData, AllowlistData, SharedPrivacyFields,
 };
+
+#[cfg(feature = "newton-time")]
+pub mod time;
+
+#[cfg(feature = "newton-time")]
+pub use time::register_newton_time_extensions;
