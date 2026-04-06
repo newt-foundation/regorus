@@ -23,7 +23,7 @@
 //!
 //! ## Adding a new identity domain
 //!
-//! 1. Define a data struct implementing `IdentityDomainData`
+//! 1. Define a data struct implementing `PolicyDomainData` with `rego_prefix() -> "identity"`
 //! 2. Add a registration function `register_<domain>_extensions(engine, data)`
 //! 3. Add an `Engine::with_newton_identity_<domain>_extensions()` convenience method
 //! 4. Wire up deserialization in `crates/chainio/src/identity_data.rs`
@@ -53,30 +53,7 @@ const PARSE_FORMAT: &str = "%Y-%m-%d";
 /// to subsequent domain registrations.
 pub type SharedIdentityFields = Arc<RwLock<BTreeMap<String, Value>>>;
 
-// ---------------------------------------------------------------------------
-// Domain trait
-// ---------------------------------------------------------------------------
-
-/// Trait that all identity domain data structs must implement.
-///
-/// Each domain (KYC, social, credit, etc.) provides:
-/// - A domain name for Rego namespace routing
-/// - A reference date for time-based comparisons
-/// - A flat field map for the generic `newton.identity.get()` accessor
-///
-/// The generic `get` accessor enables policy authors to use new domain fields
-/// immediately, without waiting for domain-specific built-in functions.
-pub trait IdentityDomainData: Send + Sync + std::fmt::Debug {
-    /// The domain name used for Rego namespace routing (e.g., "kyc", "social").
-    fn domain_name(&self) -> &str;
-
-    /// Reference timestamp as YYYY-MM-DD, used for time-based comparisons.
-    fn reference_date(&self) -> &str;
-
-    /// Returns all fields as a flat string→Value map for the generic `get` accessor.
-    /// Keys should match the struct field names exactly.
-    fn to_field_map(&self) -> BTreeMap<String, Value>;
-}
+use super::PolicyDomainData;
 
 // ---------------------------------------------------------------------------
 // Generic registration (works for any domain)
@@ -100,7 +77,7 @@ pub trait IdentityDomainData: Send + Sync + std::fmt::Debug {
 /// without waiting for `newton.identity.social.follower_count_gte()`.
 pub fn register_generic_identity_extensions(
     engine: &mut Engine,
-    data: Box<dyn IdentityDomainData>,
+    data: Box<dyn PolicyDomainData>,
     existing_fields: Option<SharedIdentityFields>,
 ) -> Result<SharedIdentityFields> {
     match existing_fields {
@@ -177,13 +154,13 @@ pub struct KycIdentityData {
     pub issuing_authority: String,
 }
 
-impl IdentityDomainData for KycIdentityData {
+impl PolicyDomainData for KycIdentityData {
     fn domain_name(&self) -> &str {
         "kyc"
     }
 
-    fn reference_date(&self) -> &str {
-        &self.reference_date
+    fn rego_prefix(&self) -> &str {
+        "identity"
     }
 
     fn to_field_map(&self) -> BTreeMap<String, Value> {
@@ -448,7 +425,7 @@ mod tests {
         data
     }
 
-    // -- IdentityDomainData trait tests --
+    // -- PolicyDomainData trait tests --
 
     #[test]
     fn domain_name_is_kyc() {

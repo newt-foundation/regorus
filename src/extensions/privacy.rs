@@ -28,7 +28,7 @@
 //!
 //! ## Adding a new confidential data domain
 //!
-//! 1. Define a data struct implementing `ConfidentialDomainData`
+//! 1. Define a data struct implementing `PolicyDomainData` with `rego_prefix() -> "privacy"`
 //! 2. Add a registration function `register_<domain>_extensions(engine, data)`
 //! 3. Add an `Engine::with_newton_privacy_<domain>_extensions()` convenience method
 //! 4. Wire up deserialization in the appropriate caller crate
@@ -55,26 +55,7 @@ use anyhow::{bail, Result};
 /// to subsequent domain registrations.
 pub type SharedPrivacyFields = Arc<RwLock<BTreeMap<String, Value>>>;
 
-// ---------------------------------------------------------------------------
-// Domain trait
-// ---------------------------------------------------------------------------
-
-/// Trait that all confidential data domain structs must implement.
-///
-/// Each domain (blacklist, allowlist, sanctions, etc.) provides:
-/// - A domain name for Rego namespace routing
-/// - A flat field map for the generic `newton.privacy.get()` accessor
-///
-/// The generic `get` accessor enables policy authors to use new domain fields
-/// immediately, without waiting for domain-specific built-in functions.
-pub trait ConfidentialDomainData: Send + Sync + std::fmt::Debug {
-    /// The domain name used for Rego namespace routing (e.g., "blacklist", "allowlist").
-    fn domain_name(&self) -> &str;
-
-    /// Returns all fields as a flat string→Value map for the generic `get` accessor.
-    /// Keys should match the struct field names exactly.
-    fn to_field_map(&self) -> BTreeMap<String, Value>;
-}
+use super::PolicyDomainData;
 
 // ---------------------------------------------------------------------------
 // Generic registration (works for any domain)
@@ -98,7 +79,7 @@ pub trait ConfidentialDomainData: Send + Sync + std::fmt::Debug {
 /// domain built-ins.
 pub fn register_generic_privacy_extensions(
     engine: &mut Engine,
-    data: Box<dyn ConfidentialDomainData>,
+    data: Box<dyn PolicyDomainData>,
     existing_fields: Option<SharedPrivacyFields>,
 ) -> Result<SharedPrivacyFields> {
     match existing_fields {
@@ -154,9 +135,13 @@ pub struct BlacklistData {
     pub addresses: Vec<String>,
 }
 
-impl ConfidentialDomainData for BlacklistData {
+impl PolicyDomainData for BlacklistData {
     fn domain_name(&self) -> &str {
         "blacklist"
+    }
+
+    fn rego_prefix(&self) -> &str {
+        "privacy"
     }
 
     fn to_field_map(&self) -> BTreeMap<String, Value> {
@@ -227,9 +212,13 @@ pub struct AllowlistData {
     pub addresses: Vec<String>,
 }
 
-impl ConfidentialDomainData for AllowlistData {
+impl PolicyDomainData for AllowlistData {
     fn domain_name(&self) -> &str {
         "allowlist"
+    }
+
+    fn rego_prefix(&self) -> &str {
+        "privacy"
     }
 
     fn to_field_map(&self) -> BTreeMap<String, Value> {
@@ -361,7 +350,7 @@ mod tests {
         }
     }
 
-    // -- ConfidentialDomainData trait tests --
+    // -- PolicyDomainData trait tests --
 
     #[test]
     fn blacklist_domain_name_is_blacklist() {

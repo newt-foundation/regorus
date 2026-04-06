@@ -6,6 +6,31 @@
 //! This module provides custom Rego built-in functions for Newton Protocol,
 //! including Ethereum cryptography operations and Identity check operations.
 
+extern crate alloc;
+
+use alloc::{collections::BTreeMap, string::String};
+
+// ---------------------------------------------------------------------------
+// Unified domain trait
+// ---------------------------------------------------------------------------
+
+/// Unified trait for all policy domain data (identity and privacy).
+///
+/// Each domain (KYC, blacklist, allowlist, etc.) implements this trait to provide:
+/// - A domain name for Rego namespace routing (e.g., "kyc", "blacklist")
+/// - A Rego prefix determining the data namespace ("identity" or "privacy")
+/// - A flat field map for the generic `newton.{prefix}.get()` accessor
+pub trait PolicyDomainData: Send + Sync + std::fmt::Debug {
+    /// Domain name for Rego namespace routing (e.g., "kyc", "blacklist", "allowlist").
+    fn domain_name(&self) -> &str;
+
+    /// Rego prefix: "identity" maps to `data.identity.*`, "privacy" maps to `data.privacy.*`.
+    fn rego_prefix(&self) -> &str;
+
+    /// Returns all fields as a flat string to Value map for the generic accessor.
+    fn to_field_map(&self) -> BTreeMap<String, crate::Value>;
+}
+
 #[cfg(feature = "newton-crypto")]
 pub mod crypto;
 
@@ -17,7 +42,7 @@ pub mod identity;
 
 #[cfg(feature = "newton-identity")]
 pub use identity::{
-    register_generic_identity_extensions, register_kyc_identity_extensions, IdentityDomainData,
+    register_generic_identity_extensions, register_kyc_identity_extensions,
     KycIdentityData, SharedIdentityFields,
 };
 
@@ -33,7 +58,7 @@ pub mod privacy;
 #[cfg(feature = "newton-privacy")]
 pub use privacy::{
     register_blacklist_extensions, register_allowlist_extensions,
-    register_generic_privacy_extensions, ConfidentialDomainData,
+    register_generic_privacy_extensions,
     BlacklistData, AllowlistData, SharedPrivacyFields,
 };
 
