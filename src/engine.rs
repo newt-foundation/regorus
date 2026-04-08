@@ -275,32 +275,32 @@ impl Engine {
         crate::extensions::identity::register_kyc_identity_extensions(self, data, existing_fields)
     }
 
-    /// Register Newton privacy blacklist domain extensions.
+    /// Register Newton confidential blacklist domain extensions.
     ///
     /// Adds `newton.privacy.blacklist.contains(address)` and
     /// `newton.privacy.blacklist.count()` built-in functions.
-    #[cfg(feature = "newton-privacy")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "newton-privacy")))]
-    pub fn with_newton_privacy_blacklist_extensions(
+    #[cfg(feature = "newton-confidential")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-confidential")))]
+    pub fn with_newton_confidential_blacklist_extensions(
         &mut self,
-        data: crate::extensions::privacy::BlacklistData,
-        existing_fields: Option<crate::extensions::privacy::SharedPrivacyFields>,
-    ) -> Result<crate::extensions::privacy::SharedPrivacyFields> {
-        crate::extensions::privacy::register_blacklist_extensions(self, data, existing_fields)
+        data: crate::extensions::confidential::BlacklistData,
+        existing_fields: Option<crate::extensions::confidential::SharedPrivacyFields>,
+    ) -> Result<crate::extensions::confidential::SharedPrivacyFields> {
+        crate::extensions::confidential::register_blacklist_extensions(self, data, existing_fields)
     }
 
-    /// Register Newton privacy allowlist domain extensions.
+    /// Register Newton confidential allowlist domain extensions.
     ///
     /// Adds `newton.privacy.allowlist.contains(address)` and
     /// `newton.privacy.allowlist.count()` built-in functions.
-    #[cfg(feature = "newton-privacy")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "newton-privacy")))]
-    pub fn with_newton_privacy_allowlist_extensions(
+    #[cfg(feature = "newton-confidential")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-confidential")))]
+    pub fn with_newton_confidential_allowlist_extensions(
         &mut self,
-        data: crate::extensions::privacy::AllowlistData,
-        existing_fields: Option<crate::extensions::privacy::SharedPrivacyFields>,
-    ) -> Result<crate::extensions::privacy::SharedPrivacyFields> {
-        crate::extensions::privacy::register_allowlist_extensions(self, data, existing_fields)
+        data: crate::extensions::confidential::AllowlistData,
+        existing_fields: Option<crate::extensions::confidential::SharedPrivacyFields>,
+    ) -> Result<crate::extensions::confidential::SharedPrivacyFields> {
+        crate::extensions::confidential::register_allowlist_extensions(self, data, existing_fields)
     }
 
     /// Register Newton TLSNotary extensions.

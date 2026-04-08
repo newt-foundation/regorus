@@ -158,7 +158,7 @@ mod value;
     feature = "newton-crypto",
     feature = "newton-identity",
     feature = "newton-tlsn",
-    feature = "newton-privacy",
+    feature = "newton-confidential",
     feature = "newton-time"
 ))]
 pub mod extensions;

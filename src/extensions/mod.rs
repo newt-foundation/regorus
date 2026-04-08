@@ -52,13 +52,13 @@ pub mod tlsn;
 #[cfg(feature = "newton-tlsn")]
 pub use tlsn::register_newton_tlsn_extensions;
 
-#[cfg(feature = "newton-privacy")]
-pub mod privacy;
+#[cfg(feature = "newton-confidential")]
+pub mod confidential;
 
-#[cfg(feature = "newton-privacy")]
-pub use privacy::{
+#[cfg(feature = "newton-confidential")]
+pub use confidential::{
     register_blacklist_extensions, register_allowlist_extensions,
-    register_generic_privacy_extensions,
+    register_generic_confidential_extensions,
     BlacklistData, AllowlistData, SharedPrivacyFields,
 };
 

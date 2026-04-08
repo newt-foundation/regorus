@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Newton Foundation.
 
-//! Newton privacy extensions for Rego policy evaluation.
+//! Newton confidential data extensions for Rego policy evaluation.
 //!
 //! Provides domain-flexible confidential data checks for policy evaluation.
 //! Each confidential data domain (blacklist, allowlist, sanctions, etc.) defines its own
@@ -77,7 +77,7 @@ use super::PolicyDomainData;
 /// struct with custom fields and can immediately write
 /// `newton.privacy.get("some_field")` in Rego without waiting for dedicated
 /// domain built-ins.
-pub fn register_generic_privacy_extensions(
+pub fn register_generic_confidential_extensions(
     engine: &mut Engine,
     data: Box<dyn PolicyDomainData>,
     existing_fields: Option<SharedPrivacyFields>,
@@ -177,7 +177,7 @@ pub fn register_blacklist_extensions(
     existing_fields: Option<SharedPrivacyFields>,
 ) -> Result<SharedPrivacyFields> {
     let shared =
-        register_generic_privacy_extensions(engine, Box::new(data.clone()), existing_fields)?;
+        register_generic_confidential_extensions(engine, Box::new(data.clone()), existing_fields)?;
 
     let bl_contains = data.clone();
     engine.add_extension(
@@ -254,7 +254,7 @@ pub fn register_allowlist_extensions(
     existing_fields: Option<SharedPrivacyFields>,
 ) -> Result<SharedPrivacyFields> {
     let shared =
-        register_generic_privacy_extensions(engine, Box::new(data.clone()), existing_fields)?;
+        register_generic_confidential_extensions(engine, Box::new(data.clone()), existing_fields)?;
 
     let al_contains = data.clone();
     engine.add_extension(
@@ -494,7 +494,7 @@ mod tests {
     fn generic_get_returns_blacklist_count() {
         let mut engine = Engine::new();
         let data = blacklist(vec!["0xabc", "0xdef"]);
-        register_generic_privacy_extensions(&mut engine, Box::new(data), None).unwrap();
+        register_generic_confidential_extensions(&mut engine, Box::new(data), None).unwrap();
 
         engine
             .add_policy(
@@ -524,8 +524,8 @@ mod tests {
         let al = allowlist(vec!["0x111", "0x222"]);
 
         let shared =
-            register_generic_privacy_extensions(&mut engine, Box::new(bl), None).unwrap();
-        register_generic_privacy_extensions(&mut engine, Box::new(al), Some(shared)).unwrap();
+            register_generic_confidential_extensions(&mut engine, Box::new(bl), None).unwrap();
+        register_generic_confidential_extensions(&mut engine, Box::new(al), Some(shared)).unwrap();
 
         engine
             .add_policy(
