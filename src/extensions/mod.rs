@@ -14,7 +14,7 @@ use alloc::{collections::BTreeMap, string::String};
 // Unified domain trait
 // ---------------------------------------------------------------------------
 
-/// Unified trait for all policy domain data (identity and privacy).
+/// Unified trait for all policy domain data (identity and confidential).
 ///
 /// Each domain (KYC, blacklist, allowlist, etc.) implements this trait to provide:
 /// - A domain name for Rego namespace routing (e.g., "kyc", "blacklist")
@@ -24,7 +24,7 @@ pub trait PolicyDomainData: Send + Sync + std::fmt::Debug {
     /// Domain name for Rego namespace routing (e.g., "kyc", "blacklist", "allowlist").
     fn domain_name(&self) -> &str;
 
-    /// Rego prefix: "identity" maps to `data.identity.*`, "privacy" maps to `data.privacy.*`.
+    /// Rego prefix: "identity" maps to `data.identity.*`, "confidential" maps to `data.confidential.*`.
     fn rego_prefix(&self) -> &str;
 
     /// Returns all fields as a flat string to Value map for the generic accessor.
@@ -59,7 +59,7 @@ pub mod confidential;
 pub use confidential::{
     register_blacklist_extensions, register_allowlist_extensions,
     register_generic_confidential_extensions,
-    BlacklistData, AllowlistData, SharedPrivacyFields,
+    BlacklistData, AllowlistData, SharedConfidentialFields,
 };
 
 #[cfg(feature = "newton-time")]

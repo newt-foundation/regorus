@@ -9,15 +9,15 @@
 //!
 //! ## Architecture
 //!
-//! Confidential data is domain-namespaced under `newton.privacy.*`. The domain
+//! Confidential data is domain-namespaced under `newton.confidential.*`. The domain
 //! determines which schema is used to interpret the data and which Rego built-ins
 //! are available. Domain is always required — there is no default.
 //!
 //! Two Rego APIs are provided:
-//! - **Domain-namespaced built-ins** (primary): `newton.privacy.blacklist.contains(addr)`,
-//!   `newton.privacy.allowlist.count()`. These are type-safe, validate inputs,
+//! - **Domain-namespaced built-ins** (primary): `newton.confidential.blacklist.contains(addr)`,
+//!   `newton.confidential.allowlist.count()`. These are type-safe, validate inputs,
 //!   and provide specific error messages.
-//! - **Generic field accessor** (escape hatch): `newton.privacy.get("field_name")`.
+//! - **Generic field accessor** (escape hatch): `newton.confidential.get("field_name")`.
 //!   Returns the raw field value from the current domain's data. Useful for rapid
 //!   prototyping with new domains before dedicated built-ins are written.
 //!
@@ -28,9 +28,9 @@
 //!
 //! ## Adding a new confidential data domain
 //!
-//! 1. Define a data struct implementing `PolicyDomainData` with `rego_prefix() -> "privacy"`
+//! 1. Define a data struct implementing `PolicyDomainData` with `rego_prefix() -> "confidential"`
 //! 2. Add a registration function `register_<domain>_extensions(engine, data)`
-//! 3. Add an `Engine::with_newton_privacy_<domain>_extensions()` convenience method
+//! 3. Add an `Engine::with_newton_confidential_<domain>_extensions()` convenience method
 //! 4. Wire up deserialization in the appropriate caller crate
 //!
 //! See `BlacklistData` below as the canonical example.
@@ -45,15 +45,15 @@ use std::sync::{Arc, RwLock};
 use crate::{Engine, Value};
 use anyhow::{bail, Result};
 
-/// Shared privacy field storage for the generic `newton.privacy.get()` accessor.
+/// Shared confidential field storage for the generic `newton.confidential.get()` accessor.
 ///
 /// When multiple confidential data domains are registered (e.g., blacklist + allowlist),
-/// each domain merges its fields into this shared map. The `newton.privacy.get` closure
+/// each domain merges its fields into this shared map. The `newton.confidential.get` closure
 /// reads from it, so all domains' fields are accessible through a single extension.
 ///
 /// Pass `None` when registering the first domain, then pass the returned handle
 /// to subsequent domain registrations.
-pub type SharedPrivacyFields = Arc<RwLock<BTreeMap<String, Value>>>;
+pub type SharedConfidentialFields = Arc<RwLock<BTreeMap<String, Value>>>;
 
 use super::PolicyDomainData;
 
@@ -61,53 +61,53 @@ use super::PolicyDomainData;
 // Generic registration (works for any domain)
 // ---------------------------------------------------------------------------
 
-/// Registers or updates the generic `newton.privacy.get(field_name)` Rego built-in.
+/// Registers or updates the generic `newton.confidential.get(field_name)` Rego built-in.
 ///
 /// This accessor works across any domain by looking up field names in a shared
 /// field map. Returns `undefined` (Rego's "no value") if the field does not
 /// exist, allowing policy authors to use `default` patterns.
 ///
 /// **Multi-domain support:** Pass `None` for the first domain registration.
-/// The returned `SharedPrivacyFields` handle should be passed to subsequent
+/// The returned `SharedConfidentialFields` handle should be passed to subsequent
 /// domain registrations so their fields merge into the same map — the
-/// `newton.privacy.get` closure reads from it, making all domains' fields
+/// `newton.confidential.get` closure reads from it, making all domains' fields
 /// accessible without re-registering the extension.
 ///
 /// This is the escape hatch for rapid prototyping: a team adds a new domain
 /// struct with custom fields and can immediately write
-/// `newton.privacy.get("some_field")` in Rego without waiting for dedicated
+/// `newton.confidential.get("some_field")` in Rego without waiting for dedicated
 /// domain built-ins.
 pub fn register_generic_confidential_extensions(
     engine: &mut Engine,
     data: Box<dyn PolicyDomainData>,
-    existing_fields: Option<SharedPrivacyFields>,
-) -> Result<SharedPrivacyFields> {
+    existing_fields: Option<SharedConfidentialFields>,
+) -> Result<SharedConfidentialFields> {
     match existing_fields {
         Some(shared) => {
             // Merge new domain's fields into the existing shared map.
-            // The newton.privacy.get closure already reads from this map.
+            // The newton.confidential.get closure already reads from this map.
             let new_fields = data.to_field_map();
             let mut map = shared
                 .write()
-                .map_err(|_| anyhow::anyhow!("privacy fields lock poisoned"))?;
+                .map_err(|_| anyhow::anyhow!("confidential fields lock poisoned"))?;
             map.extend(new_fields);
             drop(map);
             Ok(shared)
         }
         None => {
             // First domain: create shared map and register the extension.
-            let shared: SharedPrivacyFields = Arc::new(RwLock::new(data.to_field_map()));
+            let shared: SharedConfidentialFields = Arc::new(RwLock::new(data.to_field_map()));
             let fields_ref = shared.clone();
             engine.add_extension(
-                "newton.privacy.get".to_string(),
+                "newton.confidential.get".to_string(),
                 1,
                 Box::new(move |params: Vec<Value>| {
                     let field_name = params[0].as_string().map_err(|_| {
-                        anyhow::anyhow!("newton.privacy.get expects a string field name")
+                        anyhow::anyhow!("newton.confidential.get expects a string field name")
                     })?;
                     let map = fields_ref
                         .read()
-                        .map_err(|_| anyhow::anyhow!("privacy fields lock poisoned"))?;
+                        .map_err(|_| anyhow::anyhow!("confidential fields lock poisoned"))?;
                     match map.get(field_name.as_ref()) {
                         Some(value) => Ok(value.clone()),
                         None => Ok(Value::Undefined),
@@ -141,7 +141,7 @@ impl PolicyDomainData for BlacklistData {
     }
 
     fn rego_prefix(&self) -> &str {
-        "privacy"
+        "confidential"
     }
 
     fn to_field_map(&self) -> BTreeMap<String, Value> {
@@ -160,35 +160,35 @@ impl PolicyDomainData for BlacklistData {
     }
 }
 
-/// Registers all blacklist privacy extensions with the engine.
+/// Registers all blacklist confidential extensions with the engine.
 ///
-/// Registers 2 domain-namespaced built-ins under `newton.privacy.blacklist.*`:
-/// - `newton.privacy.blacklist.contains(address)` — true if address is blacklisted
-/// - `newton.privacy.blacklist.count()` — number of entries in the blacklist
+/// Registers 2 domain-namespaced built-ins under `newton.confidential.blacklist.*`:
+/// - `newton.confidential.blacklist.contains(address)` — true if address is blacklisted
+/// - `newton.confidential.blacklist.count()` — number of entries in the blacklist
 ///
-/// Also registers or merges into the generic `newton.privacy.get(field_name)` accessor.
+/// Also registers or merges into the generic `newton.confidential.get(field_name)` accessor.
 ///
 /// Pass `None` for `existing_fields` when blacklist is the first domain. Pass
-/// the returned `SharedPrivacyFields` to subsequent domain registrations so all
-/// domains share a single `newton.privacy.get` accessor.
+/// the returned `SharedConfidentialFields` to subsequent domain registrations so all
+/// domains share a single `newton.confidential.get` accessor.
 pub fn register_blacklist_extensions(
     engine: &mut Engine,
     data: BlacklistData,
-    existing_fields: Option<SharedPrivacyFields>,
-) -> Result<SharedPrivacyFields> {
+    existing_fields: Option<SharedConfidentialFields>,
+) -> Result<SharedConfidentialFields> {
     let shared =
         register_generic_confidential_extensions(engine, Box::new(data.clone()), existing_fields)?;
 
     let bl_contains = data.clone();
     engine.add_extension(
-        "newton.privacy.blacklist.contains".to_string(),
+        "newton.confidential.blacklist.contains".to_string(),
         1,
         Box::new(move |params: Vec<Value>| blacklist_contains(params, &bl_contains)),
     )?;
 
     let bl_count = data.clone();
     engine.add_extension(
-        "newton.privacy.blacklist.count".to_string(),
+        "newton.confidential.blacklist.count".to_string(),
         0,
         Box::new(move |params: Vec<Value>| blacklist_count(params, &bl_count)),
     )?;
@@ -218,7 +218,7 @@ impl PolicyDomainData for AllowlistData {
     }
 
     fn rego_prefix(&self) -> &str {
-        "privacy"
+        "confidential"
     }
 
     fn to_field_map(&self) -> BTreeMap<String, Value> {
@@ -237,35 +237,35 @@ impl PolicyDomainData for AllowlistData {
     }
 }
 
-/// Registers all allowlist privacy extensions with the engine.
+/// Registers all allowlist confidential extensions with the engine.
 ///
-/// Registers 2 domain-namespaced built-ins under `newton.privacy.allowlist.*`:
-/// - `newton.privacy.allowlist.contains(address)` — true if address is allowlisted
-/// - `newton.privacy.allowlist.count()` — number of entries in the allowlist
+/// Registers 2 domain-namespaced built-ins under `newton.confidential.allowlist.*`:
+/// - `newton.confidential.allowlist.contains(address)` — true if address is allowlisted
+/// - `newton.confidential.allowlist.count()` — number of entries in the allowlist
 ///
-/// Also registers or merges into the generic `newton.privacy.get(field_name)` accessor.
+/// Also registers or merges into the generic `newton.confidential.get(field_name)` accessor.
 ///
 /// Pass `None` for `existing_fields` when allowlist is the first domain. Pass
-/// the returned `SharedPrivacyFields` to subsequent domain registrations so all
-/// domains share a single `newton.privacy.get` accessor.
+/// the returned `SharedConfidentialFields` to subsequent domain registrations so all
+/// domains share a single `newton.confidential.get` accessor.
 pub fn register_allowlist_extensions(
     engine: &mut Engine,
     data: AllowlistData,
-    existing_fields: Option<SharedPrivacyFields>,
-) -> Result<SharedPrivacyFields> {
+    existing_fields: Option<SharedConfidentialFields>,
+) -> Result<SharedConfidentialFields> {
     let shared =
         register_generic_confidential_extensions(engine, Box::new(data.clone()), existing_fields)?;
 
     let al_contains = data.clone();
     engine.add_extension(
-        "newton.privacy.allowlist.contains".to_string(),
+        "newton.confidential.allowlist.contains".to_string(),
         1,
         Box::new(move |params: Vec<Value>| allowlist_contains(params, &al_contains)),
     )?;
 
     let al_count = data.clone();
     engine.add_extension(
-        "newton.privacy.allowlist.count".to_string(),
+        "newton.confidential.allowlist.count".to_string(),
         0,
         Box::new(move |params: Vec<Value>| allowlist_count(params, &al_count)),
     )?;
@@ -289,10 +289,10 @@ fn normalize_address(addr: &str) -> String {
 
 fn blacklist_contains(params: Vec<Value>, data: &BlacklistData) -> Result<Value> {
     let addr = params[0].as_string().map_err(|_| {
-        anyhow::anyhow!("newton.privacy.blacklist.contains expects a string address")
+        anyhow::anyhow!("newton.confidential.blacklist.contains expects a string address")
     })?;
     if addr.is_empty() {
-        bail!("newton.privacy.blacklist.contains expects a non-empty address");
+        bail!("newton.confidential.blacklist.contains expects a non-empty address");
     }
     let normalized = normalize_address(addr.as_ref());
     let found = data
@@ -312,10 +312,10 @@ fn blacklist_count(_params: Vec<Value>, data: &BlacklistData) -> Result<Value> {
 
 fn allowlist_contains(params: Vec<Value>, data: &AllowlistData) -> Result<Value> {
     let addr = params[0].as_string().map_err(|_| {
-        anyhow::anyhow!("newton.privacy.allowlist.contains expects a string address")
+        anyhow::anyhow!("newton.confidential.allowlist.contains expects a string address")
     })?;
     if addr.is_empty() {
-        bail!("newton.privacy.allowlist.contains expects a non-empty address");
+        bail!("newton.confidential.allowlist.contains expects a non-empty address");
     }
     let normalized = normalize_address(addr.as_ref());
     let found = data
@@ -501,8 +501,8 @@ mod tests {
                 "test.rego".to_string(),
                 r#"
                 package test
-                count = newton.privacy.get("blacklist_count")
-                missing = newton.privacy.get("nonexistent")
+                count = newton.confidential.get("blacklist_count")
+                missing = newton.confidential.get("nonexistent")
                 "#
                 .to_string(),
             )
@@ -532,8 +532,8 @@ mod tests {
                 "test.rego".to_string(),
                 r#"
                 package test
-                bl_count = newton.privacy.get("blacklist_count")
-                al_count = newton.privacy.get("allowlist_count")
+                bl_count = newton.confidential.get("blacklist_count")
+                al_count = newton.confidential.get("allowlist_count")
                 "#
                 .to_string(),
             )
@@ -561,9 +561,9 @@ mod tests {
                 "test.rego".to_string(),
                 r#"
                 package test
-                blocked = newton.privacy.blacklist.contains("0xdeadbeef")
-                not_blocked = newton.privacy.blacklist.contains("0x12345678")
-                count = newton.privacy.blacklist.count()
+                blocked = newton.confidential.blacklist.contains("0xdeadbeef")
+                not_blocked = newton.confidential.blacklist.contains("0x12345678")
+                count = newton.confidential.blacklist.count()
                 "#
                 .to_string(),
             )
@@ -592,9 +592,9 @@ mod tests {
                 "test.rego".to_string(),
                 r#"
                 package test
-                allowed = newton.privacy.allowlist.contains("0xabcdef")
-                not_allowed = newton.privacy.allowlist.contains("0x000000")
-                count = newton.privacy.allowlist.count()
+                allowed = newton.confidential.allowlist.contains("0xabcdef")
+                not_allowed = newton.confidential.allowlist.contains("0x000000")
+                count = newton.confidential.allowlist.count()
                 "#
                 .to_string(),
             )
@@ -627,8 +627,8 @@ mod tests {
                 r#"
                 package test
                 allow if {
-                    not newton.privacy.blacklist.contains(input.addr)
-                    newton.privacy.allowlist.contains(input.addr)
+                    not newton.confidential.blacklist.contains(input.addr)
+                    newton.confidential.allowlist.contains(input.addr)
                 }
                 "#
                 .to_string(),
