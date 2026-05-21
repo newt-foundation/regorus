@@ -1,17 +1,18 @@
 [workspace]
-
-members = [
+members = []
+exclude = [
     "tests/ensure_no_std",
-  "xtask",
+    "xtask",
+    "mimalloc",
 ]
 
 [package]
-name = "regorus"
-description = "A fast, lightweight Rego (OPA policy language) interpreter"
-version = "0.9.0"
+name = "newton-rego"
+description = "Newton Protocol fork of Regorus — Rego policy engine with newton-crypto, newton-tlsn, and newton-identity extensions"
+version = "0.4.7"
 edition = "2021"
 license = "MIT AND Apache-2.0 AND BSD-3-Clause"
-repository = "https://github.com/microsoft/regorus"
+repository = "https://github.com/newt-foundation/regorus"
 keywords = ["interpreter", "no_std", "opa", "policy-as-code", "rego"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -34,14 +35,13 @@ http = []
 glob = ["dep:globset"]
 graph = []
 jsonschema = ["dep:jsonschema"]
-mimalloc = ["dep:mimalloc"]
 net = ["dep:ipnet"]
 no_std = ["lazy_static/spin_no_std"]
 opa-runtime = []
 regex = ["dep:regex"]
 rvm = ["dep:bincode", "dep:indexmap"]
 semver = ["dep:semver"]
-allocator-memory-limits = ["std", "mimalloc", "mimalloc/allocator-memory-limits"]
+allocator-memory-limits = ["std"]
 std = ["rand/std", "rand/std_rng", "serde_json/std", "msvc_spectre_libs" ]
 time = ["dep:chrono", "dep:chrono-tz"]
 uuid = ["dep:uuid"]
@@ -56,8 +56,6 @@ full-opa = [
     "hex",
     "http",
     "jsonschema",
-    "allocator-memory-limits",
-    "mimalloc",
     "net",
     "opa-runtime",
     "regex",
@@ -139,7 +137,6 @@ rand = { version = "0.9.0", default-features = false, features = ["thread_rng"],
 # Causes the project to link with the Spectre-mitigated CRT and libs.
 msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }
 dashmap = { version = "6.1", default-features = false, optional = true }
-mimalloc = { path = "mimalloc", optional = true }
 
 # rvm related deps
 indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
