@@ -303,22 +303,6 @@ impl Engine {
         crate::extensions::confidential::register_allowlist_extensions(self, data, existing_fields)
     }
 
-    /// Register Newton TLSNotary extensions.
-    ///
-    /// This adds the `newton.crypto.tlsn_verify` built-in function that
-    /// verifies TLSNotary presentations against a trusted notary public key.
-    ///
-    /// ```no_run
-    /// # use regorus::Engine;
-    /// let mut engine = Engine::new();
-    /// engine.with_newton_tlsn_extensions().unwrap();
-    /// ```
-    #[cfg(feature = "newton-tlsn")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "newton-tlsn")))]
-    pub fn with_newton_tlsn_extensions(&mut self) -> Result<()> {
-        crate::extensions::tlsn::register_newton_tlsn_extensions(self)
-    }
-
     /// Register Newton time utility extensions.
     ///
     /// Adds general-purpose date arithmetic builtins usable by any policy:
