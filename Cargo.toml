@@ -7,7 +7,7 @@ members = [
 
 [package]
 name = "newton-rego"
-description = "Newton Protocol fork of Regorus — Rego policy engine with Newton crypto, identity, confidential and time extensions"
+description = "Newton Protocol fork of Regorus — Rego policy engine with newton-crypto and newton-identity extensions"
 version = "0.15.0"
 edition = "2021"
 license = "MIT AND Apache-2.0 AND BSD-3-Clause"
