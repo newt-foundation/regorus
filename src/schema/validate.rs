@@ -11,6 +11,7 @@ use crate::{
     *,
 };
 use alloc::collections::BTreeMap;
+use num_traits::ToPrimitive;
 use regex::Regex;
 
 type String = Rc<str>;
@@ -158,7 +159,9 @@ impl SchemaValidator {
     ) -> Result<(), ValidationError> {
         match value {
             Value::Number(num) => {
-                if let Some(float_val) = num.as_f64() {
+                // Integers past f64's exact range (e.g. 1e18 wei) still range-check, approximately.
+                let approx = || num.to_big().ok()?.to_f64();
+                if let Some(float_val) = num.as_f64().or_else(approx) {
                     if let Some(min) = minimum {
                         if float_val < min {
                             return Err(ValidationError::OutOfRange {
