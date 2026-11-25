@@ -81,6 +81,53 @@ The Regorus C# bindings provide a modern, thread-safe API for compiling and eval
 - **Thread Safety**: All operations are thread-safe without external synchronization
 - **Registry Management**: Centralized management of targets and schemas
 - **Policy Introspection**: Rich metadata about compiled policies
+- **RVM Memory Budgets**: Optional per-execution memory limits for run-to-completion and suspendable evaluation
+
+## RVM Memory Budgets
+
+`Rvm.SetMemoryBudgetConfig` configures a fresh non-zero budget for the next initial RVM execution in either run-to-completion or suspendable mode. `Rvm.ClearMemoryBudgetConfig` affects the next initial execution; it does not change an active suspendable continuation.
+
+```csharp
+public readonly struct MemoryBudgetConfig
+{
+    public MemoryBudgetConfig(ulong limitBytes);
+    public ulong LimitBytes { get; }
+}
+
+public sealed class Rvm : IDisposable
+{
+    public void SetMemoryBudgetConfig(MemoryBudgetConfig config);
+    public void ClearMemoryBudgetConfig();
+}
+```
+
+`Execute` and `ExecuteEntryPoint` start a fresh budget for each accepted initial execution. A suspendable execution retains the same budget across `Resume` calls, including resumes on another thread. Suspendable usage is the cumulative total of successful requested allocation sizes; frees do not refund it. Program compilation, program loading, and prior `SetDataJson`, `SetInputJson`, and `SetContextJson` calls occur before and outside the budget; use this path for static or preloaded data.
+
+```csharp
+using var vm = new Rvm();
+vm.SetMemoryBudgetConfig(new MemoryBudgetConfig(16UL * 1024 * 1024));
+
+try
+{
+    var result = vm.Execute();
+}
+catch (RegorusMemoryBudgetExceededException)
+{
+    // The execution exceeded its configured budget.
+}
+```
+
+Native resume C-string copying and JSON parsing, VM resume work, result JSON serialization, and Rust `CString` allocation are included before an `Execute`, `ExecuteEntryPoint`, or `Resume` call returns. Managed UTF-8 decoding and the managed C# `string` allocation after the native call returns are excluded.
+
+Memory budgets require a native library built with allocator memory tracking. Changing or clearing the configuration while a suspendable execution is active affects only the next initial execution. `RegorusMemoryBudgetExceededException` is thrown when a budget is exceeded. Native status 11 and `RegorusMemoryBudgetUnsupportedException` remain reserved for compatibility and are not used to reject suspendable execution.
+
+Enforcement is cooperative and not an allocation-time peak-memory cap. Run-to-completion usage retains its thread-baseline live-byte accounting; suspendable usage accumulates successful requested allocation sizes across execution segments. An instruction, builtin, native input parse, serialization, or `CString` allocation can overshoot before it is rejected. Synchronous host work on the execution thread is included; managed allocations, host I/O, getter serialization, and other allocators are excluded.
+
+The following warm-VM baseline note applies to run-to-completion accounting. Suspendable budgets do not charge allocations made before execution unless they are reallocated during the run; a successful reallocation charges its full new requested size.
+
+Suspendable accounting does not track per-block allocation origins. Frees never refund accumulated usage; successful reallocation charges the full new requested size to the currently selected execution, and failed reallocation charges nothing. Run-to-completion accounting keeps its existing execution-thread baseline and downward ratchet. See the [RVM memory budget documentation](../../docs/limits/memory_budget.md) for the detailed accounting model.
+
+A reused VM gets a fresh baseline, but capacities and pools retained before that baseline can make a warm execution allocate differently from a fresh one. Failed terminal execution clears retained state. Public multi-call begin/end scopes are intentionally absent; the RVM owns the cumulative usage scalar and selects it only during synchronous execution segments. The [detailed RVM memory budget documentation](../../docs/limits/memory_budget.md) is authoritative for accounting behavior.
 
 ## Core Classes
 
@@ -123,6 +170,62 @@ public static class Compiler
         IEnumerable<PolicyModule> modules);
 }
 ```
+
+### Engine
+
+`AddPolicy(path, rego)` and `AddPolicyFromFile(path)` reject an embedded NUL
+in `path` with `ArgumentException` instead of allowing the native call to
+silently truncate it.
+
+The stateful `Engine` API can inspect one loaded module for rule declarations
+without evaluating the policy. Call
+`HasDeclaredRuleRootedAt(sourcePath, rootName)` with either a bare root such as
+`"metadata"` or a dotted rule path such as `"metadata.parameters"`. A selector
+matches that exact path and its component-wise descendants: `"metadata"`
+matches `metadata.parameters`, `metadata.parameters.child`, and
+`metadata.other`, while `"metadata.parameters"` matches `metadata.parameters`
+and `metadata.parameters.child`, but not
+`metadata.other` or `metadata.parametersExtra`.
+
+The method scans authored rule heads in only the selected module, including
+defaults, functions, sets, and rules whose bodies would be false or undefined.
+Imports, references, comments, strings, and object keys are not declarations;
+rules in other modules in the same package are not included.
+
+```csharp
+using var engine = new Engine();
+engine.AddPolicy(
+    "customer.rego",
+    "package customer\nparams.timeout := input.timeout");
+
+bool hasParams = engine.HasDeclaredRuleRootedAt("customer.rego", "params");
+```
+
+`sourcePath` must identify exactly one loaded module. For `AddPolicy`, the
+stored source label is the supplied path. For `AddPolicyFromFile`, the path is
+converted to a string lossily by the native implementation; the lookup does
+not compare the original path bytes. Non-UTF-8 filenames can therefore
+produce the same source label and an ambiguous-source error. Source selection
+occurs before validating `rootName`, so missing or ambiguous paths remain
+`InvalidOperationException` even when the selector is invalid.
+
+`rootName` must be a nonempty path accepted by the module's load-time Rego mode
+and future-keyword imports. It is parsed as a native rule reference: only a
+root identifier followed by zero or more dot-qualified fields is accepted;
+whitespace, comments, bracket selectors, calls, and trailing syntax are not.
+Path components compare exactly, not by string prefix. Invalid selectors
+throw `ArgumentException` with `ParamName` set to `rootName`. A missing or
+ambiguous source, or a rule head that cannot be classified, throws
+`InvalidOperationException`. Null strings throw `ArgumentNullException`;
+embedded NULs in either string throw `ArgumentException` before native
+marshalling.
+
+The native call validates the engine and acquires its read lock before source
+transport, then validates the root string. A null or invalid-UTF-8 root is an
+invalid argument; source-path transport errors retain the normal operation
+error status. After valid string transport, exact source selection precedes
+selector grammar validation, so a missing or ambiguous source remains an
+`InvalidOperationException` even when `rootName` is invalid.
 
 ### PolicyModule
 
@@ -343,6 +446,153 @@ var tasks = Enumerable.Range(0, 100).Select(i =>
 var results = await Task.WhenAll(tasks);
 ```
 
+## RVM Classes
+
+### Program
+
+`Program` represents a compiled RVM bytecode artifact. It can be created from
+modules+entrypoints or from an `Engine`, serialized to binary, and loaded into
+an `Rvm` for execution.
+
+```csharp
+public sealed class Program : IDisposable
+{
+    // Compile from modules with entry points
+    public static Program CompileFromModules(
+        string dataJson,
+        IReadOnlyList<PolicyModule> modules,
+        IReadOnlyList<string> entryPoints);
+
+    // Compile with registered host-await builtins
+    public static Program CompileFromModules(
+        string dataJson,
+        IReadOnlyList<PolicyModule> modules,
+        IReadOnlyList<string> entryPoints,
+        IReadOnlyList<HostAwaitBuiltin> hostAwaitBuiltins);
+
+    // Compile from an Engine instance
+    public static Program CompileFromEngine(Engine engine, IReadOnlyList<string> entryPoints);
+
+    // Serialize/deserialize
+    public byte[] SerializeBinary();
+    public static Program DeserializeBinary(byte[] data, out bool isPartial);
+
+    // Debug listing
+    public string GenerateListing();
+
+    // Builtin metadata
+    public IReadOnlyList<string> GetBuiltinNames();
+
+    public void Dispose();
+}
+```
+
+`GetBuiltinNames` returns the names in the compiled program's builtin-info table,
+preserving table order. Registered host-await builtins are excluded. This is
+metadata inspection only; it is not complete policy-ingestion validation or
+proof of dynamic execution.
+
+### Rvm
+
+`Rvm` is the virtual machine that executes a loaded `Program`.
+
+```csharp
+public sealed class Rvm : IDisposable
+{
+    // Load a compiled program
+    public void LoadProgram(Program program);
+
+    // Set data and input documents
+    public void SetDataJson(string dataJson);
+    public void SetInputJson(string inputJson);
+
+    // Configure execution
+    public void SetExecutionMode(ExecutionMode mode);
+    public void SetMaxInstructions(ulong maxInstructions);
+
+    // Run
+    public string? Execute();
+    public string? ExecuteEntryPoint(string entryPoint);
+
+    // Suspendable-mode host-await interaction
+    public string? Resume(string valueJson);
+    public string? GetExecutionState();
+    public string? GetHostAwaitIdentifier();
+    public string? GetHostAwaitArgument();
+
+    // Run-to-completion-mode host-await pre-loading. Atomically replaces all
+    // previously configured responses for every identifier; pass every
+    // identifier the policy may invoke in a single call.
+    public void SetHostAwaitResponses(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> responsesByIdentifier);
+
+    public void Dispose();
+}
+```
+
+`SetMaxInstructions` configures the maximum number of dispatched RVM bytecode
+instructions for the VM. The default is 25,000 and zero permits no
+dispatches. A fresh execution and `LoadProgram` reset the consumed count while
+preserving the configured maximum; `Resume` is cumulative with the preceding
+execution. Updating the maximum while suspended replaces the limit without
+resetting consumption. Instruction-limit failures use the existing generic
+`InvalidOperationException` projection. The setter is write-only in the C#
+binding; consumed instruction counts are not exposed.
+
+### HostAwaitBuiltin
+
+Declares a function name that the compiler should treat as a host-await call.
+When the VM encounters a call to this function, it suspends (suspendable mode)
+or consumes a pre-loaded response (run-to-completion mode).
+
+`argCount` is the exact number of input arguments in the policy call. The
+optional Rego output parameter is not included. Registered calls pass an
+ordered array to the host: zero inputs produce `[]`, one input produces
+`[value]`, and multiple inputs produce `[value1, value2, ...]`. Values remain
+native Rego values inside that array, including nested arrays and objects.
+`GetHostAwaitArgument()` returns the compact JSON representation of the whole array;
+it does not unwrap one-input calls. An input that evaluates to undefined skips
+the registered HostAwait without consuming a response.
+
+```csharp
+public readonly struct HostAwaitBuiltin
+{
+    public string Name { get; }
+    public int ArgCount { get; }
+
+    public HostAwaitBuiltin(string name, int argCount);
+}
+```
+
+The one-argument constructor was removed; pass the declared input count
+explicitly and reject negative counts. Removing `.ctor(string)` is a C# source
+and CLR binary break. This is a coordinated breaking change: update host
+handlers, managed and native packages, registrations, and recompiled programs
+together. New managed code with an older size-aware native library may have
+its count ignored and is unsupported; an old name-only caller with the new
+native library is rejected for non-empty registrations.
+
+Explicit `__builtin_host_await(payload, identifier)` calls and previously
+compiled programs retain raw payloads, while new registered calls send an
+ordered input array. Old raw payloads can themselves be arrays, so a handler
+cannot reliably infer the program format from payload shape. Deploy matching
+program and handler versions together or use application-owned legacy routing;
+there is no runtime handshake or universal compatibility handler. Roll back
+the matching earlier managed/native package, host handler, and program bundle
+together.
+
+### ExecutionMode
+
+Controls how the VM handles host-await instructions.
+
+```csharp
+public enum ExecutionMode
+{
+    RunToCompletion = 0,
+    Suspendable = 1,
+}
+```
+
 ## Performance Considerations
 
 ### Compilation Overhead
@@ -383,7 +633,7 @@ catch (Exception ex)
 
 Some functionality requires specific Rust feature flags:
 
-- **azure_policy**: Required for target-aware compilation and policy parameters
+- **azure_policy**: Required for target-aware compilation and the `GetPolicyParameters` metadata API
 - Without this feature, target-related methods will not be available
 
 ## Version Compatibility

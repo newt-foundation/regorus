@@ -65,6 +65,55 @@ triplet_count := count([1 |
     private const string EXECUTION_TIMER_QUERY = "data.limits.timer.triplet_count";
     private const int EXECUTION_TIMER_VALUE_COUNT = 40;
 
+    private const string RVM_POLICY = """
+package demo
+import rego.v1
+
+default allow := false
+
+allow if {
+        input.user == "alice"
+        some role in data.roles[input.user]
+        role == "admin"
+}
+""";
+
+    private const string RVM_DATA = """
+{
+    "roles": {
+        "alice": ["admin", "reader"]
+    }
+}
+""";
+
+    private const string RVM_INPUT = """
+{
+    "user": "alice"
+}
+""";
+
+    private const string HOST_AWAIT_POLICY = """
+package demo
+import rego.v1
+
+default allow := false
+
+allow if {
+    input.account.active == true
+    details := __builtin_host_await(input.account.id, "account")
+    details.tier == "gold"
+}
+""";
+
+    private const string HOST_AWAIT_INPUT = """
+    {
+        "account": {
+            "id": "acct-1",
+            "active": true
+        }
+    }
+    """;
+
     // Test data constants
     private const string COMPLIANT_STORAGE_ACCOUNT = @"{
   ""type"": ""Microsoft.Storage/storageAccounts"",
@@ -167,13 +216,25 @@ triplet_count := count([1 |
 
         var nonCompliantResult = compiledPolicy.EvalWithInput(NON_COMPLIANT_STORAGE_ACCOUNT);
         Console.WriteLine($"Result: {nonCompliantResult}");
-        
+
         // 4. Demonstrate thread-safe concurrent evaluation
         Console.WriteLine("\n4. Testing concurrent evaluation from multiple threads:");
         DemonstrateConcurrentEvaluation(compiledPolicy);
 
         Console.WriteLine("\n5. Execution timer configuration:");
         DemonstrateExecutionTimer();
+
+        Console.WriteLine("\n6. RVM program execution:");
+        DemonstrateRvmUsage();
+
+        Console.WriteLine("\n7. RVM program compilation from engine:");
+        DemonstrateRvmCompileFromEngine();
+
+        Console.WriteLine("\n8. RVM host await (suspend/resume):");
+        DemonstrateRvmHostAwait();
+
+        Console.WriteLine("\n9. Azure Policy JSON compilation:");
+        DemonstrateAzurePolicyJsonCompilation();
     }
 
     static void DemonstrateConcurrentEvaluation(Regorus.CompiledPolicy compiledPolicy)
@@ -188,42 +249,44 @@ triplet_count := count([1 |
         };
 
         Console.WriteLine($"Starting {testInputs.Length} concurrent evaluations...");
-        
-        var tasks = testInputs.Select(input => 
-            Task.Run(() => {
+
+        var tasks = testInputs.Select(input =>
+            Task.Run(() =>
+            {
                 var (threadName, json) = input;
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 // Multiple evaluations per thread to stress test
                 var results = new List<string>();
                 for (int i = 0; i < 1000; i++)
                 {
-                    var result = compiledPolicy.EvalWithInput(json);
+                    var result = compiledPolicy.EvalWithInput(json)
+                        ?? throw new System.InvalidOperationException("Expected EvalWithInput to return a JSON value.");
                     results.Add(result);
                 }
-                
+
                 stopwatch.Stop();
                 var microseconds = stopwatch.ElapsedTicks * 1000000 / System.Diagnostics.Stopwatch.Frequency;
-                
+
                 // Verify all results are identical (thread safety)
                 var firstResult = results[0];
                 var allIdentical = results.All(r => r == firstResult);
-                
+
                 Console.WriteLine($"✓ {threadName}: {results.Count} evaluations in {microseconds}μs, " +
                                 $"Results consistent: {allIdentical}");
-                
+
                 return (threadName, results.Count, microseconds, allIdentical);
             })
         ).ToArray();
 
         // Wait for all threads to complete
         var results = Task.WhenAll(tasks).Result;
-        
+
         Console.WriteLine("\nConcurrency test results:");
         var totalEvaluations = results.Sum(r => r.Item2);
         var maxTime = results.Max(r => r.Item3);
         var allConsistent = results.All(r => r.allIdentical);
-        
+
         Console.WriteLine($"✓ Total evaluations: {totalEvaluations}");
         Console.WriteLine($"✓ Max thread time: {maxTime}μs");
         Console.WriteLine($"✓ All threads consistent: {allConsistent}");
@@ -234,28 +297,28 @@ triplet_count := count([1 |
     static void DemonstratePolicyInfo(Regorus.CompiledPolicy compiledPolicy)
     {
         Console.WriteLine("Getting policy metadata using GetPolicyInfo()...");
-        
+
         try
         {
             var policyInfo = compiledPolicy.GetPolicyInfo();
-            
+
             Console.WriteLine($"✓ Policy Information Retrieved:");
             Console.WriteLine($"  Target Name: {policyInfo.TargetName ?? "None"}");
             Console.WriteLine($"  Effect Rule: {policyInfo.EffectRule ?? "None"}");
             Console.WriteLine($"  Entrypoint Rule: {policyInfo.EntrypointRule}");
-            
+
             Console.WriteLine($"  Module IDs ({policyInfo.ModuleIds.Count}):");
             foreach (var moduleId in policyInfo.ModuleIds)
             {
                 Console.WriteLine($"    - {moduleId}");
             }
-            
+
             Console.WriteLine($"  Applicable Resource Types ({policyInfo.ApplicableResourceTypes.Count}):");
             foreach (var resourceType in policyInfo.ApplicableResourceTypes)
             {
                 Console.WriteLine($"    - {resourceType}");
             }
-            
+
             if (policyInfo.Parameters != null && policyInfo.Parameters.Count > 0)
             {
                 Console.WriteLine($"  Policy Parameters:");
@@ -275,7 +338,7 @@ triplet_count := count([1 |
                             Console.WriteLine($"          Description: {param.Description}");
                         }
                     }
-                    
+
                     if (parameterSet.Modifiers.Count > 0)
                     {
                         Console.WriteLine($"      Modifiers ({parameterSet.Modifiers.Count}):");
@@ -290,11 +353,11 @@ triplet_count := count([1 |
             {
                 Console.WriteLine("  No parameter information available");
             }
-            
+
             // Demonstrate JSON serialization of policy info
             Console.WriteLine("\n✓ Policy Info as JSON:");
-            var jsonOptions = new JsonSerializerOptions 
-            { 
+            var jsonOptions = new JsonSerializerOptions
+            {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             };
@@ -358,5 +421,154 @@ triplet_count := count([1 |
         {
             Regorus.Engine.ClearFallbackExecutionTimerConfig();
         }
+    }
+
+    static void DemonstrateRvmUsage()
+    {
+        var modules = new List<Regorus.PolicyModule>
+        {
+            new Regorus.PolicyModule("demo.rego", RVM_POLICY)
+        };
+        var entryPoints = new[] { "data.demo.allow" };
+
+        using var program = Regorus.Program.CompileFromModules(RVM_DATA, modules, entryPoints);
+        var binary = program.SerializeBinary();
+        using var rehydrated = Regorus.Program.DeserializeBinary(binary, out var isPartial);
+        if (isPartial)
+        {
+            throw new InvalidOperationException("RVM program deserialization returned a partial program.");
+        }
+
+        Console.WriteLine($"Serialized program size: {binary.Length} bytes");
+
+        var listing = rehydrated.GenerateListing();
+
+        Console.WriteLine("RVM listing:");
+        Console.WriteLine(listing);
+
+        using var vm = new Regorus.Rvm();
+        vm.LoadProgram(rehydrated);
+        vm.SetDataJson(RVM_DATA);
+        vm.SetInputJson(RVM_INPUT);
+
+        var result = vm.Execute();
+        Console.WriteLine($"RVM result: {result}");
+    }
+
+    static void DemonstrateRvmCompileFromEngine()
+    {
+        using var engine = new Regorus.Engine();
+        engine.AddPolicy("demo.rego", RVM_POLICY);
+        engine.AddDataJson(RVM_DATA);
+
+        var entryPoints = new[] { "data.demo.allow" };
+        using var program = Regorus.Program.CompileFromEngine(engine, entryPoints);
+
+        using var vm = new Regorus.Rvm();
+        vm.LoadProgram(program);
+        vm.SetDataJson(RVM_DATA);
+        vm.SetInputJson(RVM_INPUT);
+
+        var result = vm.ExecuteEntryPoint("data.demo.allow");
+        Console.WriteLine($"RVM result from engine-compiled program: {result}");
+    }
+
+    static void DemonstrateRvmHostAwait()
+    {
+        var modules = new List<Regorus.PolicyModule>
+        {
+            new Regorus.PolicyModule("host_await.rego", HOST_AWAIT_POLICY)
+        };
+        var entryPoints = new[] { "data.demo.allow" };
+
+        using var program = Regorus.Program.CompileFromModules("{}", modules, entryPoints);
+        using var vm = new Regorus.Rvm();
+        vm.SetExecutionMode(1);
+        vm.LoadProgram(program);
+        vm.SetInputJson(HOST_AWAIT_INPUT);
+
+        var initial = vm.Execute();
+        var state = vm.GetExecutionState();
+        Console.WriteLine($"HostAwait initial result: {initial}");
+        Console.WriteLine($"Execution state: {state}");
+
+        var resumed = vm.Resume("{\"tier\":\"gold\"}");
+        Console.WriteLine($"HostAwait resumed result: {resumed}");
+    }
+
+    // Azure Policy JSON constants
+    private const string STORAGE_ALIASES_JSON = @"[{
+        ""namespace"": ""Microsoft.Storage"",
+        ""resourceTypes"": [{
+            ""resourceType"": ""storageAccounts"",
+            ""capabilities"": ""SupportsTags, SupportsLocation"",
+            ""aliases"": [
+                {
+                    ""name"": ""Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly"",
+                    ""defaultPath"": ""properties.supportsHttpsTrafficOnly"",
+                    ""paths"": []
+                }
+            ]
+        }]
+    }]";
+
+    private const string HTTPS_DENY_RULE = @"{
+        ""if"": {
+            ""allOf"": [
+                { ""field"": ""type"", ""equals"": ""Microsoft.Storage/storageAccounts"" },
+                { ""field"": ""Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly"", ""equals"": false }
+            ]
+        },
+        ""then"": { ""effect"": ""deny"" }
+    }";
+
+    static void DemonstrateAzurePolicyJsonCompilation()
+    {
+        // 1. Set up alias registry
+        using var registry = Regorus.AliasRegistry.FromJson(STORAGE_ALIASES_JSON);
+        Console.WriteLine("Loaded storage account aliases");
+
+        // 2. Compile the JSON policy rule directly (no Rego needed)
+        using var program = Regorus.AzurePolicyCompiler.CompilePolicyRule(registry, HTTPS_DENY_RULE);
+        Console.WriteLine("Compiled Azure Policy JSON rule to RVM program");
+
+        // 3. Normalize an ARM resource
+        var armResource = @"{
+            ""type"": ""Microsoft.Storage/storageAccounts"",
+            ""name"": ""insecurestorage"",
+            ""location"": ""eastus"",
+            ""properties"": { ""supportsHttpsTrafficOnly"": false }
+        }";
+        var envelope = registry.NormalizeAndWrap(armResource, apiVersion: null, contextJson: "{}", parametersJson: "{}");
+        Console.WriteLine($"Normalized ARM resource to evaluation envelope");
+
+        // 4. Execute in the RVM
+        //    Note: For policies using context functions (subscription(), resourceGroup()),
+        //    call vm.SetContextJson(contextJson) before execution. The context from
+        //    NormalizeAndWrap is in the envelope but must also be set on the VM separately.
+        using var vm = new Regorus.Rvm();
+        vm.LoadProgram(program);
+        vm.SetInputJson(envelope!);
+        // vm.SetContextJson(contextJson); // ← required for context-dependent policies
+        var result = vm.ExecuteEntryPoint("main");
+        Console.WriteLine($"Evaluation result (non-compliant): {result}");
+
+        // 5. Test with a compliant resource
+        var compliantResource = @"{
+            ""type"": ""Microsoft.Storage/storageAccounts"",
+            ""name"": ""securestorage"",
+            ""location"": ""eastus"",
+            ""properties"": { ""supportsHttpsTrafficOnly"": true }
+        }";
+        var compliantEnvelope = registry.NormalizeAndWrap(compliantResource, apiVersion: null, contextJson: "{}", parametersJson: "{}");
+        using var vm2 = new Regorus.Rvm();
+        vm2.LoadProgram(program);
+        vm2.SetInputJson(compliantEnvelope!);
+        var compliantResult = vm2.ExecuteEntryPoint("main");
+        Console.WriteLine($"Evaluation result (compliant): {compliantResult}");
+
+        // 6. Demonstrate program serialization
+        var binary = program.SerializeBinary();
+        Console.WriteLine($"Serialized program size: {binary.Length} bytes");
     }
 }

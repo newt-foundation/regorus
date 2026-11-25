@@ -22,9 +22,7 @@ pub enum TargetCompileError {
     #[error("No target specified. When using compile_for_target, at least one module must specify a target using the __target__ annotation")]
     NoTargetSpecified,
     /// Modules with targets have different packages
-    #[error(
-        "Modules with target '{target}' have different packages: '{existing_package}' and '{conflicting_package}'"
-    )]
+    #[error("Modules with target '{target}' have different packages: '{existing_package}' and '{conflicting_package}'")]
     ConflictingPackages {
         target: String,
         existing_package: String,

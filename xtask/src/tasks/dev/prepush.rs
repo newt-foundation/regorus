@@ -1,10 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use clap::Args;

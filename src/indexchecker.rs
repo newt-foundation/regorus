@@ -11,7 +11,8 @@
 #![allow(clippy::panic)] // debug-only index checks panic on invariants
 
 use crate::ast::*;
-use alloc::{collections::BTreeSet, format};
+use alloc::collections::BTreeSet;
+use alloc::format;
 use anyhow::{bail, Result};
 
 // Ensures that indexes are unique and continuous, starting from 0.

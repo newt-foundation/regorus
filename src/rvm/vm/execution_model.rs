@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::{rvm::program::RuleType, value::Value};
-use alloc::{collections::BTreeSet, vec::Vec};
+use crate::rvm::program::RuleType;
+use crate::value::Value;
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
 
-use super::{
-    context::{ComprehensionContext, LoopContext},
-    errors::VmError,
-};
+use super::context::{ComprehensionContext, LoopContext};
+use super::errors::VmError;
 
 /// Represents a single execution context (frame) in the VM
 #[derive(Debug, Clone)]

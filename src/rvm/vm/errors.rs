@@ -3,16 +3,18 @@
 
 use super::execution_model::SuspendReason;
 use crate::value::Value;
-use alloc::{string::String, vec::Vec};
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::time::Duration;
 use thiserror::Error;
 
 /// VM execution errors
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum VmError {
-    #[error(
-        "Execution stopped: exceeded maximum instruction limit of {limit} after {executed} instructions (pc={pc})"
-    )]
+    #[error("Rule call depth exceeded limit {limit} (pc={pc})")]
+    RuleCallDepthExceeded { limit: usize, pc: usize },
+
+    #[error("Execution stopped: exceeded maximum instruction limit of {limit} after {executed} instructions (pc={pc})")]
     InstructionLimitExceeded {
         limit: usize,
         executed: usize,
@@ -28,6 +30,20 @@ pub enum VmError {
 
     #[error("Execution exceeded memory limit (usage={usage} bytes, limit={limit} bytes, pc={pc})")]
     MemoryLimitExceeded { usage: u64, limit: u64, pc: usize },
+
+    #[error(
+        "Execution exceeded memory budget (usage={usage} bytes, budget={budget} bytes, pc={pc})"
+    )]
+    MemoryBudgetExceeded { usage: u64, budget: u64, pc: usize },
+
+    #[error("Memory budgets are not supported for suspendable execution (pc={pc})")]
+    MemoryBudgetUnsupportedInSuspendableExecution { pc: usize },
+
+    #[error("Compiled regex exceeded size limit ({limit} bytes, pc={pc})")]
+    RegexSizeLimitExceeded { limit: usize, pc: usize },
+
+    #[error("Value serialization exceeds {limit} nested containers (pc={pc})")]
+    SerializationDepthExceeded { limit: usize, pc: usize },
 
     #[error("Literal index {index} out of bounds (pc={pc})")]
     LiteralIndexOutOfBounds { index: u16, pc: usize },
@@ -194,9 +210,7 @@ pub enum VmError {
     #[error("Cannot iterate over {value:?} (pc={pc})")]
     InvalidIteration { value: Value, pc: usize },
 
-    #[error(
-        "HostAwait executed but no response provided for destination register {dest} (id: {identifier:?}, pc={pc})"
-    )]
+    #[error("HostAwait executed but no response provided for destination register {dest} (id: {identifier:?}, pc={pc})")]
     HostAwaitResponseMissing {
         dest: u8,
         identifier: Value,
@@ -211,6 +225,9 @@ pub enum VmError {
 
     #[error("Arithmetic error: {message} (pc={pc})")]
     ArithmeticError { message: String, pc: usize },
+
+    #[error("numeric overflow in {operation} (pc={pc})")]
+    NumericOverflow { operation: &'static str, pc: usize },
 
     #[error("Entry point index {index} out of bounds (max: {max_index}, pc={pc})")]
     InvalidEntryPointIndex {
@@ -295,12 +312,54 @@ pub enum VmError {
     #[error("Call rule stack underflow during rule finalization (pc={pc})")]
     CallRuleStackUnderflow { pc: usize },
 
+    #[error("Call rule stack mismatch during rule finalization: expected rule_index {expected}, popped {actual} (pc={pc})")]
+    CallRuleStackMismatch {
+        expected: u16,
+        actual: u16,
+        pc: usize,
+    },
+
     #[error("Internal VM error: {message} (pc={pc})")]
     Internal { message: String, pc: usize },
 }
 
 impl From<anyhow::Error> for VmError {
     fn from(err: anyhow::Error) -> Self {
+        // Preserve LimitError identity so that resource-limit violations are
+        // never silently swallowed to Undefined in non-strict mode.
+        // Note: pc is set to 0 because this conversion lacks instruction context.
+        // The error message itself (which includes the limit value) provides
+        // sufficient diagnostic information for users.
+        if let Some(limit_err) = err.downcast_ref::<crate::LimitError>() {
+            return match *limit_err {
+                crate::LimitError::TimeLimitExceeded { elapsed, limit } => {
+                    VmError::TimeLimitExceeded {
+                        elapsed,
+                        limit,
+                        pc: 0,
+                    }
+                }
+                crate::LimitError::MemoryLimitExceeded { usage, limit } => {
+                    VmError::MemoryLimitExceeded {
+                        usage,
+                        limit,
+                        pc: 0,
+                    }
+                }
+                crate::LimitError::RegexSizeLimitExceeded { limit } => {
+                    VmError::RegexSizeLimitExceeded { limit, pc: 0 }
+                }
+                crate::LimitError::SerializationDepthExceeded { limit } => {
+                    VmError::SerializationDepthExceeded { limit, pc: 0 }
+                }
+            };
+        }
+        if let Some(overflow) = err.downcast_ref::<crate::number::NumericOverflowError>() {
+            return VmError::NumericOverflow {
+                operation: overflow.operation(),
+                pc: 0,
+            };
+        }
         VmError::ArithmeticError {
             message: alloc::format!("{}", err),
             pc: 0,

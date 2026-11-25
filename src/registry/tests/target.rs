@@ -763,7 +763,8 @@ fn test_target_list_operations() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_target_access() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     let barrier = Rc::new(Barrier::new(4));
     let mut handles = vec![];
@@ -1039,7 +1040,8 @@ fn test_microsoft_graph_with_global_registry() {
 
 #[test]
 fn test_microsoft_graph_concurrent_access() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     let barrier = Rc::new(Barrier::new(2));
     let mut handles = vec![];

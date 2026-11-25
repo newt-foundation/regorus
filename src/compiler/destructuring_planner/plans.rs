@@ -4,13 +4,13 @@
 
 //! Core data structures used by the destructuring planner.
 
-use alloc::{
-    collections::BTreeMap,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-use crate::{ast::ExprRef, lexer::Span, value::Value};
+use crate::ast::ExprRef;
+use crate::lexer::Span;
+use crate::value::Value;
 
 /// Strategy for how to destructure an expression.
 #[derive(Debug, Clone)]

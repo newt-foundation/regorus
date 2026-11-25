@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{ffi::OsString, path::Path};
+use std::ffi::OsString;
+use std::path::Path;
 
 use anyhow::Result;
 use clap::Args;
@@ -241,6 +242,10 @@ fn run_ci_suite(config: CiSuiteConfig) -> Result<()> {
         )?;
     }
 
+    // Verify that important feature subsets compile correctly.
+    // These catch issues like #595 where non-default combinations fail.
+    check_feature_combinations(&workspace, config.release, config.frozen)?;
+
     Ok(())
 }
 
@@ -362,4 +367,51 @@ fn base_cargo_args(
         }
     }
     args
+}
+
+/// Verify that various feature subsets compile.
+///
+/// Library consumers may pick non-default feature combinations.  Running
+/// `cargo check` for each combination is fast and catches regressions like
+/// issue #595 (indexmap/std not propagated) early.
+///
+/// The weekly `feature-matrix.yml` workflow runs a superset of these with
+/// full `cargo test`; these PR checks are intentionally `cargo check` only
+/// to keep CI fast.
+fn check_feature_combinations(workspace: &Path, release: bool, frozen: bool) -> Result<()> {
+    let combos: &[&str] = &[
+        // Issue #595: library consumer with std + arc + rvm but no full-opa.
+        // Validates indexmap/std propagation via the weak-dep syntax.
+        "std,arc,rvm",
+        // full-opa without mimalloc: the new default after removing the
+        // vendored allocator from full-opa. All builtins, no allocator.
+        "std,arc,full-opa",
+        // Binding-style: full-opa plus the explicit allocator opt-in.
+        // Mirrors how ffi/java/python/ruby crates are configured.
+        "std,arc,full-opa,allocator-memory-limits",
+        // no_std codepath: exercises spin_no_std + absence of std deps.
+        "arc,opa-no-std",
+        // Cherry-picked builtins: popular features without full-opa to
+        // ensure individual feature gates compose correctly.
+        "std,arc,rvm,coverage,cache,regex,time",
+        // Default-off explanations (implies rvm) without full-opa.
+        "std,arc,explanations",
+    ];
+
+    for features in combos {
+        let label = format!(
+            "cargo check --no-default-features --features {} (ci)",
+            features
+        );
+        run_ci_cargo_step(
+            workspace,
+            "check",
+            release,
+            frozen,
+            Some(features),
+            &["--no-default-features"],
+            &label,
+        )?;
+    }
+    Ok(())
 }

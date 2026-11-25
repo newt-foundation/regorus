@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{boxed::Box, env, error::Error, fs, path::PathBuf};
+use std::boxed::Box;
+use std::env;
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn Error>> {
     compile_mimalloc();

@@ -20,18 +20,17 @@ mod rules;
 
 pub use error::{CompilerError, Result, SpannedCompilerError};
 
-use crate::{
-    ast::ExprRef,
-    lexer::Span,
-    rvm::program::{Program, RuleType, SpanInfo},
-    CompiledPolicy,
-};
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::String,
-    vec,
-    vec::Vec,
-};
+use crate::ast::ExprRef;
+use crate::lexer::{Source, Span};
+use crate::rvm::program::{Program, RuleType, SpanInfo};
+use crate::CompiledPolicy;
+use crate::Value;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString as _;
+use alloc::vec;
+use alloc::vec::Vec;
 use indexmap::IndexMap;
 
 pub type Register = u8;
@@ -124,13 +123,19 @@ pub struct Compiler<'a> {
     rule_definitions: Vec<Vec<Vec<u32>>>,
     rule_definition_function_params: Vec<Vec<Option<Vec<String>>>>,
     rule_definition_destructuring_patterns: Vec<Vec<Option<u32>>>,
+    /// Per-rule, per-definition marker for bodies introduced by `else`.
+    rule_definition_else_bodies: Vec<Vec<Vec<bool>>>,
+    /// Per-rule, per-definition: the static value produced by this definition,
+    /// or `None` if the value is dynamic or differs across else-branches.
+    /// Used to compute `RuleInfo::early_exit_on_first_success`.
+    rule_definition_static_values: Vec<Vec<Option<Value>>>,
     rule_types: Vec<RuleType>,
     rule_function_param_count: Vec<Option<usize>>,
     rule_result_registers: Vec<u8>,
     rule_num_registers: Vec<u8>,
     context_stack: Vec<CompilationContext>,
     loop_expr_register_map: BTreeMap<ExprRef, Register>,
-    source_to_index: BTreeMap<String, usize>,
+    source_to_index: BTreeMap<Source, usize>,
     builtin_index_map: BTreeMap<String, u16>,
     current_input_register: Option<Register>,
     current_data_register: Option<Register>,
@@ -138,6 +143,10 @@ pub struct Compiler<'a> {
     current_call_stack: Vec<u16>,
     entry_points: IndexMap<String, usize>,
     soft_assert_mode: bool,
+    /// Registered host-awaitable builtins: name → expected arg count.
+    /// When the compiler encounters a call to one of these names, it emits a
+    /// `HostAwait` instruction instead of a regular function or builtin call.
+    host_await_builtins: BTreeMap<String, usize>,
 }
 
 impl<'a> Compiler<'a> {
@@ -157,6 +166,8 @@ impl<'a> Compiler<'a> {
             rule_definitions: Vec::new(),
             rule_definition_function_params: Vec::new(),
             rule_definition_destructuring_patterns: Vec::new(),
+            rule_definition_else_bodies: Vec::new(),
+            rule_definition_static_values: Vec::new(),
             rule_types: Vec::new(),
             rule_function_param_count: Vec::new(),
             rule_result_registers: Vec::new(),
@@ -171,7 +182,80 @@ impl<'a> Compiler<'a> {
             current_call_stack: Vec::new(),
             entry_points: IndexMap::new(),
             soft_assert_mode: false,
+            host_await_builtins: BTreeMap::new(),
         }
+    }
+
+    /// Register a function name as a host-awaitable builtin.
+    ///
+    /// When the compiler encounters an **unqualified** call `name(arg)` from
+    /// inside the policy's own package (not `data.pkg.name(arg)` or any other
+    /// package-qualified form), it emits a `HostAwait` instruction carrying the
+    /// argument and `name` as the identifier, instead of treating it as a
+    /// user-defined or standard builtin function. Registering a bare name thus
+    /// adds a host function, and registering a builtin's name (e.g.
+    /// `time.parse_duration_ns`) overrides that standard builtin — both are
+    /// supported. A package-qualified call (e.g. `data.other.name(arg)`), by
+    /// contrast, always resolves to the user-defined rule/function at that path
+    /// — even when the bare name is registered — so it stays a reliable way to
+    /// bypass host interception. A `data.*`-qualified name is therefore rejected
+    /// at registration: it would intercept the qualified call too and silently
+    /// shadow that rule/function.
+    ///
+    /// The declared `arg_count` is checked against each call's input arity.
+    /// Registered calls pass an array containing those inputs to the host,
+    /// including a one-element array for a single input. The optional output
+    /// parameter supported by Rego is not included in `arg_count`. A call-site
+    /// arity mismatch is reported when the policy is compiled.
+    ///
+    /// Returns `Err` when:
+    /// - `name` is the reserved identifier `__builtin_host_await`,
+    /// - `name` is empty, only whitespace, or has leading/trailing
+    ///   whitespace (whitespace-padded names would never match the
+    ///   trimmed identifier produced by the Rego parser, creating dead
+    ///   registrations),
+    /// - `name` is package-qualified (starts with `data.`) — a `data.*` name
+    ///   would intercept the package-qualified call and silently shadow the
+    ///   user-defined rule/function at that path,
+    /// - `name` is already registered (duplicate registration is rejected
+    ///   rather than silently overwritten).
+    pub fn register_host_await_builtin(&mut self, name: &str, arg_count: usize) -> Result<()> {
+        if name == "__builtin_host_await" {
+            return Err(CompilerError::General {
+                message: "__builtin_host_await is a reserved name and cannot be registered as a host-await builtin"
+                    .to_string(),
+            }
+            .into());
+        }
+        if name.is_empty() || name != name.trim() {
+            return Err(CompilerError::General {
+                message: format!(
+                    "host-await builtin name {name:?} must not be empty or contain leading/trailing whitespace"
+                ),
+            }
+            .into());
+        }
+        if name.starts_with("data.") {
+            return Err(CompilerError::General {
+                message: format!(
+                    "host-await builtin name {name:?} must not be package-qualified \
+                     (start with 'data.'); it would silently shadow the user-defined \
+                     rule/function at that path"
+                ),
+            }
+            .into());
+        }
+        if self.host_await_builtins.contains_key(name) {
+            return Err(CompilerError::General {
+                message: format!(
+                    "host-await builtin '{name}' is already registered; \
+                     duplicate registration is not allowed"
+                ),
+            }
+            .into());
+        }
+        self.host_await_builtins.insert(name.to_string(), arg_count);
+        Ok(())
     }
 
     pub(super) fn with_soft_assert_mode<F, R>(&mut self, enabled: bool, f: F) -> R

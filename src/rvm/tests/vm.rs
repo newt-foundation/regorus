@@ -18,14 +18,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        rvm::tests::{
-            instruction_parser::{parse_instruction, parse_loop_mode},
-            test_utils::test_round_trip_serialization,
-        },
-        utils::limits::ExecutionTimerConfig,
-    };
-    use core::{num::NonZeroU32, time::Duration};
+    use crate::rvm::tests::instruction_parser::{parse_instruction, parse_loop_mode};
+    use crate::rvm::tests::test_utils::test_round_trip_serialization;
+    use crate::utils::limits::ExecutionTimerConfig;
+    use core::num::NonZeroU32;
+    use core::time::Duration;
     #[derive(Debug, Clone, Deserialize, Serialize, Default)]
     struct RuleInfoSpec {
         rule_type: String,
@@ -44,17 +41,13 @@ mod tests {
         default_value: crate::Value,
     }
 
-    use crate::{
-        rvm::vm::{ExecutionMode, ExecutionState, RegoVM, SuspendReason, VmError},
-        test_utils::process_value,
-        value::Value,
-    };
-    use alloc::{
-        collections::{BTreeMap, VecDeque},
-        string::{String, ToString},
-        sync::Arc,
-        vec::Vec,
-    };
+    use crate::rvm::vm::{ExecutionMode, ExecutionState, RegoVM, SuspendReason, VmError};
+    use crate::test_utils::process_value;
+    use crate::value::Value;
+    use alloc::collections::{BTreeMap, VecDeque};
+    use alloc::string::{String, ToString};
+    use alloc::sync::Arc;
+    use alloc::vec::Vec;
     use anyhow::Result;
     use serde::{Deserialize, Serialize};
     use std::fs;
@@ -90,6 +83,12 @@ mod tests {
         data: Option<crate::Value>,
         #[serde(default)]
         input: Option<crate::Value>,
+        #[serde(default)]
+        context: Option<crate::Value>,
+        #[serde(default)]
+        metadata_language: Option<String>,
+        #[serde(default)]
+        metadata_annotations: Option<BTreeMap<String, crate::Value>>,
         literals: Vec<crate::Value>,
         #[serde(default)]
         rule_infos: Vec<RuleInfoSpec>,
@@ -273,6 +272,9 @@ mod tests {
         instruction_params: Option<InstructionParamsSpec>,
         data: Option<Value>,
         input: Option<Value>,
+        context: Option<Value>,
+        metadata_language: Option<String>,
+        metadata_annotations: Option<BTreeMap<String, Value>>,
         max_instructions: Option<usize>,
         host_await_responses: Option<Vec<HostAwaitResponseSpec>>,
         host_await_responses_run_to_completion: Option<Vec<HostAwaitResponseSpec>>,
@@ -288,6 +290,12 @@ mod tests {
 
         let processed_input = if let Some(ref input_value) = input {
             Some(process_value(input_value)?)
+        } else {
+            None
+        };
+
+        let processed_context = if let Some(ref context_value) = context {
+            Some(process_value(context_value)?)
         } else {
             None
         };
@@ -421,6 +429,11 @@ mod tests {
                 result_reg,
                 num_registers: 50, // Increased to accommodate test cases with higher register indices
                 destructuring_blocks,
+                else_bodies: definitions
+                    .iter()
+                    .map(|b| alloc::vec![false; b.len()])
+                    .collect(),
+                early_exit_on_first_success: false,
             };
 
             program.rule_infos.push(rule_info);
@@ -637,6 +650,21 @@ mod tests {
         program.max_rule_window_size = 255;
         program.dispatch_window_size = 50;
 
+        // Recompute derived flags since instructions were assigned directly
+        // (bypassing add_instruction which normally tracks has_host_await)
+        program.recompute_host_await_presence();
+
+        // Set metadata if provided
+        if let Some(lang) = metadata_language {
+            program.metadata.language = lang;
+        }
+        if let Some(annotations) = metadata_annotations {
+            program.metadata.annotations = annotations
+                .into_iter()
+                .map(|(key, value)| process_value(&value).map(|processed| (key, processed)))
+                .collect::<anyhow::Result<_>>()?;
+        }
+
         // Initialize resolved builtins if we have builtin info
         if !program.builtin_info_table.is_empty() {
             if let Err(e) = program.initialize_resolved_builtins() {
@@ -668,6 +696,10 @@ mod tests {
             }
             if let Some(input_value) = processed_input.clone() {
                 vm.set_input(input_value);
+            }
+
+            if let Some(context_value) = processed_context.clone() {
+                vm.set_context(context_value);
             }
 
             if let Some(limit) = max_instructions {
@@ -877,7 +909,7 @@ mod tests {
     fn run_vm_test_suite(file: &str) -> Result<()> {
         std::println!("Running VM test suite: {}", file);
         let yaml_content = fs::read_to_string(file)?;
-        let test_suite: VmTestSuite = serde_yaml::from_str(&yaml_content)?;
+        let test_suite: VmTestSuite = yaml_serde::from_str(&yaml_content)?;
 
         for test_case in test_suite.cases {
             std::println!("Running VM test case: {}", test_case.note);
@@ -937,6 +969,9 @@ mod tests {
                     test_case.instruction_params.clone(),
                     test_case.data.clone(),
                     test_case.input.clone(),
+                    test_case.context.clone(),
+                    test_case.metadata_language.clone(),
+                    test_case.metadata_annotations.clone(),
                     test_case.max_instructions,
                     test_case.host_await_responses.clone(),
                     test_case.host_await_responses_run_to_completion.clone(),
@@ -1026,6 +1061,12 @@ mod tests {
 
     #[test_resources("tests/rvm/vm/suites/loops/*.yaml")]
     fn run_loop_test_file(file: &str) {
+        run_vm_test_suite(file).unwrap()
+    }
+
+    #[cfg(feature = "azure_policy")]
+    #[test_resources("tests/rvm/vm/suites/azure_policy/*.yaml")]
+    fn run_azure_policy_test_file(file: &str) {
         run_vm_test_suite(file).unwrap()
     }
 }

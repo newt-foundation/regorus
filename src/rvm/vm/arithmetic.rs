@@ -1,21 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#![allow(clippy::pattern_type_mismatch)]
 
-use alloc::collections::BTreeSet;
+// `pattern_type_mismatch` requires explicit `&`+`ref` patterns for tuple matches
+// on (&Value, &Value), which conflicts with `needless_borrowed_reference`.
+// Disable both to keep patterns consistent within this file.
+#![allow(clippy::pattern_type_mismatch, clippy::needless_borrowed_reference)]
 
-use crate::{number::Number, value::Value};
+use crate::number::Number;
+use crate::value::Value;
 
-use super::{
-    errors::{Result, VmError},
-    machine::RegoVM,
-};
+use super::errors::{Result, VmError};
+use super::machine::RegoVM;
 
 impl RegoVM {
     /// Add two values using interpreter's arithmetic logic
     pub(super) fn add_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.add(y)?)),
+            (&Value::Number(ref x), &Value::Number(ref y)) => Ok(Value::from(x.add(y)?)),
             _ => Err(VmError::InvalidAddition {
                 left: a.clone(),
                 right: b.clone(),
@@ -27,10 +28,9 @@ impl RegoVM {
     /// Subtract two values using interpreter's arithmetic logic
     pub(super) fn sub_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.sub(y)?)),
-            (Value::Set(left), Value::Set(right)) => {
-                let diff: BTreeSet<Value> = left.difference(right).cloned().collect();
-                Ok(Value::from_set(diff))
+            (&Value::Number(ref x), &Value::Number(ref y)) => Ok(Value::from(x.sub(y)?)),
+            (&Value::Set(ref left), &Value::Set(ref right)) => {
+                Ok(Value::from(left.difference(right)))
             }
             _ => Err(VmError::InvalidSubtraction {
                 left: a.clone(),
@@ -43,7 +43,7 @@ impl RegoVM {
     /// Multiply two values using interpreter's arithmetic logic
     pub(super) fn mul_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => Ok(Value::from(x.mul(y)?)),
+            (&Value::Number(ref x), &Value::Number(ref y)) => Ok(Value::from(x.mul(y)?)),
             _ => Err(VmError::InvalidMultiplication {
                 left: a.clone(),
                 right: b.clone(),
@@ -55,7 +55,7 @@ impl RegoVM {
     /// Divide two values using interpreter's arithmetic logic
     pub(super) fn div_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
+            (&Value::Number(ref x), &Value::Number(ref y)) => {
                 if *y == Number::from(0_u64) {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidDivision {
@@ -80,7 +80,7 @@ impl RegoVM {
     /// Modulo two values using interpreter's arithmetic logic
     pub(super) fn mod_values(&self, a: &Value, b: &Value) -> Result<Value> {
         match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
+            (&Value::Number(ref x), &Value::Number(ref y)) => {
                 if *y == Number::from(0_u64) {
                     if self.strict_builtin_errors {
                         return Err(VmError::InvalidModulo {
@@ -111,8 +111,8 @@ impl RegoVM {
     }
 
     pub(super) const fn to_bool(&self, value: &Value) -> Option<bool> {
-        match value {
-            Value::Bool(b) => Some(*b),
+        match *value {
+            Value::Bool(b) => Some(b),
             Value::Null if !self.strict_builtin_errors => Some(true),
             _ => None,
         }

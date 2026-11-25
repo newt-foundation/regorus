@@ -2,14 +2,13 @@
 // Licensed under the MIT License.
 
 #![allow(clippy::pattern_type_mismatch)]
-use crate::{
-    ast::{Expr, Ref},
-    lexer::Span,
-    number::Number,
-    Rc, Value, *,
-};
-
-use alloc::collections::{BTreeMap, BTreeSet};
+use crate::ast::{Expr, Ref};
+use crate::lexer::Span;
+use crate::number::Number;
+use crate::value::{Array, Object, Set};
+use crate::Rc;
+use crate::Value;
+use crate::*;
 
 use anyhow::{bail, Result};
 
@@ -44,9 +43,13 @@ pub fn ensure_numeric(fcn: &str, arg: &Expr, v: &Value) -> Result<Number> {
         Value::Number(n) => n.clone(),
         _ => {
             let span = arg.span();
-            bail!(
-                span.error(format!("`{fcn}` expects numeric argument. Got `{v}` instead").as_str())
-            )
+            bail!(span.error(
+                format!(
+                    "`{fcn}` expects numeric argument. Got `{}` instead",
+                    v.diagnostic()
+                )
+                .as_str()
+            ))
         }
     })
 }
@@ -62,7 +65,11 @@ pub fn validate_integer_arg(
     if !numeric_value.is_integer() {
         if strict {
             bail!(param.span().error(
-                format!("`{fcn}` expects integer arguments. Got `{original_value}`").as_str()
+                format!(
+                    "`{fcn}` expects integer arguments. Got `{}`",
+                    original_value.diagnostic()
+                )
+                .as_str()
             ));
         }
         return Ok(false);
@@ -73,7 +80,11 @@ pub fn validate_integer_arg(
             if int_value < 0 {
                 if strict {
                     bail!(param.span().error(
-                        format!("`{fcn}` expects non-negative integer arguments. Got `{original_value}`").as_str(),
+                        format!(
+                            "`{fcn}` expects non-negative integer arguments. Got `{}`",
+                            original_value.diagnostic()
+                        )
+                        .as_str(),
                     ));
                 }
                 return Ok(false);
@@ -82,7 +93,8 @@ pub fn validate_integer_arg(
             if strict {
                 bail!(param.span().error(
                     format!(
-                        "`{fcn}` expects non-negative integer arguments. Got `{original_value}`"
+                        "`{fcn}` expects non-negative integer arguments. Got `{}`",
+                        original_value.diagnostic()
                     )
                     .as_str(),
                 ));
@@ -99,7 +111,13 @@ pub fn ensure_string(fcn: &str, arg: &Expr, v: &Value) -> Result<Rc<str>> {
         Value::String(s) => s.clone(),
         _ => {
             let span = arg.span();
-            bail!(span.error(format!("`{fcn}` expects string argument. Got `{v}` instead").as_str()))
+            bail!(span.error(
+                format!(
+                    "`{fcn}` expects string argument. Got `{}` instead",
+                    v.diagnostic()
+                )
+                .as_str()
+            ))
         }
     })
 }
@@ -147,32 +165,50 @@ pub fn ensure_string_collection<'a>(fcn: &str, arg: &Expr, v: &'a Value) -> Resu
     Ok(collection)
 }
 
-pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Vec<Value>>> {
+pub fn ensure_array(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Array>> {
     Ok(match v {
         Value::Array(a) => a,
         _ => {
             let span = arg.span();
-            bail!(span.error(format!("`{fcn}` expects array argument. Got `{v}` instead").as_str()))
+            bail!(span.error(
+                format!(
+                    "`{fcn}` expects array argument. Got `{}` instead",
+                    v.diagnostic()
+                )
+                .as_str()
+            ))
         }
     })
 }
 
-pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeSet<Value>>> {
+pub fn ensure_set(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Set>> {
     Ok(match v {
         Value::Set(s) => s,
         _ => {
             let span = arg.span();
-            bail!(span.error(format!("`{fcn}` expects set argument. Got `{v}` instead").as_str()))
+            bail!(span.error(
+                format!(
+                    "`{fcn}` expects set argument. Got `{}` instead",
+                    v.diagnostic()
+                )
+                .as_str()
+            ))
         }
     })
 }
 
-pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<BTreeMap<Value, Value>>> {
+pub fn ensure_object(fcn: &str, arg: &Expr, v: Value) -> Result<Rc<Object>> {
     Ok(match v {
         Value::Object(o) => o,
         _ => {
             let span = arg.span();
-            bail!(span.error(format!("`{fcn}` expects object argument. Got `{v}` instead").as_str()))
+            bail!(span.error(
+                format!(
+                    "`{fcn}` expects object argument. Got `{}` instead",
+                    v.diagnostic()
+                )
+                .as_str()
+            ))
         }
     })
 }

@@ -1,0 +1,1944 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+#![allow(clippy::pattern_type_mismatch)]
+
+//! `count` / `count.where` compilation and count-binding resolution.
+
+use alloc::format;
+use alloc::string::{String, ToString as _};
+
+use anyhow::{anyhow, bail, Result};
+
+use crate::languages::azure_policy::ast::{
+    Condition, Constraint, CountNode, FieldKind, JsonValue, OperatorKind, ValueOrExpr,
+};
+use crate::rvm::instructions::{GuardMode, LoopMode, LoopStartParams, PolicyOp};
+use crate::rvm::Instruction;
+use crate::Value;
+
+use super::binding_path::{
+    is_malformed_below, join_count_prefix, match_count_prefix, split_bound_path, CountPrefixMatch,
+};
+use super::core::{Compiler, CountBinding};
+use super::utils::{
+    ensure_count_field_path, has_unquoted_wildcard, split_count_wildcard_path,
+    split_path_without_wildcards,
+};
+
+/// A field path that continues below the current element of a count binding;
+/// see [`Compiler::resolve_path_below_bound_element`].
+pub(super) struct PathBelowBoundElement {
+    pub(super) binding: CountBinding,
+    /// The binding's wildcard prefix (as spelled when the binding was made).
+    pub(super) outer_prefix: String,
+    /// The lowercased path below the bound element (e.g. `subs[*]`,
+    /// `['subs'][*]`, `['state']`).
+    pub(super) rest: String,
+    /// Whether `rest` contains an unquoted `[*]`.
+    pub(super) rest_has_wildcard: bool,
+}
+
+impl Compiler {
+    pub(super) fn compile_count(&mut self, count_node: &CountNode) -> Result<u8> {
+        self.observed_uses_count = true;
+        match count_node {
+            CountNode::Value {
+                span,
+                value,
+                name,
+                where_,
+            } => {
+                let collection_reg = self.compile_value_or_expr(value, span)?;
+                self.compile_count_loop(
+                    collection_reg,
+                    name.as_ref().map(|n| n.name.clone()),
+                    None,
+                    where_.as_deref(),
+                    span,
+                )
+            }
+            CountNode::Field {
+                span,
+                field,
+                where_,
+            } => {
+                let field_path = self.extract_field_count_path(field, span)?;
+                let (_prefix, suffix) = split_count_wildcard_path(&field_path)
+                    .map_err(|e| span.error(&e.to_string()))?;
+
+                // Multi-level wildcard (e.g. `A[*].B[*]`) → emit nested loops.
+                // If an outer count binding covers part of the path, start
+                // from the bound element instead of the resource root.
+                if suffix.as_deref().is_some_and(has_unquoted_wildcard) {
+                    if let Some(nested) = self.resolve_path_below_bound_element(&field_path)? {
+                        return self.compile_count_nested(
+                            Some(nested.binding.current_reg),
+                            &nested.rest,
+                            where_.as_deref(),
+                            &nested.outer_prefix,
+                            span,
+                        );
+                    }
+                    self.ensure_not_malformed_below_binding(&field_path, span)?;
+                    return self.compile_count_nested(
+                        None,
+                        &field_path,
+                        where_.as_deref(),
+                        "",
+                        span,
+                    );
+                }
+
+                // Single wildcard → existing path via resolve + single count loop.
+                let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
+                self.compile_count_loop(collection_reg, None, Some(prefix), where_.as_deref(), span)
+            }
+        }
+    }
+
+    /// Resolve the collection register and wildcard prefix for a
+    /// single-wildcard field-based count node.
+    fn resolve_count_field_collection(
+        &mut self,
+        field: &crate::languages::azure_policy::ast::FieldNode,
+        span: &crate::lexer::Span,
+    ) -> Result<(u8, String)> {
+        let field_path = self.extract_field_count_path(field, span)?;
+        let (collection_prefix, suffix) =
+            split_count_wildcard_path(&field_path).map_err(|e| span.error(&e.to_string()))?;
+
+        // Multi-level wildcard paths, including those that continue below an
+        // outer count binding's element, are handled by compile_count_nested
+        // in compile_count.  Only single-wildcard paths reach here.
+        if suffix.as_deref().is_some_and(has_unquoted_wildcard) {
+            bail!(span.error(&format!(
+                "multi-wildcard path should have been handled before resolve_count_field_collection: {}",
+                field_path
+            )));
+        }
+
+        let collection_reg = self.compile_resource_path_value(&collection_prefix, span)?;
+        Ok((collection_reg, collection_prefix))
+    }
+
+    /// Compile a multi-wildcard count path as nested loops.
+    ///
+    /// Each intermediate `[*]` level emits a `ForEach` loop that accumulates
+    /// the inner count.  The innermost `[*]` emits the real count loop with
+    /// the where clause and binding.
+    ///
+    /// * `base_reg` — `None` for resource root, `Some` when inside an outer loop.
+    /// * `remaining_path` — the portion of the field path still to process;
+    ///   must contain at least one `[*]`.
+    /// * `where_clause` — the optional where constraint (applied only at the
+    ///   innermost level).
+    /// * `accumulated_prefix` — the path prefix accumulated from outer levels,
+    ///   used to build binding prefixes.
+    fn compile_count_nested(
+        &mut self,
+        base_reg: Option<u8>,
+        remaining_path: &str,
+        where_clause: Option<&Constraint>,
+        accumulated_prefix: &str,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let (collection_part, suffix) =
+            split_count_wildcard_path(remaining_path).map_err(|e| span.error(&e.to_string()))?;
+        let has_more_wildcards = suffix.as_deref().is_some_and(has_unquoted_wildcard);
+
+        // Build the binding prefix for this level.
+        let binding_prefix = if accumulated_prefix.is_empty() {
+            collection_part.clone()
+        } else {
+            join_count_prefix(accumulated_prefix, &collection_part)
+        };
+
+        // Lowercase the collection path to match normalized resource keys.
+        let collection_lower = collection_part.to_ascii_lowercase();
+
+        // Navigate to the collection.  `split_count_wildcard_path` guarantees
+        // the collection segment before `[*]` is non-empty.
+        let collection_reg = match base_reg {
+            Some(base) => {
+                let parts = split_bound_path(&collection_lower)?;
+                self.emit_chained_index_segments(base, &parts, span)?
+            }
+            None => self.compile_resource_path_value(&collection_lower, span)?,
+        };
+
+        if !has_more_wildcards {
+            // Innermost wildcard → delegate to the regular count loop.
+            // Optimization: if no where clause, just emit Count instruction.
+            // Note: Count returns Undefined for non-iterable collections,
+            // which differs from LoopMode::Any (treats them as empty).  The
+            // existence-pattern optimizer (`try_compile_count_as_any`) skips
+            // nested-wildcard no-where counts so this path is always taken
+            // for that case, preserving Undefined-propagation semantics.
+            if where_clause.is_none() {
+                let dest = self.alloc_register()?;
+                self.emit(
+                    Instruction::Count {
+                        dest,
+                        collection: collection_reg,
+                    },
+                    span,
+                );
+                return Ok(dest);
+            }
+            return self.compile_count_loop(
+                collection_reg,
+                None,
+                Some(binding_prefix),
+                where_clause,
+                span,
+            );
+        }
+
+        // Intermediate wildcard → ForEach loop that accumulates inner counts.
+        let count_reg = self.load_literal(Value::from(0_i64), span)?;
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let loop_result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::ForEach,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg: loop_result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        // Push binding for this level so inner where-clause field references
+        // can resolve through this wildcard level.
+        self.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some(binding_prefix.clone()),
+            current_reg,
+            resource_override_reg: self.resource_override_reg,
+        });
+
+        // Recurse for the inner level(s).
+        let suffix_ref = suffix
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("suffix should be Some for nested count"))?;
+        let inner_count = self.compile_count_nested(
+            Some(current_reg),
+            suffix_ref,
+            where_clause,
+            &binding_prefix,
+            span,
+        )?;
+
+        // Accumulate inner count into outer count.
+        self.emit(
+            Instruction::Add {
+                dest: count_reg,
+                left: count_reg,
+                right: inner_count,
+            },
+            span,
+        );
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        Ok(count_reg)
+    }
+
+    /// Compile a multi-wildcard count path as nested `Any` loops for the
+    /// `count > 0` / `count == 0` existence-pattern optimization.
+    ///
+    /// Each intermediate `[*]` level emits an `Any` loop whose body is the
+    /// next level.  The innermost `[*]` emits `compile_count_any_loop` with
+    /// the where clause.  If `exists` is false the result is negated.
+    ///
+    /// **Important:** This must only be called when `where_clause` is `Some`.
+    /// Without a where clause the non-optimized path (`compile_count_nested`)
+    /// uses `Instruction::Count` at the innermost level.  That instruction
+    /// returns `Undefined` for missing/non-iterable collections, whereas the
+    /// `Any` loop treats them as empty (false).  The difference changes the
+    /// semantics of `count == 0` from false (via Undefined propagation) to
+    /// true (via `Not(false)`).  The caller (`try_compile_count_as_any`)
+    /// returns `None` for no-where nested counts so the generic count+compare
+    /// path is used instead.
+    fn compile_count_nested_any(
+        &mut self,
+        base_reg: Option<u8>,
+        remaining_path: &str,
+        where_clause: &Constraint,
+        accumulated_prefix: &str,
+        exists: bool,
+        span: &crate::lexer::Span,
+    ) -> Result<Option<u8>> {
+        let (collection_part, suffix) =
+            split_count_wildcard_path(remaining_path).map_err(|e| span.error(&e.to_string()))?;
+        let has_more_wildcards = suffix.as_deref().is_some_and(has_unquoted_wildcard);
+
+        let binding_prefix = if accumulated_prefix.is_empty() {
+            collection_part.clone()
+        } else {
+            join_count_prefix(accumulated_prefix, &collection_part)
+        };
+
+        // Lowercase the collection path to match normalized resource keys.
+        let collection_lower = collection_part.to_ascii_lowercase();
+
+        // Navigate to the collection.  `split_count_wildcard_path` guarantees
+        // the collection segment before `[*]` is non-empty.
+        let collection_reg = match base_reg {
+            Some(base) => {
+                let parts = split_bound_path(&collection_lower)?;
+                self.emit_chained_index_segments(base, &parts, span)?
+            }
+            None => self.compile_resource_path_value(&collection_lower, span)?,
+        };
+
+        if !has_more_wildcards {
+            // Innermost wildcard → regular Any loop.
+            let any_result = self.compile_count_any_loop(
+                collection_reg,
+                None,
+                Some(binding_prefix),
+                Some(where_clause),
+                span,
+            )?;
+            return if exists {
+                Ok(Some(any_result))
+            } else {
+                let dest = self.alloc_register()?;
+                self.emit(
+                    Instruction::PolicyCondition {
+                        dest,
+                        left: any_result,
+                        right: 0,
+                        op: PolicyOp::Not,
+                    },
+                    span,
+                );
+                Ok(Some(dest))
+            };
+        }
+
+        // Intermediate wildcard → Any loop wrapping inner nested Any.
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::Any,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        // Push binding for this level.
+        self.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some(binding_prefix.clone()),
+            current_reg,
+            resource_override_reg: self.resource_override_reg,
+        });
+
+        // Recurse — the inner call returns Some(result_reg) with the final
+        // negation already applied at the innermost level.  For the outer
+        // Any loop, we need "any inner satisfies" so we pass `exists = true`
+        // here and handle the overall negation at the end.
+        let suffix_ref = suffix
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("suffix should be Some for nested any"))?;
+        let inner = self
+            .compile_count_nested_any(
+                Some(current_reg),
+                suffix_ref,
+                where_clause,
+                &binding_prefix,
+                /* exists */ true,
+                span,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("nested any should always return Some"))?;
+
+        // The outer Any body succeeds when the inner Any returned true.
+        self.emit(
+            Instruction::Guard {
+                register: inner,
+                mode: GuardMode::Condition,
+            },
+            span,
+        );
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        // If !exists (count == 0), negate the Any result.
+        if exists {
+            Ok(Some(result_reg))
+        } else {
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyCondition {
+                    dest,
+                    left: result_reg,
+                    right: 0,
+                    op: PolicyOp::Not,
+                },
+                span,
+            );
+            Ok(Some(dest))
+        }
+    }
+
+    /// Map a [`FieldNode`] to the dotted property path used for count
+    /// resolution.  Built-in field kinds (`type`, `id`, …) are returned
+    /// as-is; aliases go through [`resolve_alias_path`] which normalises
+    /// and lowercases when the alias catalog is loaded.
+    ///
+    /// The path must end with an unquoted `[*]`, optionally followed by
+    /// whitespace (see [`ensure_count_field_path`]).  So any suffix that
+    /// [`split_count_wildcard_path`] returns for it is either whitespace-only
+    /// (`items[*] `) or contains another unquoted `[*]`.
+    fn extract_field_count_path(
+        &self,
+        field: &crate::languages::azure_policy::ast::FieldNode,
+        span: &crate::lexer::Span,
+    ) -> Result<String> {
+        let path = self.field_count_path(field, span)?;
+        ensure_count_field_path(&path).map_err(|e| span.error(&e.to_string()))?;
+        Ok(path)
+    }
+
+    fn field_count_path(
+        &self,
+        field: &crate::languages::azure_policy::ast::FieldNode,
+        span: &crate::lexer::Span,
+    ) -> Result<String> {
+        match &field.kind {
+            FieldKind::Type => Ok("type".to_string()),
+            FieldKind::Id => Ok("id".to_string()),
+            FieldKind::Kind => Ok("kind".to_string()),
+            FieldKind::Name => Ok("name".to_string()),
+            FieldKind::Location => Ok("location".to_string()),
+            FieldKind::FullName => Ok("fullName".to_string()),
+            FieldKind::IdentityType => Ok("identity.type".to_string()),
+            FieldKind::IdentityField(subpath) => {
+                Ok(format!("identity.{}", subpath.to_ascii_lowercase()))
+            }
+            FieldKind::ApiVersion => Ok("apiVersion".to_string()),
+            FieldKind::Tags => Ok("tags".to_string()),
+            // A tag value is a string, never an array.  `tags.{tag}` would
+            // also turn a tag named `a[*]` into a real wildcard.
+            FieldKind::Tag(tag) => bail!(span.error(&format!(
+                "count over a tag field is not supported (tag values are not arrays): tags['{}']",
+                tag
+            ))),
+            FieldKind::Alias(path) => self.resolve_alias_path(path, span),
+            FieldKind::Expr(_) => {
+                bail!(span.error("count over expression field is not supported in core subset",))
+            }
+        }
+    }
+
+    /// Emit a single-level `ForEach` count loop.
+    ///
+    /// Iterates `collection_reg`, pushes a [`CountBinding`] for the duration
+    /// of the loop body (so nested `current()` / field references resolve),
+    /// optionally guards with the where clause, and increments a counter
+    /// register on each passing iteration.
+    ///
+    /// Returns the register holding the final count.
+    fn compile_count_loop(
+        &mut self,
+        collection_reg: u8,
+        binding_name: Option<String>,
+        field_wildcard_prefix: Option<String>,
+        where_constraint: Option<&Constraint>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let count_reg = self.load_literal(Value::from(0_i64), span)?;
+        // Hoist the increment constant above the loop.
+        let one_reg = self.load_literal(Value::from(1_i64), span)?;
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let loop_result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::ForEach,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg: loop_result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start_u16 = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.count_bindings.push(CountBinding {
+            name: binding_name,
+            field_wildcard_prefix,
+            current_reg,
+            resource_override_reg: self.resource_override_reg,
+        });
+
+        // Compile where clause body (if present) as a conditional increment.
+        if let Some(where_clause) = where_constraint {
+            let where_reg = self.compile_constraint(where_clause)?;
+            self.emit(
+                Instruction::Guard {
+                    register: where_reg,
+                    mode: GuardMode::Condition,
+                },
+                span,
+            );
+        }
+
+        self.emit(
+            Instruction::Add {
+                dest: count_reg,
+                left: count_reg,
+                right: one_reg,
+            },
+            span,
+        );
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start: body_start_u16,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end_u16 = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start_u16;
+            params.loop_end = loop_end_u16;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end, .. }) = self.program.instructions.last_mut() {
+            *loop_end = loop_end_u16;
+        }
+
+        Ok(count_reg)
+    }
+
+    // -- count existence optimization (Any mode) ---------------------------
+
+    /// Try to compile a count condition as a `LoopMode::Any` loop when the
+    /// operator + RHS form an existence check (e.g., `count > 0`).
+    ///
+    /// Returns `Some(result_reg)` if optimized, `None` to fall back to the
+    /// generic count + compare path.
+    pub(super) fn try_compile_count_as_any(
+        &mut self,
+        count_node: &CountNode,
+        condition: &Condition,
+    ) -> Result<Option<u8>> {
+        // Determine whether the operator+RHS is an existence pattern.
+        let exists = match Self::classify_existence_pattern(condition) {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        // Keep the where clause optional so plain `count(field: 'a[*]') > 0`
+        // can also use the early-exit Any lowering.
+        let where_constraint = match count_node {
+            CountNode::Field { where_, .. } | CountNode::Value { where_, .. } => where_.as_deref(),
+        };
+
+        self.observed_uses_count = true;
+
+        // Resolve collection and compile as Any loop.
+        let any_result = match count_node {
+            CountNode::Value {
+                span, value, name, ..
+            } => {
+                let collection_reg = self.compile_value_or_expr(value, span)?;
+                self.compile_count_any_loop(
+                    collection_reg,
+                    name.as_ref().map(|n| n.name.clone()),
+                    None,
+                    where_constraint,
+                    span,
+                )?
+            }
+            CountNode::Field { span, field, .. } => {
+                // Multi-wildcard field paths use nested Any loops.
+                // Resolve outer bindings so we start from the bound element.
+                let field_path = self.extract_field_count_path(field, span)?;
+                let (_, suffix) = split_count_wildcard_path(&field_path)
+                    .map_err(|e| span.error(&e.to_string()))?;
+                if suffix.as_deref().is_some_and(has_unquoted_wildcard) {
+                    // Skip the nested Any optimization when there is no where
+                    // clause.  The non-optimized path in `compile_count_nested`
+                    // uses `Instruction::Count` for the innermost level, which
+                    // returns `Undefined` when the collection is missing or
+                    // non-iterable.  The Any-based lowering instead treats a
+                    // missing collection as empty (Any → false), so
+                    // `Not(false)` → true, changing `count == 0` from false to
+                    // true.  Falling back to the generic count+compare path
+                    // preserves the Undefined-propagation semantics.
+                    let Some(wc) = where_constraint else {
+                        return Ok(None);
+                    };
+
+                    if let Some(nested) = self.resolve_path_below_bound_element(&field_path)? {
+                        return self.compile_count_nested_any(
+                            Some(nested.binding.current_reg),
+                            &nested.rest,
+                            wc,
+                            &nested.outer_prefix,
+                            exists,
+                            span,
+                        );
+                    }
+                    self.ensure_not_malformed_below_binding(&field_path, span)?;
+                    return self.compile_count_nested_any(None, &field_path, wc, "", exists, span);
+                }
+
+                let (collection_reg, prefix) = self.resolve_count_field_collection(field, span)?;
+                self.compile_count_any_loop(
+                    collection_reg,
+                    None,
+                    Some(prefix),
+                    where_constraint,
+                    span,
+                )?
+            }
+        };
+
+        if exists {
+            Ok(Some(any_result))
+        } else {
+            let dest = self.alloc_register()?;
+            self.emit(
+                Instruction::PolicyCondition {
+                    dest,
+                    left: any_result,
+                    right: 0,
+                    op: PolicyOp::Not,
+                },
+                &condition.span,
+            );
+            Ok(Some(dest))
+        }
+    }
+
+    /// Check whether a count condition's operator + RHS form an existence
+    /// pattern.  Returns `Some(true)` for "at least one" semantics,
+    /// `Some(false)` for "none" semantics, or `None` if not applicable.
+    fn classify_existence_pattern(condition: &Condition) -> Option<bool> {
+        let n = match &condition.rhs {
+            ValueOrExpr::Value(JsonValue::Number(_, s)) => s.parse::<i64>().ok()?,
+            _ => return None,
+        };
+        match (&condition.operator.kind, n) {
+            (OperatorKind::Greater, 0)
+            | (OperatorKind::GreaterOrEquals, 1)
+            | (OperatorKind::NotEquals, 0) => Some(true),
+            (OperatorKind::Equals, 0)
+            | (OperatorKind::Less, 1)
+            | (OperatorKind::LessOrEquals, 0) => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Compile a count's where clause as a `LoopMode::Any` loop.
+    ///
+    /// The result register is `true` if any element satisfies the where
+    /// constraint (or simply exists when `where_constraint` is `None`),
+    /// `false` otherwise.  The loop exits on the first match.
+    fn compile_count_any_loop(
+        &mut self,
+        collection_reg: u8,
+        binding_name: Option<String>,
+        field_wildcard_prefix: Option<String>,
+        where_constraint: Option<&Constraint>,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let key_reg = self.alloc_register()?;
+        let current_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
+
+        let params_index = self.program.add_loop_params(LoopStartParams {
+            mode: LoopMode::Any,
+            collection: collection_reg,
+            key_reg,
+            value_reg: current_reg,
+            result_reg,
+            body_start: 0,
+            loop_end: 0,
+        });
+
+        self.emit(Instruction::LoopStart { params_index }, span);
+
+        let body_start = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.count_bindings.push(CountBinding {
+            name: binding_name,
+            field_wildcard_prefix,
+            current_reg,
+            resource_override_reg: self.resource_override_reg,
+        });
+
+        if let Some(wc) = where_constraint {
+            let where_reg = self.compile_constraint(wc)?;
+            self.emit(
+                Instruction::Guard {
+                    register: where_reg,
+                    mode: GuardMode::Condition,
+                },
+                span,
+            );
+        }
+
+        self.count_bindings.pop();
+
+        self.emit(
+            Instruction::LoopNext {
+                body_start,
+                loop_end: 0,
+            },
+            span,
+        );
+
+        let loop_end = u16::try_from(self.program.instructions.len())
+            .map_err(|_| anyhow!("instruction index overflow"))?;
+
+        self.program.update_loop_params(params_index, |params| {
+            params.body_start = body_start;
+            params.loop_end = loop_end;
+        });
+
+        if let Some(Instruction::LoopNext { loop_end: le, .. }) =
+            self.program.instructions.last_mut()
+        {
+            *le = loop_end;
+        }
+
+        Ok(result_reg)
+    }
+
+    /// Resolve `field_path` against the innermost covering count binding and,
+    /// when it continues below that binding's current element through the
+    /// counted wildcard (`prefix[*]<rest>`, e.g. `prefix[*].subs[*]` or
+    /// `prefix[*]['subs'][*]`), return the binding together with `rest`
+    /// (lowercased) relative to the bound element.
+    ///
+    /// Shared by nested counts and inner-wildcard field conditions so every
+    /// site agrees with [`Self::resolve_count_binding`] on what is bound.
+    pub(super) fn resolve_path_below_bound_element(
+        &self,
+        field_path: &str,
+    ) -> Result<Option<PathBelowBoundElement>> {
+        let Some(binding) = self.resolve_count_binding(field_path)? else {
+            return Ok(None);
+        };
+        let Some(outer_prefix) = binding.field_wildcard_prefix.clone() else {
+            return Ok(None);
+        };
+        let lc_path = field_path.to_ascii_lowercase();
+        match match_count_prefix(&outer_prefix, &lc_path) {
+            Some(CountPrefixMatch::BelowElement {
+                rest,
+                rest_has_wildcard,
+                via_wildcard: true,
+            }) => Ok(Some(PathBelowBoundElement {
+                rest: rest.to_string(),
+                rest_has_wildcard,
+                outer_prefix,
+                binding,
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    /// Reject a field path that is spelled under an active count binding's
+    /// prefix but cannot be parsed (see [`is_malformed_below`]), so it is
+    /// not silently read from the resource root instead.  Call this wherever
+    /// an unbound wildcard path falls back to the root.
+    pub(super) fn ensure_not_malformed_below_binding(
+        &self,
+        field_path: &str,
+        span: &crate::lexer::Span,
+    ) -> Result<()> {
+        for binding in self.count_bindings.iter().rev() {
+            if binding.resource_override_reg != self.resource_override_reg {
+                continue;
+            }
+            let Some(prefix) = &binding.field_wildcard_prefix else {
+                continue;
+            };
+            if is_malformed_below(prefix, field_path) {
+                bail!(span.error(&format!(
+                    "invalid field path below count binding '{}': {}",
+                    prefix, field_path
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Find the innermost active field-count binding for the current resource
+    /// that covers `field_path`.
+    ///
+    /// A binding matches (case-insensitively) when `field_path` selects from
+    /// its current element per [`match_count_prefix`]: `prefix`, `prefix[*]`,
+    /// `prefix[*]` followed by a key or index (`.state`, `['state']`, `[0]`,
+    /// …), or the legacy `prefix.key` form. Paths are compared as parsed
+    /// segments, so dotted and quoted-bracket spellings match. A value
+    /// count's `name` never matches: it is reachable only through
+    /// `current()`, while field paths always read the resource.
+    ///
+    /// Bindings are searched innermost-first (reverse stack order) so a
+    /// nested count's binding shadows an outer one for the same prefix.
+    pub(super) fn resolve_count_binding(&self, field_path: &str) -> Result<Option<CountBinding>> {
+        for binding in self.count_bindings.iter().rev() {
+            if binding.resource_override_reg != self.resource_override_reg {
+                continue;
+            }
+            if let Some(prefix) = &binding.field_wildcard_prefix {
+                if match_count_prefix(prefix, field_path).is_some() {
+                    return Ok(Some(binding.clone()));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Compile a field reference relative to an active field-count binding.
+    ///
+    /// If `field_path` matches the binding's prefix exactly,
+    /// emits a `Move` from the binding's current-element register.
+    /// If `field_path` extends past the binding (e.g. `prefix.sub.key`),
+    /// navigates the suffix via chained index lookups.  All comparisons
+    /// are case-insensitive.
+    pub(super) fn compile_from_binding(
+        &mut self,
+        binding: &CountBinding,
+        field_path: &str,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let fp = field_path.to_ascii_lowercase();
+
+        if let Some(prefix) = &binding.field_wildcard_prefix {
+            match match_count_prefix(prefix, &fp) {
+                Some(CountPrefixMatch::CurrentElement) => {
+                    let dest = self.alloc_register()?;
+                    self.emit(
+                        Instruction::Move {
+                            dest,
+                            src: binding.current_reg,
+                        },
+                        span,
+                    );
+                    return Ok(dest);
+                }
+                Some(CountPrefixMatch::BelowElement {
+                    rest,
+                    rest_has_wildcard,
+                    ..
+                }) => {
+                    return self.compile_suffix_from_binding(
+                        binding.current_reg,
+                        rest,
+                        rest_has_wildcard,
+                        span,
+                    );
+                }
+                None => {}
+            }
+        }
+
+        bail!(span.error(&format!(
+            "invalid current count binding for field path '{}'",
+            field_path
+        )))
+    }
+
+    /// Compile a suffix path from a binding's current register.
+    ///
+    /// If the suffix contains further `[*]` levels (`has_wildcard`, as
+    /// reported by [`match_count_prefix`]), the values they select under the
+    /// current element are collected into a flat array (the same shape an
+    /// unbound wildcard `field()` produces).  Otherwise the suffix is
+    /// navigated to a single value.  The suffix may start with a bracket
+    /// (`['key']`, `[0]`).
+    fn compile_suffix_from_binding(
+        &mut self,
+        base_reg: u8,
+        suffix: &str,
+        has_wildcard: bool,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        if has_wildcard {
+            return self.compile_field_wildcard_collect(Some(base_reg), suffix, span);
+        }
+        // Lowercase to match normalizer-lowercased keys.
+        let nav_path = suffix.to_ascii_lowercase();
+        let parts = split_bound_path(&nav_path)?;
+        self.emit_chained_index_segments(base_reg, &parts, span)
+    }
+
+    /// Whether `field_path` selects a single value from the current element
+    /// of `binding` (no `[*]` beyond the bound prefix).
+    pub(super) fn binding_selects_single_value(binding: &CountBinding, field_path: &str) -> bool {
+        let fp = field_path.to_ascii_lowercase();
+        let Some(prefix) = &binding.field_wildcard_prefix else {
+            return true;
+        };
+        match match_count_prefix(prefix, &fp) {
+            Some(CountPrefixMatch::CurrentElement) => true,
+            Some(CountPrefixMatch::BelowElement {
+                rest_has_wildcard, ..
+            }) => !rest_has_wildcard,
+            None => !has_unquoted_wildcard(&fp),
+        }
+    }
+
+    /// Compile a `current('key')` reference inside a count's where clause.
+    ///
+    /// Resolution is two-phase:
+    /// 1. Try matching `key` directly against the active binding stack
+    ///    (case-insensitive).  This handles literal alias paths and
+    ///    named value-count bindings.
+    /// 2. If no direct match, resolve `key` through the alias catalog
+    ///    and retry.  When the catalog is loaded and fallback is disabled,
+    ///    alias-resolution errors propagate so the caller sees "unknown
+    ///    alias" rather than a generic scope error.
+    ///
+    /// Bails with a "used outside an active count scope" error if neither
+    /// phase finds a matching binding.
+    pub(super) fn compile_current_reference(
+        &mut self,
+        key: &str,
+        span: &crate::lexer::Span,
+    ) -> Result<u8> {
+        let resolve_for_key = |compiler: &mut Self, candidate: &str| -> Result<Option<u8>> {
+            let lc_candidate = candidate.to_ascii_lowercase();
+            for binding in compiler.count_bindings.iter().rev() {
+                if let Some(name) = &binding.name {
+                    let lc_name = name.to_ascii_lowercase();
+                    if lc_candidate == lc_name {
+                        let current_reg = binding.current_reg;
+                        let dest = compiler.alloc_register()?;
+                        compiler.emit(
+                            Instruction::Move {
+                                dest,
+                                src: current_reg,
+                            },
+                            span,
+                        );
+                        return Ok(Some(dest));
+                    }
+
+                    let name_dot = format!("{}.", lc_name);
+                    if let Some(suffix) = lc_candidate.strip_prefix(&name_dot) {
+                        let parts = split_path_without_wildcards(suffix)?;
+                        return compiler
+                            .emit_chained_index_segments(binding.current_reg, &parts, span)
+                            .map(Some);
+                    }
+                }
+
+                if let Some(prefix) = &binding.field_wildcard_prefix {
+                    match match_count_prefix(prefix, &lc_candidate) {
+                        Some(CountPrefixMatch::CurrentElement) => {
+                            let current_reg = binding.current_reg;
+                            let dest = compiler.alloc_register()?;
+                            compiler.emit(
+                                Instruction::Move {
+                                    dest,
+                                    src: current_reg,
+                                },
+                                span,
+                            );
+                            return Ok(Some(dest));
+                        }
+                        Some(CountPrefixMatch::BelowElement {
+                            rest,
+                            rest_has_wildcard,
+                            ..
+                        }) => {
+                            let current_reg = binding.current_reg;
+                            return compiler
+                                .compile_suffix_from_binding(
+                                    current_reg,
+                                    rest,
+                                    rest_has_wildcard,
+                                    span,
+                                )
+                                .map(Some);
+                        }
+                        None => {}
+                    }
+                }
+            }
+
+            Ok(None)
+        };
+
+        if let Some(result) = resolve_for_key(self, key)? {
+            return Ok(result);
+        }
+
+        // Try resolving via the alias catalog.  When the catalog is loaded
+        // and fallback is disabled, propagate alias-resolution errors so the
+        // caller sees "unknown alias" instead of the generic "outside an
+        // active count scope" message.
+        match self.resolve_alias_path(key, span) {
+            Ok(normalized_key) if normalized_key != key => {
+                if let Some(result) = resolve_for_key(self, &normalized_key)? {
+                    return Ok(result);
+                }
+            }
+            Err(e)
+                if self
+                    .alias_registry
+                    .as_ref()
+                    .is_some_and(|r| !r.alias_map().is_empty())
+                    && !self.alias_fallback_to_raw =>
+            {
+                return Err(e);
+            }
+            _ => {}
+        }
+
+        bail!(span.error(&format!(
+            "current('{}') is used outside an active count scope",
+            key
+        )))
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use alloc::string::ToString as _;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use crate::languages::azure_policy::ast::{
+        Condition, Constraint, CountNode, FieldKind, FieldNode, JsonValue, OperatorKind,
+        OperatorNode, ValueOrExpr,
+    };
+    use crate::languages::azure_policy::compiler::core::{Compiler, CountBinding};
+    use crate::lexer::Source;
+    use crate::rvm::instructions::{GuardMode, LoopMode, PolicyOp};
+    use crate::rvm::Instruction;
+
+    fn dummy_span() -> crate::lexer::Span {
+        let source = Source::from_contents("test".into(), " ".into()).unwrap();
+        crate::lexer::Span {
+            source,
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 0,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_count_binding
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_binding_empty_stack() {
+        let c = Compiler::new();
+        assert!(c.resolve_count_binding("a[*].b").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_binding_by_field_prefix() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a".to_string()),
+            current_reg: 5,
+            resource_override_reg: None,
+        });
+        let binding = c.resolve_count_binding("a[*].b").unwrap().unwrap();
+        assert_eq!(binding.current_reg, 5);
+        assert_eq!(binding.field_wildcard_prefix.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn resolve_binding_ignores_value_count_name() {
+        // A value count's name is reachable only through current(); field
+        // paths always read the resource.
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: Some("location".to_string()),
+            field_wildcard_prefix: None,
+            current_reg: 3,
+            resource_override_reg: None,
+        });
+        assert!(c.resolve_count_binding("location").unwrap().is_none());
+        assert!(c.resolve_count_binding("LOCATION").unwrap().is_none());
+        assert!(c.resolve_count_binding("location.sub").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_binding_value_count_name_does_not_shadow_field_prefix() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a".to_string()),
+            current_reg: 5,
+            resource_override_reg: None,
+        });
+        c.count_bindings.push(CountBinding {
+            name: Some("a[*].b".to_string()),
+            field_wildcard_prefix: None,
+            current_reg: 6,
+            resource_override_reg: None,
+        });
+        let binding = c.resolve_count_binding("a[*].b").unwrap().unwrap();
+        assert_eq!(binding.current_reg, 5);
+    }
+
+    #[test]
+    fn resolve_binding_field_prefix_case_insensitive() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("Microsoft.Test/resource".to_string()),
+            current_reg: 6,
+            resource_override_reg: None,
+        });
+        // Mixed-case lookup against the prefix.
+        let binding = c
+            .resolve_count_binding("microsoft.test/resource[*].prop")
+            .unwrap()
+            .unwrap();
+        assert_eq!(binding.current_reg, 6);
+    }
+
+    #[test]
+    fn resolve_binding_innermost_wins() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a".to_string()),
+            current_reg: 1,
+            resource_override_reg: None,
+        });
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a[*].b".to_string()),
+            current_reg: 2,
+            resource_override_reg: None,
+        });
+        // The inner binding (a[*].b) matches a[*].b[*].c, and since we
+        // iterate in reverse, it wins.
+        let binding = c.resolve_count_binding("a[*].b[*].c").unwrap().unwrap();
+        assert_eq!(binding.current_reg, 2);
+    }
+
+    #[test]
+    fn resolve_binding_no_match() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("x".to_string()),
+            current_reg: 1,
+            resource_override_reg: None,
+        });
+        assert!(c.resolve_count_binding("y[*].z").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_binding_matches_resource_scope() {
+        let mut c = Compiler::new();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a".to_string()),
+            current_reg: 1,
+            resource_override_reg: None,
+        });
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("a".to_string()),
+            current_reg: 2,
+            resource_override_reg: Some(7),
+        });
+        assert_eq!(
+            c.resolve_count_binding("a[*].x")
+                .unwrap()
+                .unwrap()
+                .current_reg,
+            1
+        );
+        c.resource_override_reg = Some(7);
+        assert_eq!(
+            c.resolve_count_binding("a[*].x")
+                .unwrap()
+                .unwrap()
+                .current_reg,
+            2
+        );
+        c.resource_override_reg = Some(8);
+        assert!(c.resolve_count_binding("a[*].x").unwrap().is_none());
+    }
+
+    fn push_prefix_binding(c: &mut Compiler, prefix: &str, current_reg: u8) {
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some(prefix.to_string()),
+            current_reg,
+            resource_override_reg: None,
+        });
+    }
+
+    #[test]
+    fn resolve_binding_bracket_suffix_forms() {
+        let mut c = Compiler::new();
+        push_prefix_binding(&mut c, "items", 5);
+        for path in [
+            "items[*]['state']",
+            "items[*][\"state\"]",
+            "items[*][0]",
+            "items[*]['subs'][*]",
+            "ITEMS[*]['State']",
+        ] {
+            assert_eq!(
+                c.resolve_count_binding(path)
+                    .unwrap()
+                    .map(|b| b.current_reg),
+                Some(5),
+                "{path}"
+            );
+        }
+        for path in ["items[0]['state']", "itemsold[*]['state']", "other[*][0]"] {
+            assert!(c.resolve_count_binding(path).unwrap().is_none(), "{path}");
+        }
+    }
+
+    #[test]
+    fn resolve_binding_compares_parsed_segments() {
+        let mut bracket = Compiler::new();
+        push_prefix_binding(&mut bracket, "a['b']", 1);
+        assert!(bracket.resolve_count_binding("a.b[*].c").unwrap().is_some());
+        let mut dotted = Compiler::new();
+        push_prefix_binding(&mut dotted, "a.b", 1);
+        assert!(dotted
+            .resolve_count_binding("a['b'][*]['c']")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn resolve_binding_quoted_keys_are_literal_segments() {
+        let mut quoted_wildcard = Compiler::new();
+        push_prefix_binding(&mut quoted_wildcard, "m['a[*]']", 1);
+        assert!(quoted_wildcard
+            .resolve_count_binding("m[\"a[*]\"][*].x")
+            .unwrap()
+            .is_some());
+        assert!(quoted_wildcard
+            .resolve_count_binding("m.a[*].x")
+            .unwrap()
+            .is_none());
+
+        let mut key_a = Compiler::new();
+        push_prefix_binding(&mut key_a, "m['a']", 1);
+        assert!(key_a
+            .resolve_count_binding("m['b'][*].x")
+            .unwrap()
+            .is_none());
+
+        let mut dotted_key = Compiler::new();
+        push_prefix_binding(&mut dotted_key, "m['a.b']", 1);
+        assert!(dotted_key
+            .resolve_count_binding("m.a.b[*].x")
+            .unwrap()
+            .is_none());
+        assert!(dotted_key
+            .resolve_count_binding("m['a.b'][*].x")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn resolve_binding_legacy_and_unbound_index_forms() {
+        let mut c = Compiler::new();
+        push_prefix_binding(&mut c, "items", 5);
+        // Consecutive wildcards and a fixed index straight after the prefix
+        // stay unbound; the legacy dotted index binds.
+        for path in ["items[*][*]", "items[*][*].x", "items[0]", "items[0][0]"] {
+            assert!(c.resolve_count_binding(path).unwrap().is_none(), "{path}");
+        }
+        for path in ["items.[0]", "ITEMS.[0].x", "Items.State"] {
+            assert!(c.resolve_count_binding(path).unwrap().is_some(), "{path}");
+        }
+    }
+
+    #[test]
+    fn path_below_bound_element_bracket_suffix() {
+        let mut c = Compiler::new();
+        push_prefix_binding(&mut c, "items", 1);
+        push_prefix_binding(&mut c, "items[*]['subs']", 2);
+
+        let inner = c
+            .resolve_path_below_bound_element("items[*].subs[*].V[*]")
+            .unwrap()
+            .unwrap();
+        assert_eq!(inner.binding.current_reg, 2);
+        assert_eq!(inner.rest, "v[*]");
+        assert!(inner.rest_has_wildcard);
+
+        c.count_bindings.pop();
+        let outer = c
+            .resolve_path_below_bound_element("items[*]['Subs'][*]")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outer.binding.current_reg, 1);
+        assert_eq!(outer.rest, "['subs'][*]");
+        assert!(outer.rest_has_wildcard);
+
+        // The legacy `prefix.key` form does not continue through `[*]`.
+        assert!(c
+            .resolve_path_below_bound_element("items.subs[*]")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn malformed_path_below_any_active_binding_is_rejected() {
+        let span = dummy_span();
+        let mut c = Compiler::new();
+        push_prefix_binding(&mut c, "items", 1);
+        for path in ["items.x[*].y[*]", "items[*][*]", "itemsX[*]..subs[*]"] {
+            c.ensure_not_malformed_below_binding(path, &span).unwrap();
+        }
+        assert!(c
+            .ensure_not_malformed_below_binding("items[*]..subs[*]", &span)
+            .is_err());
+
+        // The outer binding is checked, not only the innermost one.
+        push_prefix_binding(&mut c, "others", 2);
+        assert!(c
+            .ensure_not_malformed_below_binding("items[*]..subs[*]", &span)
+            .is_err());
+
+        // Bindings over another resource do not apply.
+        c.count_bindings.clear();
+        c.count_bindings.push(CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("items".to_string()),
+            current_reg: 1,
+            resource_override_reg: Some(7),
+        });
+        c.ensure_not_malformed_below_binding("items[*]..subs[*]", &span)
+            .unwrap();
+    }
+
+    #[test]
+    fn binding_selects_single_value_bracket_suffix() {
+        let binding = CountBinding {
+            name: None,
+            field_wildcard_prefix: Some("items".to_string()),
+            current_reg: 1,
+            resource_override_reg: None,
+        };
+        assert!(Compiler::binding_selects_single_value(
+            &binding,
+            "items[*]['state']"
+        ));
+        assert!(Compiler::binding_selects_single_value(
+            &binding,
+            "items[*][0]"
+        ));
+        assert!(!Compiler::binding_selects_single_value(
+            &binding,
+            "items[*]['subs'][*]"
+        ));
+        assert!(Compiler::binding_selects_single_value(
+            &binding,
+            "items[*]['a[*]']"
+        ));
+
+        // Paths outside the binding fall back to quote-aware detection.
+        assert!(Compiler::binding_selects_single_value(
+            &binding,
+            "other['a[*]']"
+        ));
+        assert!(!Compiler::binding_selects_single_value(
+            &binding, "other[*]"
+        ));
+        let unbound = CountBinding {
+            field_wildcard_prefix: None,
+            ..binding
+        };
+        assert!(Compiler::binding_selects_single_value(&unbound, "a[*]"));
+    }
+
+    // -----------------------------------------------------------------------
+    // compile_count_nested — instruction shape for multi-wildcard paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nested_count_no_where_emits_foreach_and_count() {
+        let mut c = Compiler::new();
+        let span = dummy_span();
+        // Compile a[*].b[*] (no where clause) starting from resource root.
+        let result_reg = c
+            .compile_count_nested(None, "a[*].b[*]", None, "", &span)
+            .unwrap();
+
+        // The outer loop should be ForEach (accumulating inner counts).
+        // Find the first LoopStart and check its mode.
+        let first_loop_idx = c
+            .program
+            .instructions
+            .iter()
+            .position(|i| matches!(i, Instruction::LoopStart { .. }))
+            .expect("should have a LoopStart");
+
+        if let Instruction::LoopStart { params_index } = c.program.instructions[first_loop_idx] {
+            let params = c
+                .program
+                .instruction_data
+                .get_loop_params(params_index)
+                .unwrap();
+            assert_eq!(
+                params.mode,
+                LoopMode::ForEach,
+                "outer loop should be ForEach"
+            );
+        }
+
+        // The innermost level has no where clause, so it should use Count
+        // instruction (direct count, no loop).
+        assert!(
+            c.program
+                .instructions
+                .iter()
+                .any(|i| matches!(i, Instruction::Count { .. })),
+            "innermost level without where should emit Count"
+        );
+
+        // Should also have an Add instruction to accumulate.
+        assert!(
+            c.program
+                .instructions
+                .iter()
+                .any(|i| matches!(i, Instruction::Add { .. })),
+            "should accumulate inner counts via Add"
+        );
+
+        // The result register should be valid.
+        assert!(result_reg < c.register_counter);
+    }
+
+    #[test]
+    fn nested_count_with_where_emits_foreach_loops() {
+        let mut c = Compiler::new();
+        let span = dummy_span();
+
+        // A simple where clause: { field: "type", equals: "someType" }
+        let where_clause = Constraint::Condition(alloc::boxed::Box::new(Condition {
+            span: dummy_span(),
+            lhs: crate::languages::azure_policy::ast::Lhs::Field(FieldNode {
+                span: dummy_span(),
+                kind: FieldKind::Type,
+            }),
+            operator: OperatorNode {
+                span: dummy_span(),
+                kind: OperatorKind::Equals,
+            },
+            rhs: ValueOrExpr::Value(JsonValue::Str(dummy_span(), "someType".to_string())),
+        }));
+
+        let _result_reg = c
+            .compile_count_nested(None, "a[*].b[*]", Some(&where_clause), "", &span)
+            .unwrap();
+
+        // With a where clause the innermost level should emit a loop (not
+        // a bare Count instruction).
+        let loop_starts: Vec<_> = c
+            .program
+            .instructions
+            .iter()
+            .filter(|i| matches!(i, Instruction::LoopStart { .. }))
+            .collect();
+        assert!(
+            loop_starts.len() >= 2,
+            "nested count with where should emit at least 2 LoopStart instructions, got {}",
+            loop_starts.len()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // compile_count_nested_any — existence-pattern optimization for nested paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nested_any_exists_true_emits_any_loops() {
+        let mut c = Compiler::new();
+        let span = dummy_span();
+
+        let where_clause = Constraint::Condition(alloc::boxed::Box::new(Condition {
+            span: dummy_span(),
+            lhs: crate::languages::azure_policy::ast::Lhs::Field(FieldNode {
+                span: dummy_span(),
+                kind: FieldKind::Type,
+            }),
+            operator: OperatorNode {
+                span: dummy_span(),
+                kind: OperatorKind::Equals,
+            },
+            rhs: ValueOrExpr::Value(JsonValue::Str(dummy_span(), "someType".to_string())),
+        }));
+
+        let result = c
+            .compile_count_nested_any(
+                None,
+                "a[*].b[*]",
+                &where_clause,
+                "",
+                true, // exists = true → count > 0
+                &span,
+            )
+            .unwrap();
+        assert!(result.is_some(), "nested any should return Some");
+
+        // All loops should be LoopMode::Any for the existence optimization.
+        for instr in &c.program.instructions {
+            if let Instruction::LoopStart { params_index } = instr {
+                let params = c
+                    .program
+                    .instruction_data
+                    .get_loop_params(*params_index)
+                    .unwrap();
+                assert_eq!(
+                    params.mode,
+                    LoopMode::Any,
+                    "existence pattern should use Any loops"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_any_exists_false_emits_not() {
+        let mut c = Compiler::new();
+        let span = dummy_span();
+
+        let where_clause = Constraint::Condition(alloc::boxed::Box::new(Condition {
+            span: dummy_span(),
+            lhs: crate::languages::azure_policy::ast::Lhs::Field(FieldNode {
+                span: dummy_span(),
+                kind: FieldKind::Type,
+            }),
+            operator: OperatorNode {
+                span: dummy_span(),
+                kind: OperatorKind::Equals,
+            },
+            rhs: ValueOrExpr::Value(JsonValue::Str(dummy_span(), "someType".to_string())),
+        }));
+
+        let result = c
+            .compile_count_nested_any(
+                None,
+                "a[*].b[*]",
+                &where_clause,
+                "",
+                false, // exists = false → count == 0
+                &span,
+            )
+            .unwrap();
+        assert!(result.is_some());
+
+        // Should have a PolicyCondition with Not op for the negation.
+        assert!(
+            c.program.instructions.iter().any(|i| matches!(
+                i,
+                Instruction::PolicyCondition { op, .. } if *op == PolicyOp::Not
+            )),
+            "count == 0 pattern should negate with PolicyCondition::Not"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // try_compile_count_as_any — existence detection via operator + RHS
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a Condition with count LHS, given operator and numeric RHS.
+    fn make_count_condition(count_node: CountNode, op: OperatorKind, rhs_number: i64) -> Condition {
+        Condition {
+            span: dummy_span(),
+            lhs: crate::languages::azure_policy::ast::Lhs::Count(count_node),
+            operator: OperatorNode {
+                span: dummy_span(),
+                kind: op,
+            },
+            rhs: ValueOrExpr::Value(JsonValue::Number(dummy_span(), rhs_number.to_string())),
+        }
+    }
+
+    fn make_value_count_with_where() -> CountNode {
+        CountNode::Value {
+            span: dummy_span(),
+            value: ValueOrExpr::Value(JsonValue::Array(
+                dummy_span(),
+                vec![
+                    JsonValue::Number(dummy_span(), "1".to_string()),
+                    JsonValue::Number(dummy_span(), "2".to_string()),
+                    JsonValue::Number(dummy_span(), "3".to_string()),
+                ],
+            )),
+            name: None,
+            where_: Some(alloc::boxed::Box::new(Constraint::Condition(
+                alloc::boxed::Box::new(Condition {
+                    span: dummy_span(),
+                    lhs: crate::languages::azure_policy::ast::Lhs::Value {
+                        key_span: dummy_span(),
+                        value: ValueOrExpr::Value(JsonValue::Number(dummy_span(), "1".to_string())),
+                    },
+                    operator: OperatorNode {
+                        span: dummy_span(),
+                        kind: OperatorKind::Equals,
+                    },
+                    rhs: ValueOrExpr::Value(JsonValue::Number(dummy_span(), "1".to_string())),
+                }),
+            ))),
+        }
+    }
+
+    #[test]
+    fn any_optimization_greater_zero() {
+        let mut c = Compiler::new();
+        let count_node = make_value_count_with_where();
+        let condition = make_count_condition(count_node.clone(), OperatorKind::Greater, 0);
+        let result = c.try_compile_count_as_any(&count_node, &condition).unwrap();
+        assert!(
+            result.is_some(),
+            "count > 0 should trigger Any optimization"
+        );
+
+        // The loop should use LoopMode::Any.
+        for instr in &c.program.instructions {
+            if let Instruction::LoopStart { params_index } = instr {
+                let params = c
+                    .program
+                    .instruction_data
+                    .get_loop_params(*params_index)
+                    .unwrap();
+                assert_eq!(params.mode, LoopMode::Any);
+            }
+        }
+    }
+
+    #[test]
+    fn any_optimization_equals_zero_negates() {
+        let mut c = Compiler::new();
+        let count_node = make_value_count_with_where();
+        let condition = make_count_condition(count_node.clone(), OperatorKind::Equals, 0);
+        let result = c.try_compile_count_as_any(&count_node, &condition).unwrap();
+        assert!(
+            result.is_some(),
+            "count == 0 should trigger Any optimization"
+        );
+
+        // Should negate: PolicyCondition with Not.
+        assert!(
+            c.program.instructions.iter().any(|i| matches!(
+                i,
+                Instruction::PolicyCondition { op, .. } if *op == PolicyOp::Not
+            )),
+            "count == 0 should negate"
+        );
+    }
+
+    #[test]
+    fn any_optimization_not_triggered_for_equals_two() {
+        let mut c = Compiler::new();
+        let count_node = make_value_count_with_where();
+        let condition = make_count_condition(count_node.clone(), OperatorKind::Equals, 2);
+        let result = c.try_compile_count_as_any(&count_node, &condition).unwrap();
+        assert!(
+            result.is_none(),
+            "count == 2 is not an existence pattern, should return None"
+        );
+    }
+
+    #[test]
+    fn any_optimization_no_where_uses_any_loop() {
+        let mut c = Compiler::new();
+        let count_node = CountNode::Value {
+            span: dummy_span(),
+            value: ValueOrExpr::Value(JsonValue::Array(dummy_span(), vec![])),
+            name: None,
+            where_: None,
+        };
+        let condition = make_count_condition(count_node.clone(), OperatorKind::Greater, 0);
+        let result = c.try_compile_count_as_any(&count_node, &condition).unwrap();
+        assert!(
+            result.is_some(),
+            "without where clause, Any optimization should still apply for existence patterns"
+        );
+
+        // Verify it emitted an Any loop.
+        let has_any_loop = c.program.instructions.iter().any(|instr| {
+            if let Instruction::LoopStart { params_index } = instr {
+                let params = c
+                    .program
+                    .instruction_data
+                    .get_loop_params(*params_index)
+                    .unwrap();
+                params.mode == LoopMode::Any
+            } else {
+                false
+            }
+        });
+        assert!(has_any_loop, "should emit a LoopMode::Any loop");
+    }
+
+    // -----------------------------------------------------------------------
+    // compile_count — value-based count loop
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_value_count_without_where() {
+        let mut c = Compiler::new();
+        let count_node = CountNode::Value {
+            span: dummy_span(),
+            value: ValueOrExpr::Value(JsonValue::Array(
+                dummy_span(),
+                vec![
+                    JsonValue::Number(dummy_span(), "1".to_string()),
+                    JsonValue::Number(dummy_span(), "2".to_string()),
+                ],
+            )),
+            name: None,
+            where_: None,
+        };
+
+        let result_reg = c.compile_count(&count_node).unwrap();
+        assert!(result_reg < c.register_counter);
+
+        // Should emit a ForEach loop with Add to increment count.
+        let has_loop = c
+            .program
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::LoopStart { .. }));
+        let has_add = c
+            .program
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::Add { .. }));
+        assert!(has_loop, "value count should emit a loop");
+        assert!(has_add, "value count should emit Add to increment");
+    }
+
+    #[test]
+    fn compile_value_count_with_where() {
+        let mut c = Compiler::new();
+        let count_node = make_value_count_with_where();
+
+        let result_reg = c.compile_count(&count_node).unwrap();
+        assert!(result_reg < c.register_counter);
+
+        // Should have Guard instruction for the where clause.
+        assert!(
+            c.program.instructions.iter().any(|i| matches!(
+                i,
+                Instruction::Guard {
+                    mode: GuardMode::Condition,
+                    ..
+                }
+            )),
+            "count with where should emit Guard for where condition"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // classify_existence_pattern — direct coverage of all recognized patterns
+    // -----------------------------------------------------------------------
+
+    /// Helper to build a Condition with the given operator and numeric RHS
+    /// (LHS is irrelevant for classify_existence_pattern).
+    fn make_condition_for_classify(op: OperatorKind, rhs: i64) -> Condition {
+        Condition {
+            span: dummy_span(),
+            lhs: crate::languages::azure_policy::ast::Lhs::Field(FieldNode {
+                span: dummy_span(),
+                kind: FieldKind::Type,
+            }),
+            operator: OperatorNode {
+                span: dummy_span(),
+                kind: op,
+            },
+            rhs: ValueOrExpr::Value(JsonValue::Number(dummy_span(), rhs.to_string())),
+        }
+    }
+
+    #[test]
+    fn classify_existence_all_patterns() {
+        // "at least one" patterns → Some(true)
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::Greater,
+                0
+            )),
+            Some(true),
+            "> 0"
+        );
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::GreaterOrEquals,
+                1
+            )),
+            Some(true),
+            ">= 1"
+        );
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::NotEquals,
+                0
+            )),
+            Some(true),
+            "!= 0"
+        );
+
+        // "none" patterns → Some(false)
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::Equals,
+                0
+            )),
+            Some(false),
+            "== 0"
+        );
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::Less,
+                1
+            )),
+            Some(false),
+            "< 1"
+        );
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::LessOrEquals,
+                0
+            )),
+            Some(false),
+            "<= 0"
+        );
+
+        // Non-existence patterns → None
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::Equals,
+                2
+            )),
+            None,
+            "== 2"
+        );
+        assert_eq!(
+            Compiler::classify_existence_pattern(&make_condition_for_classify(
+                OperatorKind::Greater,
+                1
+            )),
+            None,
+            "> 1"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // try_compile_count_as_any — nested no-where field count is skipped
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn any_optimization_skips_nested_no_where_field_count() {
+        // A nested wildcard field path without a where clause should NOT be
+        // optimised into Any loops because of Undefined-propagation semantics.
+        let mut c = Compiler::new();
+        let count_node = CountNode::Field {
+            span: dummy_span(),
+            field: FieldNode {
+                span: dummy_span(),
+                kind: FieldKind::Alias("a[*].b[*]".to_string()),
+            },
+            where_: None,
+        };
+        let condition = make_count_condition(count_node.clone(), OperatorKind::Equals, 0);
+        let result = c.try_compile_count_as_any(&count_node, &condition).unwrap();
+        assert!(
+            result.is_none(),
+            "nested no-where field count should fall back to generic path"
+        );
+    }
+}

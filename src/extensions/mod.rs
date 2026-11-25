@@ -46,12 +46,6 @@ pub use identity::{
     KycIdentityData, SharedIdentityFields,
 };
 
-#[cfg(feature = "newton-tlsn")]
-pub mod tlsn;
-
-#[cfg(feature = "newton-tlsn")]
-pub use tlsn::register_newton_tlsn_extensions;
-
 #[cfg(feature = "newton-confidential")]
 pub mod confidential;
 

@@ -64,3 +64,311 @@ Regorus.MemoryLimits.SetThreadFlushThresholdOverride(null);
 ```
 
 See bindings/csharp/Regorus.Tests/RegorusTests.cs for scenario coverage and bindings/csharp/TargetExampleApp/Program.cs for end-to-end usage.
+
+## RVM Usage Example
+
+The RVM API lets you compile a program from modules/entrypoints and execute it in a VM:
+
+```csharp
+using Regorus;
+
+const string Policy = """
+package demo
+default allow = false
+allow if {
+  input.user == "alice"
+  some role in data.roles[input.user]
+  role == "admin"
+}
+""";
+
+const string Data = """
+{ "roles": { "alice": ["admin"] } }
+""";
+
+const string Input = """
+{ "user": "alice" }
+""";
+
+var modules = new[] { new PolicyModule("demo.rego", Policy) };
+var entryPoints = new[] { "data.demo.allow" };
+
+using var program = Program.CompileFromModules(Data, modules, entryPoints);
+var listing = program.GenerateListing();
+
+using var vm = new Rvm();
+vm.LoadProgram(program);
+vm.SetDataJson(Data);
+vm.SetInputJson(Input);
+
+var result = vm.Execute();
+Console.WriteLine($"allow: {result}");
+```
+
+### RVM instruction budget
+
+Use `SetMaxInstructions` to configure the maximum number of dispatched RVM
+bytecode instructions for a VM:
+
+```csharp
+vm.SetMaxInstructions(25_000);
+```
+
+The default is 25,000 and zero permits no dispatches. A fresh execution or
+`LoadProgram` resets the consumed count, while `Resume` preserves it across
+suspendable execution. Changing the maximum while suspended replaces the limit
+without resetting consumption. Exhaustion is reported as the existing generic
+`InvalidOperationException`; the C# setter does not expose a consumed-count
+getter. Values that cannot fit the native pointer width are rejected instead
+of being truncated.
+
+### Per-execution memory budget
+
+RVM run-to-completion and suspendable evaluation can use an optional memory
+budget. Each accepted initial `Execute` or `ExecuteEntryPoint` call snapshots
+the configured budget; `Resume` continues the same budget, including when it
+runs on a different thread. Program compilation, program loading, and prior
+`SetDataJson`, `SetInputJson`, and `SetContextJson` calls occur before and
+outside that budget. Changing or clearing the configuration affects only the
+next initial execution.
+
+```csharp
+using var vm = new Rvm();
+vm.LoadProgram(program);
+vm.SetDataJson(Data);
+vm.SetInputJson(Input);
+vm.SetMemoryBudgetConfig(new MemoryBudgetConfig(16 * 1024 * 1024));
+
+try
+{
+    var result = vm.Execute();
+}
+catch (RegorusMemoryBudgetExceededException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
+
+The native execution budget includes resume C-string copying and JSON parsing, VM resume work, result JSON serialization, and Rust `CString` allocation before the native call returns. Managed UTF-8 decoding and C# `string` allocation after that return are not charged.
+
+Run-to-completion accounting observes live-byte deltas; suspendable accounting
+accumulates the requested size of each successful allocation and reallocation
+across the initial execution and all resumes. Frees do not refund suspendable
+usage. Both are cooperative budgets, not allocation-time peak-memory caps. A
+single instruction, builtin, native serialization, or `CString` allocation
+may exceed the limit before the next checkpoint; configure headroom for that
+overshoot.
+
+The VM retains suspendable usage as a cumulative scalar and selects it only
+during each synchronous segment, so a resume may migrate threads without
+resetting consumption. Native resume parsing, inner resume, and immediate
+serialization share one accounting window.
+Successful reallocation charges the full new requested size to the selected
+execution, while failed reallocation charges nothing. Run-to-completion
+accounting keeps its existing execution-thread baseline and downward ratchet.
+See the [RVM memory budget documentation](../../docs/limits/memory_budget.md)
+for the detailed accounting model.
+
+Terminal budget or runtime failures invalidate retained results and clear execution state. Missing/unexpected resume input and malformed JSON are retryable while a valid continuation remains, but allocation requests consumed by malformed native input are not refunded and may exhaust the budget on a later valid resume. Native status 11 and `RegorusMemoryBudgetUnsupportedException` remain reserved for compatibility and are not used to reject suspendable execution. The process-wide limit exposed by `MemoryLimits` remains a separate safeguard.
+
+## RVM with Registered Host-Await Builtins
+
+Host-await builtins let you register custom function names at compile time.
+When the VM encounters a call to one of these functions, it suspends execution
+so the host can resolve the call externally and resume with a value.
+
+### Suspendable mode (resolve one call at a time)
+
+```csharp
+using Regorus;
+
+const string Policy = """
+package demo
+import rego.v1
+
+default allow := false
+
+allow if {
+  account := get_account({"id": input.account_id})
+  account.status == "active"
+}
+""";
+
+var modules = new[] { new PolicyModule("demo.rego", Policy) };
+var entryPoints = new[] { "data.demo.allow" };
+var builtins = new[] { new HostAwaitBuiltin("get_account", 1) };
+
+using var program = Program.CompileFromModules("{}", modules, entryPoints, builtins);
+using var vm = new Rvm();
+vm.SetExecutionMode(ExecutionMode.Suspendable);
+vm.LoadProgram(program);
+vm.SetInputJson("""{"account_id": "acct-42"}""");
+
+// First Execute suspends when get_account() is called
+vm.Execute();
+
+// Inspect which builtin suspended and what argument was passed
+var identifier = vm.GetHostAwaitIdentifier();  // "get_account"
+var argument = vm.GetHostAwaitArgument();       // [{"id":"acct-42"}]
+
+// Resolve externally, then resume
+var result = vm.Resume("""{"status": "active", "name": "Alice"}""");
+Console.WriteLine($"allow: {result}");  // true
+```
+
+### Run-to-completion mode (pre-load responses)
+
+```csharp
+using Regorus;
+
+const string Policy = """
+package demo
+import rego.v1
+
+default greeting := "unknown"
+
+greeting := msg if {
+  msg := translate(input.lang)
+}
+""";
+
+var modules = new[] { new PolicyModule("demo.rego", Policy) };
+var entryPoints = new[] { "data.demo.greeting" };
+var builtins = new[] { new HostAwaitBuiltin("translate", 1) };
+
+using var program = Program.CompileFromModules("{}", modules, entryPoints, builtins);
+using var vm = new Rvm();
+vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+vm.LoadProgram(program);
+vm.SetInputJson("""{"lang": "es"}""");
+
+// Queue responses before execution. SetHostAwaitResponses atomically replaces
+// ALL prior responses for every identifier — pass every identifier the policy
+// may invoke in a single call.
+vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+{
+    ["translate"] = new[] { "\"hola\"" },
+});
+
+var result = vm.Execute();
+Console.WriteLine($"greeting: {result}");  // "hola"
+```
+
+## Azure RBAC Condition Evaluation
+
+Evaluate Azure RBAC condition expressions directly with a JSON evaluation context:
+
+```csharp
+using Regorus;
+
+const string Condition = "@Resource[owner] StringEquals 'alice'";
+const string ContextJson = """
+{
+  "principal": {
+    "id": "user-1",
+    "principal_type": "User",
+    "custom_security_attributes": {}
+  },
+  "resource": {
+    "id": "/subscriptions/s1",
+    "resource_type": "Microsoft.Storage/storageAccounts",
+    "scope": "/subscriptions/s1",
+    "attributes": {
+      "owner": "alice",
+      "confidential": true
+    }
+  },
+  "request": {
+    "action": "Microsoft.Storage/storageAccounts/read",
+    "data_action": null,
+    "attributes": {
+      "clientIP": "10.0.0.1"
+    }
+  },
+  "environment": {
+    "is_private_link": null,
+    "private_endpoint": null,
+    "subnet": null,
+    "utc_now": "2023-05-01T12:00:00Z"
+  },
+  "action": "Microsoft.Storage/storageAccounts/read",
+  "suboperation": null
+}
+""";
+
+var allowed = RbacEngine.EvaluateCondition(Condition, ContextJson);
+Console.WriteLine($"RBAC condition allowed: {allowed}");
+```
+
+## Azure Policy JSON Evaluation
+
+Compile and evaluate Azure Policy JSON `policyRule` definitions directly — no Rego translation required.
+The `AzurePolicyCompiler` compiles JSON policy rules into RVM programs that can be executed with the `Rvm` engine.
+
+```csharp
+using Regorus;
+
+// 1. Load alias definitions for the resource provider
+const string AliasesJson = """
+[{
+    "namespace": "Microsoft.Storage",
+    "resourceTypes": [{
+        "resourceType": "storageAccounts",
+        "aliases": [{
+            "name": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+            "defaultPath": "properties.supportsHttpsTrafficOnly",
+            "paths": []
+        }]
+    }]
+}]
+""";
+
+using var registry = AliasRegistry.FromJson(AliasesJson);
+
+// 2. Compile a JSON policy rule (the native Azure Policy language)
+const string PolicyRule = """
+{
+    "if": {
+        "allOf": [
+            { "field": "type", "equals": "Microsoft.Storage/storageAccounts" },
+            { "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly", "equals": false }
+        ]
+    },
+    "then": { "effect": "deny" }
+}
+""";
+
+using var program = AzurePolicyCompiler.CompilePolicyRule(registry, PolicyRule);
+
+// 3. Normalize an ARM resource and evaluate
+var armResource = """
+{
+    "type": "Microsoft.Storage/storageAccounts",
+    "name": "mystorage",
+    "properties": { "supportsHttpsTrafficOnly": false }
+}
+""";
+var envelope = registry.NormalizeAndWrap(armResource);
+
+using var vm = new Rvm();
+vm.LoadProgram(program);
+vm.SetInputJson(envelope!);
+
+var result = vm.ExecuteEntryPoint("main");
+// result: {"effect": "deny"} for non-compliant, "<undefined>" for compliant
+Console.WriteLine($"Policy result: {result}");
+```
+
+**Context-dependent policies:** If your policy uses context functions like
+`subscription()`, `resourceGroup()`, or `requestContext()`, you must also set
+the VM context separately:
+
+```csharp
+// The context JSON from NormalizeAndWrap is in the input envelope,
+// but must also be provided to the VM's ambient context:
+vm.SetContextJson(contextJson);
+```
+
+You can also compile full policy definitions (with parameters) using
+`AzurePolicyCompiler.CompilePolicyDefinition()`. See
+`bindings/csharp/Regorus.Tests/AzurePolicyCompilerTests.cs` for comprehensive examples.

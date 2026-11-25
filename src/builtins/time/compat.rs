@@ -38,11 +38,13 @@
 )] // ported Go time parsing uses intentional arithmetic and explicit suffixes
 
 use crate::*;
-use core::{fmt, iter};
+use core::fmt;
+use core::iter;
 
+use chrono::TimeZone;
 use chrono::{
     format::{self, Fixed, Parsed},
-    DateTime, Duration, FixedOffset, ParseResult, TimeZone,
+    DateTime, Duration, FixedOffset, ParseResult,
 };
 
 const NANOSECOND: u64 = 1;
@@ -474,8 +476,8 @@ impl<'a> Iterator for GoTimeFormatItems<'a> {
                 token!(&literal, Space(literal));
             }
 
-            Some(_) => {
-                let literal = &self.reminder[..1];
+            Some(c) => {
+                let literal = &self.reminder[..c.len_utf8()];
                 token!(&literal, Literal(literal));
             }
 

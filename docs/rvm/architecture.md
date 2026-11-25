@@ -45,6 +45,13 @@ The Rego VM uses a register-based architecture with the following traits:
 
 ## 1. Compilation Outputs
 
+Keyed membership (`key, value in collection`) checks the value at that specific
+object key or array index, not whether the value appears elsewhere. Missing or
+invalid keys produce `false`, as do keyed membership checks on sets and scalar
+values. For containers other than arrays and objects, the key expression is not
+evaluated, matching the interpreter. Unkeyed membership continues to search
+collection values.
+
 A successful compilation produces a `Program` (`src/rvm/program/core.rs`). The
 layout is deliberately split:
 
@@ -73,8 +80,15 @@ layout is deliberately split:
 | `rule_tree: Value`                              | Map of rule labels for conflict detection and lookups.          | Serialized via `BinaryValueRef`; rebuilt into a `Value::Object` during load. |
 | `resolved_builtins: Vec<BuiltinFcn>`            | Resolved builtin function pointers.                             | Not serialized; repopulated by the host at load time. |
 | `needs_runtime_recursion_check: bool`           | Flags when `VirtualDataDocumentLookup` requires runtime guards.  | Ensures the VM short-circuits recursion before hitting the instruction budget ceiling. |
-| `needs_recompilation: bool`                     | Indicates partial deserialization of execution data.             | Set when the extensible section fails; signals the loader to recompile. |
+| `needs_recompilation: bool`                     | Indicates a legacy binary format or unresolved builtin.          | Signals the loader to recompile; corrupt current-version sections are errors. |
 | `rego_v0: bool`                                 | Records whether the policy targeted Rego v0 semantics.          | Ensures recompilation preserves language-version behaviour. |
+
+Binary and JSON program formats support 32 nested containers in literals,
+rule trees, and metadata annotations. Readers validate nesting during child
+decoding; writers check native-authored values before encoding. The supported
+wire representation and variant identifiers are unchanged. Loading a native
+program retains it; execution and rule/data conflict checks validate its rule
+tree before traversal.
 
 Additional helpers such as `Program::add_*`, `Program::update_*`, and
 `Program::display_instruction_with_params` are used by the compiler and
@@ -87,23 +101,30 @@ compact binary envelope that stays forward-compatible within a major format
 version:
 
 1. **Header**: magic `REGO` bytes followed by `SERIALIZATION_VERSION` (currently
-  `3`).
+  `6`).
 2. **Section manifest**: four little-endian `u32` lengths for entry points,
   sources, literals, and the rule tree, plus a single-byte `rego_v0` flag.
-3. **Preamble payloads**: each section is encoded with `bincode` using helper
+3. **Preamble payloads**: each section is encoded with `postcard` using helper
   wrappers (`BinaryValueSlice`, `BinaryValueRef`) to stream complex `Value`
   graphs without cloning.
-4. **Program core**: the remaining `Program` struct is serialized once more via
-  `bincode`; fields skipped by serde (entry points, literals, sources,
+4. **Program core**: a little-endian `u32` byte length precedes the remaining
+  `Program` struct serialized via `postcard`; fields skipped by serde (entry points, literals, sources,
   rule_tree, resolved builtins) are re-inserted from the preamble when the
   program is reconstructed.
 
-During deserialization the loader sanity-checks the header, lengths, and
-version before decoding each preamble section. Any failure while decoding the
-core payload downgrades the result to `DeserializationResult::Partial`,
-preserving enough artifact data to trigger a recompilation. Successful loads
-call `Program::initialize_resolved_builtins` so host runtimes can plug in their
-builtin implementations.
+During deserialization the loader checks the header, section lengths, version,
+and boolean `rego_v0` flag before decoding each section. For the current format,
+decode failures, unconsumed bytes within a section, and bytes after the program
+core are errors, not empty defaults or `DeserializationResult::Partial`.
+The assembled program must also satisfy `Program::validate_limits`; this checks
+supported table bounds, not full bytecode semantic validity.
+
+Legacy versions and unresolved builtins retain the
+`DeserializationResult::Partial` recompilation path. Legacy results may not
+contain policy sources, so callers must retain the original sources for
+recompilation. Successful current-version loads initialize resolved builtins.
+`Program::can_deserialize` only checks the magic and supported version; it is
+not an integrity check and does not replace `Program::deserialize_binary`.
 
 ---
 
@@ -254,7 +275,15 @@ include formatted state snapshots where possible.
 7. **Host await**: In run-to-completion mode, `HostAwait` consumes a response
    from `host_await_responses`. Suspendable mode yields control with a
    `SuspendReason::HostAwait { dest, argument, identifier }` that the host must
-   service.
+   service. The compiler supports two ways to emit `HostAwait`:
+   - **Explicit**: `__builtin_host_await(payload, identifier)` — raw 2-argument
+     form.
+   - **Registered**: `compile_from_policy_with_host_await` accepts a list of
+     `(name, arg_count)` pairs. Calls to registered names are compiled as
+     `HostAwait` with the function name as the identifier literal and the
+     ordered input values packed into an array. Registered names take
+     precedence over user-defined functions and standard builtins. Explicit
+     calls remain raw, and old serialized programs are not rewritten.
 8. **Completion**: `Return` wraps the selected register value into
    `InstructionOutcome::Return`, unwinding frames until the entry frame is
    cleared. `RuleReturn` is a specialised variant used by rule execution

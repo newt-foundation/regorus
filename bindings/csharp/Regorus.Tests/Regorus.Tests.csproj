@@ -10,8 +10,7 @@
   </PropertyGroup>
   
   <PropertyGroup>
-    <!-- If the environment variable is set (such as in a Github Action run), append the suffix to the version number -->
-    <RegorusPackageVersionSuffix Condition="'$(VersionSuffix)' != ''">-$(VersionSuffix)</RegorusPackageVersionSuffix>
+    <UsePackageReference Condition="'$(UsePackageReference)' == ''">false</UsePackageReference>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,9 +19,18 @@
 
   <ItemGroup>
     <PackageReference Include="MSTest" />
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' != 'true'">
+    <ProjectReference Include="../Regorus/Regorus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackageReference)' == 'true'">
+    <PackageReference Include="Microsoft.Regorus" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Regorus" />
+    <None Include="../../../src/languages/azure_rbac/test_cases/*.yaml" Link="test_cases/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

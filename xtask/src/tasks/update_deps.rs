@@ -7,10 +7,8 @@
 //! a Cargo.lock file, ensuring all lock files are refreshed with the latest
 //! compatible dependency versions according to their version constraints.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;

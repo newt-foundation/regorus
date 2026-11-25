@@ -2,13 +2,12 @@
 // Licensed under the MIT License.
 #![allow(clippy::as_conversions)]
 
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    builtins::utils::{ensure_args_count, ensure_array, ensure_numeric},
-    lexer::Span,
-    Rc, Value,
-};
+use crate::ast::{Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::{ensure_args_count, ensure_array, ensure_numeric};
+use crate::lexer::Span;
+use crate::Rc;
+use crate::Value;
 
 use anyhow::Result;
 
@@ -66,6 +65,6 @@ fn slice(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Re
         return Ok(Value::new_array());
     }
 
-    let slice = &array[start..stop];
+    let slice = array.as_slice().get(start..stop).unwrap_or_default();
     Ok(Value::from(slice.to_vec()))
 }

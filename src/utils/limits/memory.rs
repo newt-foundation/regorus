@@ -2,11 +2,15 @@
 // Licensed under the MIT License.
 
 use super::error::LimitError;
-use core::{
-    cell::Cell,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::cell::Cell;
+use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::thread_local;
+
+#[cfg(feature = "rvm")]
+pub use mimalloc::limits::{
+    current_memory_budget_usage, with_memory_budget_usage_scope, MemoryBudgetUsage,
+};
 
 static GLOBAL_MEMORY_LIMIT: AtomicU64 = AtomicU64::new(u64::MAX);
 
@@ -15,6 +19,16 @@ const MEMORY_CHECK_STRIDE: u32 = 16;
 // Pending per-thread allocator delta (bytes) that triggers a memory check. Chosen at 32 KiB to
 // catch short bursts before they exceed typical entry budgets while still amortizing the atomic.
 const MEMORY_CHECK_DELTA_BYTES: u64 = 32 * 1024;
+
+/// Configuration for a fresh RVM memory budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(docsrs, doc(cfg(feature = "allocator-memory-limits")))]
+pub struct MemoryBudgetConfig {
+    /// Maximum additional bytes charged during one execution. Suspendable
+    /// executions accumulate successful requested allocation sizes; run-to-
+    /// completion executions retain thread-baseline live-byte accounting.
+    pub limit: NonZeroU64,
+}
 
 thread_local! {
     // Per-thread stride counter used to amortize global memory checks.
@@ -147,14 +161,37 @@ pub fn thread_memory_flush_threshold() -> Option<u64> {
 /// check_global_memory_limit().unwrap();
 /// ```
 pub fn check_global_memory_limit() -> Result<(), LimitError> {
+    check_memory_allocation(0)
+}
+
+/// Preflight a new allocation using the allocator wrapper's accounting.
+pub fn check_memory_allocation(bytes: usize) -> Result<(), LimitError> {
     if let Some(limit) = global_memory_limit() {
-        let (stats, _) = mimalloc::allocation_stats_snapshot();
-        let usage = stats.allocated;
-        if usage > limit {
-            return Err(LimitError::MemoryLimitExceeded { usage, limit });
-        }
+        mimalloc::limits::check_allocation(bytes, limit).map_err(allocation_limit_error)?;
     }
     Ok(())
+}
+
+/// Reserve string capacity through the allocator wrapper while a limit is active.
+pub fn reserve_string(output: &mut crate::String, additional: usize) -> anyhow::Result<()> {
+    if let Some(limit) = global_memory_limit() {
+        mimalloc::limits::try_reserve_string(output, additional, limit).map_err(
+            |error| match error {
+                mimalloc::limits::ReservationError::LimitExceeded(error) => {
+                    anyhow::Error::new(allocation_limit_error(error))
+                }
+                error => anyhow::Error::new(error),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+const fn allocation_limit_error(error: mimalloc::limits::MemoryLimitExceeded) -> LimitError {
+    LimitError::MemoryLimitExceeded {
+        usage: error.usage,
+        limit: error.limit,
+    }
 }
 
 /// Enforces the currently configured memory ceiling, if any.
@@ -212,4 +249,8 @@ pub(super) fn check_memory_limit_if_needed() -> Result<(), LimitError> {
 pub fn global_memory_limit() -> Option<u64> {
     let limit = GLOBAL_MEMORY_LIMIT.load(Ordering::Relaxed);
     (limit != u64::MAX).then_some(limit)
+}
+
+pub fn current_thread_live_bytes() -> i64 {
+    mimalloc::current_thread_live_bytes()
 }

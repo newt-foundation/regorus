@@ -2,34 +2,38 @@
 // Licensed under the MIT License.
 #![allow(clippy::print_stderr, clippy::pattern_type_mismatch)]
 
+use crate::ast::*;
+use crate::builtins::{self, BuiltinFcn};
+use crate::compiled_policy::CompiledPolicyData;
 #[cfg(feature = "azure_policy")]
 use crate::compiled_policy::TargetInfo;
+use crate::compiler::destructuring_planner::{
+    AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide,
+};
+use crate::compiler::hoist::{HoistedLoop, HoistedLoopsLookup, LoopType};
+use crate::lexer::*;
+use crate::lookup::Lookup;
+use crate::parser::Parser;
+use crate::parser::ParserContext;
+use crate::scheduler::*;
+use crate::utils::limits::{monotonic_now, ExecutionTimer, ExecutionTimerConfig};
 #[cfg(feature = "std")]
 use crate::utils::*;
 #[cfg(not(feature = "std"))]
-use crate::utils::{get_extra_arg, get_path_string, get_root_var, FunctionTable};
-use crate::{
-    ast::*,
-    builtins::{self, BuiltinFcn},
-    compiled_policy::CompiledPolicyData,
-    compiler::{
-        destructuring_planner::{AssignmentPlan, BindingPlan, DestructuringPlan, WildcardSide},
-        hoist::{HoistedLoop, LoopType},
-    },
-    lexer::*,
-    lookup::Lookup,
-    parser::Parser,
-    scheduler::*,
-    utils::limits::{monotonic_now, ExecutionTimer, ExecutionTimerConfig},
-    value::*,
-    Expression, Extension, Location, QueryResult, QueryResults, *,
+use crate::utils::{
+    append_path_component, append_path_value_component, format_path_components, format_string_path,
+    get_extra_arg, get_path_string, get_root_var, get_rule_path_components,
+    split_canonical_path_root, FunctionTable, PathComponent,
 };
+use crate::value::*;
+use crate::*;
+use crate::{Expression, Extension, Location, QueryResult, QueryResults};
 
 #[cfg(feature = "coverage")]
 use crate::query::traversal::traverse;
 
 use crate::Rc;
-use alloc::collections::{btree_map::Entry as BTreeMapEntry, BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, bail, Result};
 use core::ops::Bound::*;
 
@@ -61,7 +65,130 @@ enum FunctionModifier {
     Value(Value),
 }
 
+/// How [`Interpreter::update_data`] merges a rule's value into the data document.
+#[derive(Debug, Clone, Copy)]
+enum RuleValueMerge {
+    /// Shallow-merge keeping disjoint keys, so rules sharing a path prefix scaffold into one
+    /// object (`a.foo` + `a.bar` → one `a`) instead of conflicting.
+    Combine,
+    /// Complete-rule semantics: existing value must be absent or exactly equal, else conflict.
+    /// Used for zero-arg function outputs (`f() := …`), which OPA treats like complete rules.
+    Strict,
+}
+
 type RuleValues = BTreeMap<Vec<Value>, (Value, Ref<Expr>)>;
+
+// A query's scheduled statement order is already computed by the compiler. These
+// cursors only replace the interpreter's recursive backtracking continuations;
+// expressions, nested queries and rule/function calls retain their native guard.
+#[derive(Clone)]
+struct StatementPosition<'a> {
+    stmts: &'a [&'a LiteralStmt],
+    loops: Option<Rc<Vec<HoistedLoop>>>,
+    next_loop: usize,
+}
+
+type StatementCursor = Box<dyn Iterator<Item = (Value, Value)>>;
+
+// Object/set search cursors compare structural keys while resuming. Snapshot
+// their shallow entries with checkpoints instead: borrowed iteration and the
+// resulting owned iterator do not compare or hash Values. Arrays need no copy.
+fn statement_cursor(
+    collection: Value,
+    checkpoint: &mut impl FnMut() -> Result<()>,
+) -> Result<StatementCursor> {
+    checkpoint()?;
+    let mut entries = Vec::new();
+    match collection {
+        Value::Array(items) => {
+            let mut index: usize = 0;
+            return Ok(Box::new(core::iter::from_fn(move || {
+                let value = items.get(index)?.clone();
+                let key = Value::from(index);
+                index = index.saturating_add(1);
+                Some((key, value))
+            })));
+        }
+        Value::Set(items) => {
+            let mut members = Vec::new();
+            for value in items.iter() {
+                checkpoint()?;
+                members.push(value.clone());
+                checkpoint()?;
+            }
+            return Ok(Box::new(
+                members.into_iter().map(|value| (value.clone(), value)),
+            ));
+        }
+        Value::Object(items) => {
+            for (key, value) in items.iter() {
+                checkpoint()?;
+                entries.push((key.clone(), value.clone()));
+                checkpoint()?;
+            }
+        }
+        _ => {}
+    }
+    Ok(Box::new(entries.into_iter()))
+}
+
+struct StatementLoop<'a> {
+    position: StatementPosition<'a>,
+    cursor: StatementCursor,
+    key_plan: Option<DestructuringPlan>,
+    value_plan: Option<DestructuringPlan>,
+    // Hoisted loops introduce a scope and a cached expression value. Some-in
+    // instead backtracks in its existing scope and keeps WITH active over its
+    // continuation. Keep these lifetimes distinct.
+    target: Option<ExprRef>,
+    previous_loop_value: Option<Value>,
+    saved_scope: Option<Scope>,
+    query_result: Option<QueryResult>,
+    saved_state: Option<State>,
+    started: bool,
+    success: bool,
+}
+
+// Path components in processed_paths are strings, and the ordinary processed marker uses
+// Undefined. This boolean key records an explicit data WITH replacement without colliding
+// with either.
+const EXPLICIT_DATA_WITH_OVERRIDE_MARKER: Value = Value::Bool(true);
+
+const MAX_NATIVE_EVALUATION_DEPTH: usize = 64;
+
+#[derive(Debug, thiserror::Error)]
+#[error("native evaluation nesting exceeds limit {MAX_NATIVE_EVALUATION_DEPTH}")]
+struct NativeEvaluationDepthExceeded;
+
+pub fn is_evaluation_limit_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<NativeEvaluationDepthExceeded>()
+        .is_some()
+        || error.downcast_ref::<crate::LimitError>().is_some()
+        || error
+            .downcast_ref::<crate::utils::depth::DepthExceeded>()
+            .is_some()
+}
+
+// Cleanup must not downgrade an existing fatal error. Conversely, a cleanup
+// limit is fatal even if evaluation produced only an ordinary error. Keep
+// secondary failures as context, including when evaluation itself succeeded.
+fn merge_statement_cleanup<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
+    match (result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => {
+            let message = format!(
+                "evaluation failed: {error}; continuation cleanup failed: {cleanup_error:#}"
+            );
+            if !is_evaluation_limit_error(&error) && is_evaluation_limit_error(&cleanup_error) {
+                Err(cleanup_error.context(message))
+            } else {
+                Err(error.context(message))
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Interpreter {
@@ -84,6 +211,7 @@ pub struct Interpreter {
     current_module_path: String,
     current_module_index: u32,
     query_schedule: Option<Schedule>,
+    query_loop_hoisting: HoistedLoopsLookup,
     query_module: Option<NodeRef<Module>>,
     input: Value,
 
@@ -99,6 +227,7 @@ pub struct Interpreter {
     processed_paths: Value,
     rule_values: RuleValues,
     active_rules: Vec<Ref<Rule>>,
+    native_evaluation_depth: usize,
     builtins_cache: BTreeMap<(&'static str, Vec<Value>), Value>,
     no_rules_lookup: bool,
     execution_timer: ExecutionTimer,
@@ -142,10 +271,12 @@ impl Clone for Interpreter {
 
             builtins_cache: BTreeMap::default(),
             active_rules: Vec::default(),
+            native_evaluation_depth: 0,
             contexts: Vec::default(),
             current_module_path: String::default(),
             current_module_index: 0,
             query_schedule: None,
+            query_loop_hoisting: HoistedLoopsLookup::new(),
             query_module: None,
             module: None,
             no_rules_lookup: false,
@@ -204,6 +335,7 @@ impl Interpreter {
             current_module_path: String::default(),
             current_module_index: 0,
             query_schedule: None,
+            query_loop_hoisting: HoistedLoopsLookup::new(),
             query_module: None,
             input: Value::Undefined,
 
@@ -218,6 +350,7 @@ impl Interpreter {
             processed_paths: Value::new_object(),
             rule_values: BTreeMap::default(),
             active_rules: Vec::default(),
+            native_evaluation_depth: 0,
             builtins_cache: BTreeMap::default(),
             no_rules_lookup: false,
             traces: None,
@@ -244,6 +377,7 @@ impl Interpreter {
             current_module_index: 0,
             query_module: None,
             query_schedule: None,
+            query_loop_hoisting: HoistedLoopsLookup::new(),
             input: Value::Undefined,
 
             with_document: Value::new_object(),
@@ -256,6 +390,7 @@ impl Interpreter {
             processed_paths: Value::new_object(),
             rule_values: BTreeMap::default(),
             active_rules: Vec::default(),
+            native_evaluation_depth: 0,
             builtins_cache: BTreeMap::default(),
             no_rules_lookup: false,
             traces: None,
@@ -288,8 +423,18 @@ impl Interpreter {
         }
     }
 
+    fn with_native_depth<T>(&mut self, evaluate: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.native_evaluation_depth >= MAX_NATIVE_EVALUATION_DEPTH {
+            return Err(NativeEvaluationDepthExceeded.into());
+        }
+        self.native_evaluation_depth = self.native_evaluation_depth.saturating_add(1);
+        let result = evaluate(self);
+        self.native_evaluation_depth = self.native_evaluation_depth.saturating_sub(1);
+        result
+    }
+
     fn execution_timer_tick(&mut self, work_units: u32) -> Result<()> {
-        if self.execution_timer.limit().is_none() {
+        if !self.execution_timer.accumulate(work_units) {
             return Ok(());
         }
 
@@ -297,7 +442,7 @@ impl Interpreter {
             return Ok(());
         };
 
-        self.execution_timer.tick(work_units, now)?;
+        self.execution_timer.check_now(now)?;
         Ok(())
     }
 
@@ -318,19 +463,31 @@ impl Interpreter {
         self.compiled_policy_mut().functions = functions;
     }
 
-    pub fn set_modules(&mut self, modules: Rc<Vec<Ref<Module>>>) {
-        self.compiled_policy_mut().modules = modules;
+    pub(crate) fn set_modules(
+        &mut self,
+        modules: Rc<Vec<Ref<Module>>>,
+        parser_contexts: Rc<Vec<ParserContext>>,
+    ) {
+        let compiled_policy = self.compiled_policy_mut();
+        compiled_policy.modules = modules;
+        compiled_policy.parser_contexts = parser_contexts;
     }
 
     pub fn set_loop_hoisting_table(&mut self, table: crate::compiler::hoist::HoistedLoopsLookup) {
         self.compiled_policy_mut().loop_hoisting_table = table;
     }
 
-    pub fn take_loop_hoisting_table(&mut self) -> crate::compiler::hoist::HoistedLoopsLookup {
-        core::mem::replace(
-            &mut self.compiled_policy_mut().loop_hoisting_table,
-            crate::compiler::hoist::HoistedLoopsLookup::new(),
-        )
+    pub fn set_query_loop_hoisting(&mut self, table: HoistedLoopsLookup) {
+        self.query_loop_hoisting = table;
+    }
+
+    /// The query snippet is module `modules.len()`; its loops stay out of the shared policy.
+    fn loop_hoisting_table(&self, module_idx: u32) -> &HoistedLoopsLookup {
+        if usize::try_from(module_idx).ok() == Some(self.compiled_policy.modules.len()) {
+            &self.query_loop_hoisting
+        } else {
+            &self.compiled_policy.loop_hoisting_table
+        }
     }
 
     pub const fn get_data_mut(&mut self) -> &mut Value {
@@ -402,13 +559,13 @@ impl Interpreter {
         self.reset_execution_timer_state();
     }
 
-    #[cfg(feature = "allocator-memory-limits")]
+    #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
     fn memory_check(&mut self) -> Result<()> {
         let _ = self; // quiet clippy::unused_self; retained for symmetry with VM path
         crate::utils::limits::check_memory_limit_if_needed().map_err(|err| anyhow!(err))
     }
 
-    #[cfg(not(feature = "allocator-memory-limits"))]
+    #[cfg(any(miri, not(feature = "allocator-memory-limits")))]
     const fn memory_check(&mut self) -> Result<()> {
         let _ = self; // quiet clippy::unused_self; retained for symmetry with VM path
         Ok(())
@@ -467,8 +624,7 @@ impl Interpreter {
                 let module_idx = self.current_module_index;
                 let expr_idx = last_param.as_ref().eidx();
                 let binding_plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
+                    .loop_hoisting_table(module_idx)
                     .get_expr_binding_plan(module_idx, expr_idx)
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
 
@@ -564,9 +720,9 @@ impl Interpreter {
                 }
                 Expr::RefBrack { refr, index, .. } => match index.as_ref() {
                     // refr["field"] is the same as refr.field
-                    Expr::String { span, .. } => {
+                    Expr::String { value, .. } => {
                         expr = refr;
-                        path.push(span.text());
+                        path.push(value.as_string()?.as_ref());
                     }
                     // Handle other forms of refr.
                     // Note, we have the choice to evaluate a non-string index
@@ -576,18 +732,59 @@ impl Interpreter {
                         let index = self.eval_expr(index)?;
 
                         // Handle indexing into data.
-                        if let Ok(ref_path) = get_path_string(refr, None) {
-                            if get_root_var(refr)?.text() == "data" && index != Value::Undefined {
-                                let index = match &index {
-                                    Value::String(s) => s.to_string(),
-                                    _ => index.to_string(),
-                                };
-                                let ref_path = if path.is_empty() {
-                                    format!("{ref_path}.{index}")
-                                } else {
-                                    format!("{ref_path}.{index}.{}", path.join("."))
-                                };
-                                self.ensure_rule_evaluated(ref_path)?;
+                        if index != Value::Undefined {
+                            if let Ok(ref_components) =
+                                Parser::get_static_string_path_components(refr)
+                            {
+                                if ref_components.first().map(String::as_str) == Some("data") {
+                                    let ref_component_refs: Vec<&str> =
+                                        ref_components.iter().map(String::as_str).collect();
+                                    if let Ok(ref_path) = format_string_path(&ref_component_refs) {
+                                        let mut rule_path =
+                                            append_path_value_component(&ref_path, &index)?;
+                                        for component in &path {
+                                            rule_path =
+                                                append_path_component(&rule_path, component)?;
+                                        }
+                                        self.ensure_rule_evaluated(rule_path)?;
+
+                                        if matches!(&index, Value::Number(_)) {
+                                            let mut string_path = append_path_component(
+                                                &ref_path,
+                                                &index.to_string(),
+                                            )?;
+                                            for component in &path {
+                                                string_path =
+                                                    append_path_component(&string_path, component)?;
+                                            }
+                                            if self.compiled_policy.rules.contains_key(&string_path)
+                                                || self
+                                                    .compiled_policy
+                                                    .default_rules
+                                                    .contains_key(&string_path)
+                                            {
+                                                self.ensure_rule_evaluated(string_path)?;
+                                            }
+                                        }
+
+                                        let index_component = match &index {
+                                            Value::String(value) => {
+                                                Some(value.as_ref().to_string())
+                                            }
+                                            Value::Number(_) => Some(index.to_string()),
+                                            _ => None,
+                                        };
+                                        if let Some(index_component) = index_component {
+                                            let mut module_path = ref_components.clone();
+                                            module_path.push(index_component);
+                                            module_path.extend(
+                                                path.iter()
+                                                    .map(|component| (*component).to_string()),
+                                            );
+                                            self.ensure_module_evaluated(&module_path)?;
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -740,6 +937,14 @@ impl Interpreter {
 
     /// Execute a destructuring plan against a value, binding variables as needed
     pub fn execute_destructuring_plan(
+        &mut self,
+        plan: &DestructuringPlan,
+        value: &Value,
+    ) -> Result<Value> {
+        self.with_native_depth(|this| this.execute_destructuring_plan_impl(plan, value))
+    }
+
+    fn execute_destructuring_plan_impl(
         &mut self,
         plan: &DestructuringPlan,
         value: &Value,
@@ -932,159 +1137,6 @@ impl Interpreter {
         }
     }
 
-    fn eval_some_in(
-        &mut self,
-        _span: &Span,
-        _key_expr: &Option<ExprRef>,
-        _value_expr: &ExprRef,
-        collection: &ExprRef,
-        stmts: &[&LiteralStmt],
-    ) -> Result<bool> {
-        self.check_execution_time()?;
-        let scope_saved = self.current_scope()?.clone();
-        let mut count: usize = 0;
-
-        // Fetch the binding plan for this some..in expression
-        let module_idx = self.current_module_index;
-        let expr_idx = collection.as_ref().eidx();
-
-        let binding_plan = self
-            .compiled_policy
-            .loop_hoisting_table
-            .get_expr_binding_plan(module_idx, expr_idx)
-            .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
-
-        let Some(BindingPlan::SomeIn {
-            key_plan,
-            value_plan,
-            ..
-        }) = binding_plan.cloned()
-        else {
-            bail!("internal error: missing binding plan for some..in expression");
-        };
-
-        match self.eval_expr(collection)? {
-            Value::Array(a) => {
-                for (idx, value) in a.iter().enumerate() {
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, &Value::from(idx))?
-                            == Value::from(true)
-                    } else {
-                        true
-                    };
-
-                    // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
-
-                    if !success {
-                        *self.current_scope_mut()? = scope_saved.clone();
-                        continue;
-                    }
-
-                    let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
-                        count = count.saturating_add(1);
-                        if let Some(ctx) = self.contexts.last() {
-                            if ctx.early_return {
-                                should_break = true;
-                            }
-                        }
-                    }
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    if should_break {
-                        break;
-                    }
-                }
-            }
-            Value::Set(s) => {
-                for value in s.iter() {
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, value)? == Value::from(true)
-                    } else {
-                        true
-                    };
-
-                    // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
-
-                    if !success {
-                        *self.current_scope_mut()? = scope_saved.clone();
-                        continue;
-                    }
-
-                    let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
-                        count = count.saturating_add(1);
-                        if let Some(ctx) = self.contexts.last() {
-                            if ctx.early_return {
-                                should_break = true;
-                            }
-                        }
-                    }
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    if should_break {
-                        break;
-                    }
-                }
-            }
-
-            Value::Object(o) => {
-                for (key, value) in o.iter() {
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    let mut success = if let Some(key_plan) = &key_plan {
-                        self.execute_destructuring_plan(key_plan, key)? == Value::from(true)
-                    } else {
-                        true
-                    };
-
-                    // Execute value binding
-                    success = success
-                        && self.execute_destructuring_plan(&value_plan, value)?
-                            == Value::from(true);
-
-                    if !success {
-                        *self.current_scope_mut()? = scope_saved.clone();
-                        continue;
-                    }
-
-                    let mut should_break = false;
-                    if self.eval_stmts(stmts)? {
-                        count = count.saturating_add(1);
-                        if let Some(ctx) = self.contexts.last() {
-                            if ctx.early_return {
-                                should_break = true;
-                            }
-                        }
-                    }
-                    *self.current_scope_mut()? = scope_saved.clone();
-
-                    if should_break {
-                        break;
-                    }
-                }
-            }
-            Value::Undefined => (),
-            v => {
-                bail!(collection.span().error(
-                    format!("`some .. in collection` expects array/set/object. Got `{v}`").as_str()
-                ))
-            }
-        }
-
-        Ok(count > 0)
-    }
-
     fn make_expression_result(span: &Span, v: &Value) -> Expression {
         Expression {
             value: v.clone(),
@@ -1096,7 +1148,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_stmt_impl(&mut self, stmt: &LiteralStmt, stmts: &[&LiteralStmt]) -> Result<bool> {
+    fn eval_stmt_impl(&mut self, stmt: &LiteralStmt) -> Result<bool> {
         self.memory_check()?;
         self.check_execution_time()?;
         Ok(match &stmt.literal {
@@ -1195,21 +1247,7 @@ impl Interpreter {
                 }
                 true
             }
-            Literal::SomeIn {
-                span,
-                key,
-                value,
-                collection,
-            } => {
-                if let Some(ctx) = self.contexts.last_mut() {
-                    if let Some(result) = &mut ctx.result {
-                        result
-                            .expressions
-                            .push(Self::make_expression_result(span, &Value::Bool(true)));
-                    }
-                }
-                self.eval_some_in(span, key, value, collection, stmts)?
-            }
+            Literal::SomeIn { .. } => bail!("internal error: some-in requires a continuation"),
             Literal::Every {
                 span,
                 key,
@@ -1229,6 +1267,80 @@ impl Interpreter {
         })
     }
 
+    fn copy_explicit_data_with_override_markers(
+        &mut self,
+        paths: &Value,
+        path: &mut Vec<String>,
+        overridden_paths: &mut Vec<Vec<String>>,
+    ) -> Result<Value> {
+        let mut inherited_paths = Value::new_object();
+        let Value::Object(entries) = paths else {
+            return Ok(inherited_paths);
+        };
+
+        for (key, value) in entries.iter() {
+            self.check_execution_time()?;
+            self.memory_check()?;
+            if key == &EXPLICIT_DATA_WITH_OVERRIDE_MARKER {
+                inherited_paths
+                    .as_object_mut()?
+                    .insert(key.clone(), value.clone());
+                let mut overridden_path = vec!["data".to_string()];
+                overridden_path.extend(path.iter().cloned());
+                overridden_paths.push(overridden_path);
+                self.memory_check()?;
+            } else if let Value::String(component) = key {
+                path.push(component.to_string());
+                let child =
+                    self.copy_explicit_data_with_override_markers(value, path, overridden_paths)?;
+                let _ = path.pop();
+                if !child.as_object()?.is_empty() {
+                    inherited_paths.as_object_mut()?.insert(key.clone(), child);
+                    self.memory_check()?;
+                }
+            }
+        }
+
+        Ok(inherited_paths)
+    }
+
+    fn suppress_rules_under_data_override(&mut self, overridden_path: &[String]) -> Result<()> {
+        let compiled_policy = self.compiled_policy.clone();
+        for (rule_path, rules) in &compiled_policy.rules {
+            self.check_execution_time()?;
+            let rule_components = compiled_policy
+                .rule_path_components
+                .get(rule_path)
+                .ok_or_else(|| {
+                    anyhow!("missing components for registered rule path {rule_path}")
+                })?;
+            if rule_components.starts_with(overridden_path) {
+                for rule in rules {
+                    self.check_execution_time()?;
+                    self.processed.insert(rule.clone());
+                    self.memory_check()?;
+                }
+            }
+        }
+        for (rule_path, rules) in &compiled_policy.default_rules {
+            self.check_execution_time()?;
+            let rule_components = compiled_policy
+                .rule_path_components
+                .get(rule_path)
+                .ok_or_else(|| {
+                    anyhow!("missing components for registered default rule path {rule_path}")
+                })?;
+            if rule_components.starts_with(overridden_path) {
+                for (rule, _) in rules {
+                    self.check_execution_time()?;
+                    self.processed.insert(rule.clone());
+                    self.memory_check()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn apply_with_modifiers(&mut self, stmt: &LiteralStmt) -> Result<(Option<State>, bool)> {
         if !stmt.with_mods.is_empty() {
             // Save state;
@@ -1239,111 +1351,172 @@ impl Interpreter {
             let with_functions = self.with_functions.clone();
             let rule_values = self.rule_values.clone();
 
-            self.processed.clear();
             let processed_paths =
                 core::mem::replace(&mut self.processed_paths, Value::new_object());
+            let mut inherited_overrides: Vec<Vec<String>> = Vec::new();
+            let inherited_paths = match self.copy_explicit_data_with_override_markers(
+                &processed_paths,
+                &mut Vec::new(),
+                &mut inherited_overrides,
+            ) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    self.processed_paths = processed_paths;
+                    return Err(error);
+                }
+            };
+            self.processed.clear();
+            self.processed_paths = inherited_paths;
             self.rule_values.clear();
 
-            let mut skip_exec = false;
-            // Apply with modifiers.
-            for wm in &stmt.with_mods {
-                let path = Parser::get_path_ref_components(&wm.refr)?;
-                let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
-                let mut target = path.join(".");
-
-                let mut target_is_function = self.lookup_function_by_name(&target).is_some()
-                    || Self::is_builtin(wm.refr.span(), &target);
-
-                if !target_is_function
-                    && !target.starts_with("data.")
-                    && !target.starts_with("input.")
-                    && target != "input"
-                {
-                    // target must be a function.
-                    if self.lookup_function_by_name(&target).is_none()
-                        && !Self::is_builtin(wm.refr.span(), &target)
-                    {
-                        // Prefix target with current module path.
-                        target = format!("{}.{}", self.current_module_path, target);
-                        if self.lookup_function_by_name(&target).is_none() {
-                            bail!(wm.refr.span().error("undefined rule"));
-                        }
-                        target_is_function = true;
-                    }
+            let saved_state = Some((
+                with_document,
+                input,
+                data,
+                processed,
+                processed_paths,
+                with_functions,
+                rule_values,
+            ));
+            let apply_result = (|| -> Result<bool> {
+                let mut skip_exec = false;
+                for overridden_path in &inherited_overrides {
+                    self.suppress_rules_under_data_override(overridden_path)?;
                 }
+                // Apply with modifiers.
+                for wm in &stmt.with_mods {
+                    let mut path = get_rule_path_components(&wm.refr)?;
 
-                if target_is_function {
-                    match self.eval_expr(&wm.r#as) {
-                        Ok(v) if v != Value::Undefined => {
-                            // Function replaced by value.
-                            self.with_functions
-                                .insert(target, FunctionModifier::Value(v));
+                    // Matching OPA, a leading import alias is rewritten before
+                    // any lookups: functions register as overrides below,
+                    // anything else becomes a data override. Only the alias
+                    // component is replaced so bracketed keys containing dots
+                    // survive the rewrite.
+                    let rewritten: Option<Vec<PathComponent>> = match path.split_first() {
+                        Some((PathComponent::String(head), rest)) if head.as_str() != "data" => {
+                            self.lookup_import(head).and_then(|import_expr| {
+                                // Use the import target's parsed components, not
+                                // its dot-joined string, so bracketed keys
+                                // containing dots survive in the import path too.
+                                let comps = get_rule_path_components(import_expr).ok()?;
+                                Some(comps.into_iter().chain(rest.iter().cloned()).collect())
+                            })
                         }
-                        _ => {
-                            // Function replaced by another function.
-                            // Lookup by with current module path prefixed.
-                            let mut function_path =
-                                get_path_string(&wm.r#as, Some(&self.current_module_path))?;
-                            if self.lookup_function_by_name(&function_path).is_none() {
-                                // Lookup without current module path prefixed.
-                                function_path = get_path_string(&wm.r#as, None)?;
-                                if self.lookup_function_by_name(&function_path).is_none()
-                                    && !Self::is_builtin(wm.r#as.span(), &function_path)
-                                {
-                                    // bail!(wm.r#as.span().error("could not evaluate expression"));
-                                    skip_exec = true;
-                                }
+                        _ => None,
+                    };
+                    if let Some(new_path) = rewritten {
+                        path = new_path;
+                    }
+                    let mut target = format_path_components(&path)?;
+
+                    let mut target_is_function = self.lookup_function_by_name(&target).is_some()
+                        || Self::is_builtin(wm.refr.span(), &target);
+
+                    let root = path.first().map(PathComponent::value).unwrap_or_default();
+                    if !target_is_function && root != "data" && root != "input" {
+                        // target must be a function.
+                        if self.lookup_function_by_name(&target).is_none()
+                            && !Self::is_builtin(wm.refr.span(), &target)
+                        {
+                            // Prefix target with current module path.
+                            target = format!("{}.{}", self.current_module_path, target);
+                            if self.lookup_function_by_name(&target).is_none() {
+                                bail!(wm.refr.span().error("undefined rule"));
                             }
-                            self.with_functions
-                                .insert(target, FunctionModifier::Function(function_path));
+                            target_is_function = true;
                         }
                     }
-                } else {
-                    let value = self.eval_expr(&wm.r#as)?;
-                    skip_exec = value == Value::Undefined;
-                    let Some(first) = path.first() else {
-                        bail!(wm.refr.span().error("empty path in with modifier"));
-                    };
-                    if *first == "input" || *first == "data" {
-                        // Override existing values in case of conflict.
-                        let mut obj = &mut self.with_document;
-                        for p in &path {
-                            if !matches!(obj, Value::Object(_)) {
-                                *obj = Value::new_object();
-                            }
 
-                            obj = obj
-                                .as_object_mut()?
-                                .entry(Value::String(p.to_string().into()))
-                                .or_insert(Value::new_object());
-                        }
-                        *obj = value;
-                        // Mark modified rules as processed.
-                        if let Some(rules) = self.compiled_policy.rules.get(&target) {
-                            for r in rules {
-                                self.processed.insert(r.clone());
+                    if target_is_function {
+                        match self.eval_expr(&wm.r#as) {
+                            Err(error) if is_evaluation_limit_error(&error) => return Err(error),
+                            Ok(v) if v != Value::Undefined => {
+                                // Function replaced by value.
+                                self.with_functions
+                                    .insert(target, FunctionModifier::Value(v));
+                            }
+                            _ => {
+                                // Function replaced by another function.
+                                // Lookup by with current module path prefixed.
+                                let mut function_path =
+                                    get_path_string(&wm.r#as, Some(&self.current_module_path))?;
+                                if self.lookup_function_by_name(&function_path).is_none() {
+                                    // Lookup without current module path prefixed.
+                                    function_path = get_path_string(&wm.r#as, None)?;
+                                    if self.lookup_function_by_name(&function_path).is_none() {
+                                        // Resolve an aliased replacement before builtins.
+                                        let resolved = self
+                                            .resolve_fcn_path_through_imports(&function_path)
+                                            .filter(|r| {
+                                                self.compiled_policy.functions.contains_key(r)
+                                            });
+                                        if let Some(resolved) = resolved {
+                                            function_path = resolved;
+                                        } else if !Self::is_builtin(wm.r#as.span(), &function_path)
+                                        {
+                                            // bail!(wm.r#as.span().error("could not evaluate expression"));
+                                            skip_exec = true;
+                                        }
+                                    }
+                                }
+                                self.with_functions
+                                    .insert(target, FunctionModifier::Function(function_path));
                             }
                         }
                     } else {
-                        bail!(wm.refr.span().error("not a valid target for with modifier"));
+                        let value = self.eval_expr(&wm.r#as)?;
+                        skip_exec = value == Value::Undefined;
+                        let Some(first) = path.first() else {
+                            bail!(wm.refr.span().error("empty path in with modifier"));
+                        };
+                        if first.value() == "input" || first.value() == "data" {
+                            // Override existing values in case of conflict.
+                            let mut obj = &mut self.with_document;
+                            for component in &path {
+                                if !matches!(obj, Value::Object(_)) {
+                                    *obj = Value::new_object();
+                                }
+
+                                obj = obj.as_object_mut()?.get_or_insert_with(
+                                    Value::String(component.value().to_string().into()),
+                                    Value::new_object,
+                                );
+                            }
+                            *obj = value;
+
+                            if first.value() == "data" {
+                                let overridden_path: Vec<String> = path
+                                    .iter()
+                                    .map(|component| component.value().to_string())
+                                    .collect();
+                                let (_, overridden_subtree) = overridden_path
+                                    .split_first()
+                                    .ok_or_else(|| anyhow!("empty path in with modifier"))?;
+                                self.mark_data_with_override(
+                                    &overridden_subtree
+                                        .iter()
+                                        .map(String::as_str)
+                                        .collect::<Vec<_>>(),
+                                )?;
+                                self.suppress_rules_under_data_override(&overridden_path)?;
+                            }
+                        } else {
+                            bail!(wm.refr.span().error("not a valid target for with modifier"));
+                        }
                     }
                 }
-            }
 
-            self.data = self.with_document["data"].clone();
-            self.input = self.with_document["input"].clone();
-            Ok((
-                Some((
-                    with_document,
-                    input,
-                    data,
-                    processed,
-                    processed_paths,
-                    with_functions,
-                    rule_values,
-                )),
-                skip_exec,
-            ))
+                self.data = self.with_document["data"].clone();
+                self.input = self.with_document["input"].clone();
+                Ok(skip_exec)
+            })();
+            match apply_result {
+                Ok(skip_exec) => Ok((saved_state, skip_exec)),
+                Err(error) => {
+                    self.restore_state(saved_state)?;
+                    Err(error)
+                }
+            }
         } else {
             Ok((None, false))
         }
@@ -1364,10 +1537,10 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_stmt(&mut self, stmt: &LiteralStmt, stmts: &[&LiteralStmt]) -> Result<bool> {
+    fn eval_stmt(&mut self, stmt: &LiteralStmt) -> Result<bool> {
         let (saved_state, skip_exec) = self.apply_with_modifiers(stmt)?;
         let r = if !skip_exec {
-            self.eval_stmt_impl(stmt, stmts)
+            self.eval_stmt_impl(stmt)
         } else {
             Ok(false)
         };
@@ -1384,53 +1557,25 @@ impl Interpreter {
         }
     }
 
-    fn eval_stmts_in_loop(
+    fn eval_loop_collection(
         &mut self,
-        stmts: &[&LiteralStmt],
-        loops: &[HoistedLoop],
-    ) -> Result<bool> {
-        self.memory_check()?;
-        self.check_execution_time()?;
-        if loops.is_empty() {
-            if let Some((first_stmt, tail_stmts)) = stmts.split_first() {
-                // Evaluate the current statement whose loop expressions have been hoisted.
-                if self.eval_stmt(first_stmt, tail_stmts)? {
-                    if !matches!(&first_stmt.literal, Literal::SomeIn { .. }) {
-                        self.eval_stmts(tail_stmts)
-                    } else {
-                        Ok(true)
-                    }
-                } else {
-                    Ok(false)
-                }
-            } else {
-                self.eval_stmts(stmts)
-            }
-        } else {
-            let (loop_info, loop_tail) = loops
-                .split_first()
-                .ok_or_else(|| anyhow!("internal error: expected loop info"))?;
-            let (first_stmt, _tail_stmts) = stmts
-                .split_first()
-                .ok_or_else(|| anyhow!("internal error: expected statements for loop"))?;
-            let mut result = false;
-
-            // Apply with modifiers before evaluating the loop expression.
-            let (saved_state, _) = self.apply_with_modifiers(first_stmt)?;
-
-            let collection_expr = Self::loop_collection_expr(loop_info).clone();
-            let loop_value = if let Expr::Call {
+        stmt: &LiteralStmt,
+        collection_expr: &ExprRef,
+    ) -> Result<Value> {
+        let (saved_state, _) = self.apply_with_modifiers(stmt)?;
+        // Include argument preparation in the captured result: no fallible exit
+        // after applying WITH may bypass restoration of the complete State.
+        let result = (|| {
+            if let Expr::Call {
                 span, fcn, params, ..
             } = collection_expr.as_ref()
             {
-                // Handle walk(obj, output_param)
                 let extra_arg = get_extra_arg(
-                    &collection_expr,
+                    collection_expr,
                     Some(self.current_module_path.as_str()),
                     &self.compiled_policy.functions,
                 );
-                // If there is an extra arg, ignore it while computing the loop value.
-                let params_slice: &[ExprRef] = if extra_arg.is_some() {
+                let params_slice = if extra_arg.is_some() {
                     let (_, prefix) = params
                         .split_last()
                         .ok_or_else(|| anyhow!("internal error: expected params"))?;
@@ -1438,184 +1583,106 @@ impl Interpreter {
                 } else {
                     params.as_slice()
                 };
-                self.eval_call_impl(span, &collection_expr, fcn, params_slice)?
+                self.eval_call_impl(span, collection_expr, fcn, params_slice)
             } else {
-                self.eval_expr(&collection_expr)?
-            };
-
-            // Restore with modifiers.
-            // TODO: Delay this restore so that the stmt doesn't have to apply with modifiers again.
-            self.restore_state(saved_state)?;
-
-            // If the loop's index variable h<as already been assigned a value
-            // (this can happen if the same index is used for two different collections),
-            // then evaluate statements only if the index applies to this collection.
-            if let Some(walk_plan) = self.get_walk_binding_plan(loop_info)? {
-                let loop_target_expr = Self::loop_assignment_expr(loop_info);
-                self.scopes.push(Scope::default());
-
-                let query_result = self.get_current_context()?.result.clone();
-
-                let mut walk_result = false;
-                match loop_value {
-                    Value::Array(items) => {
-                        for item in items.iter() {
-                            self.memory_check()?;
-                            self.set_loop_var_value(loop_target_expr, item.clone())?;
-
-                            if self.execute_destructuring_plan(&walk_plan, item)?
-                                == Value::from(true)
-                            {
-                                walk_result =
-                                    self.eval_stmts_in_loop(stmts, loop_tail)? || walk_result;
-                            }
-
-                            Self::clear_scope(self.current_scope_mut()?);
-                            if let Some(ctx) = self.contexts.last_mut() {
-                                ctx.result.clone_from(&query_result);
-                                if ctx.early_return {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Value::Undefined => (),
-                    other => {
-                        let span = Self::loop_span(loop_info);
-                        bail!(span
-                            .error(format!("walk expected array result, got `{other}`").as_str()));
-                    }
-                }
-
-                self.scopes.pop();
-                self.remove_loop_var_value(loop_target_expr);
-                return Ok(walk_result);
+                self.eval_expr(collection_expr)
             }
+        })();
+        self.restore_state(saved_state)?;
+        result
+    }
 
-            let index_expr = Self::loop_index_expr(loop_info);
-            if let Some(Expr::Var {
-                span: index_var, ..
-            }) = index_expr.map(|r| r.as_ref())
-            {
-                if let Some(idx) = self.lookup_local_var(&index_var.source_str()) {
-                    if loop_value[&idx] != Value::Undefined {
-                        result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
-                        return Ok(result);
-                    } else if idx != Value::Undefined {
-                        // The index is not valid for this collection.
-                        return Ok(false);
-                    }
-                }
-            }
-
-            let index_plan = if let Some(index) = index_expr {
-                let module_idx = self.current_module_index;
-                let expr_idx = index.as_ref().eidx();
-                let plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
-                    .get_expr_binding_plan(module_idx, expr_idx)
-                    .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?;
-
-                match plan.cloned() {
-                    Some(BindingPlan::LoopIndex {
-                        destructuring_plan, ..
-                    }) => destructuring_plan,
-                    Some(other_plan) => {
-                        bail!(
-                            "internal error: expected LoopIndex for loop index expression, got {:?}",
-                            other_plan
-                        );
-                    }
-                    None => {
-                        bail!("internal error: no binding plan found for loop index expression");
-                    }
-                }
-            } else {
-                bail!("internal error: no binding plan found for loop index expression");
-            };
-
-            // Create a new scope.
-            self.scopes.push(Scope::default());
-
-            let query_result = self.get_current_context()?.result.clone();
-            let loop_target_expr = Self::loop_assignment_expr(loop_info);
-            match loop_value {
-                Value::Array(items) => {
-                    for (idx, v) in items.iter().enumerate() {
-                        self.memory_check()?;
-                        self.set_loop_var_value(loop_target_expr, v.clone())?;
-
-                        if self.execute_destructuring_plan(&index_plan, &Value::from(idx))?
-                            == Value::from(true)
-                        {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
-                        }
-
-                        Self::clear_scope(self.current_scope_mut()?);
-                        if let Some(ctx) = self.contexts.last_mut() {
-                            ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
-                                break;
-                            }
-                        }
-                    }
-
-                    self.remove_loop_var_value(loop_target_expr);
-                }
-                Value::Set(items) => {
-                    for v in items.iter() {
-                        self.memory_check()?;
-                        self.set_loop_var_value(loop_target_expr, v.clone())?;
-
-                        // For sets, index is also the value.
-                        if self.execute_destructuring_plan(&index_plan, v)? == Value::from(true) {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
-                        }
-
-                        Self::clear_scope(self.current_scope_mut()?);
-                        if let Some(ctx) = self.contexts.last_mut() {
-                            ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
-                                break;
-                            }
-                        }
-                    }
-                    self.remove_loop_var_value(loop_target_expr);
-                }
-                Value::Object(obj) => {
-                    for (k, v) in obj.iter() {
-                        self.memory_check()?;
-                        self.set_loop_var_value(loop_target_expr, v.clone())?;
-                        // For objects, index is key.
-                        if self.execute_destructuring_plan(&index_plan, k)? == Value::from(true) {
-                            result = self.eval_stmts_in_loop(stmts, loop_tail)? || result;
-                        }
-
-                        Self::clear_scope(self.current_scope_mut()?);
-                        if let Some(ctx) = self.contexts.last_mut() {
-                            ctx.result.clone_from(&query_result);
-                            if ctx.early_return {
-                                break;
-                            }
-                        }
-                    }
-                    self.remove_loop_var_value(loop_target_expr);
-                }
-                Value::Undefined => {
-                    result = false;
-                }
-                _ => {
-                    // The item is not a collection.
-                    result = false;
-                }
-            }
-
-            self.scopes.pop();
-
-            // Return true if at least on iteration returned true
-            Ok(result)
+    fn reset_statement_iteration(&mut self, frame: &StatementLoop<'_>) -> Result<()> {
+        if let Some(scope) = &frame.saved_scope {
+            self.current_scope_mut()?.clone_from(scope);
+        } else {
+            Self::clear_scope(self.current_scope_mut()?);
+            self.get_current_context_mut()?
+                .result
+                .clone_from(&frame.query_result);
         }
+        Ok(())
+    }
+
+    fn next_statement_iteration(
+        &mut self,
+        frame: &mut StatementLoop<'_>,
+        branch_success: bool,
+    ) -> Result<bool> {
+        if frame.started {
+            frame.success |= branch_success;
+            self.reset_statement_iteration(frame)?;
+            if self.get_current_context()?.early_return
+                && (frame.saved_scope.is_none() || branch_success)
+            {
+                return Ok(false);
+            }
+        } else if let Some(scope) = &frame.saved_scope {
+            self.current_scope_mut()?.clone_from(scope);
+        }
+        loop {
+            self.memory_check()?;
+            self.check_execution_time()?;
+            let Some((key, value)) = frame.cursor.next() else {
+                return Ok(false);
+            };
+            if let Some(target) = &frame.target {
+                self.set_loop_var_value(target, value.clone())?;
+            }
+            let key_matches = match &frame.key_plan {
+                Some(plan) => self.execute_destructuring_plan(plan, &key)? == Value::Bool(true),
+                None => true,
+            };
+            let value_matches = key_matches
+                && match &frame.value_plan {
+                    Some(plan) => {
+                        self.execute_destructuring_plan(plan, &value)? == Value::Bool(true)
+                    }
+                    None => true,
+                };
+            if value_matches {
+                frame.started = true;
+                return Ok(true);
+            }
+            self.reset_statement_iteration(frame)?;
+        }
+    }
+
+    fn finish_statement_loop(&mut self, frame: StatementLoop<'_>) -> Result<()> {
+        let scope_result = if let Some(scope) = frame.saved_scope {
+            self.current_scope_mut().map(|current| *current = scope)
+        } else {
+            self.scopes
+                .pop()
+                .map(|_| ())
+                .ok_or_else(|| anyhow!("internal error: no statement loop scope to restore"))
+        };
+        let cache_result = if let Some(target) = frame.target {
+            if let Some(value) = frame.previous_loop_value {
+                self.set_loop_var_value(&target, value)
+            } else {
+                self.remove_loop_var_value(&target);
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
+        let state_result = self.restore_state(frame.saved_state);
+        merge_statement_cleanup(
+            merge_statement_cleanup(scope_result, cache_result),
+            state_result,
+        )
+    }
+
+    fn finish_statement_loops(
+        &mut self,
+        mut frames: Vec<StatementLoop<'_>>,
+        mut result: Result<bool>,
+    ) -> Result<bool> {
+        while let Some(frame) = frames.pop() {
+            result = merge_statement_cleanup(result, self.finish_statement_loop(frame));
+        }
+        result
     }
 
     fn eval_rule_ref(&mut self, rule_refr: &ExprRef) -> Result<Vec<Value>> {
@@ -1685,8 +1752,7 @@ impl Interpreter {
                     let set = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                        .entry(p)
-                        .or_insert(Value::new_set())
+                        .get_or_insert_with(p, Value::new_set)
                         .as_set_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not a set")))?;
                     set.append(value.as_set_mut()?);
@@ -1694,20 +1760,13 @@ impl Interpreter {
                     let obj = obj
                         .as_object_mut()
                         .map_err(|_| anyhow!(span.error("previous value is not an object")))?;
-                    match obj.entry(p) {
-                        BTreeMapEntry::Vacant(v) => {
-                            if value != Value::Undefined {
-                                v.insert(value);
-                            } else {
-                                // TODO: clean this assumption between Undefined vs Object.
-                                v.insert(Value::new_object());
-                            }
-                        }
-                        BTreeMapEntry::Occupied(o) => {
-                            if o.get() != &value && value != Value::Undefined {
-                                bail!(span
-                                    .error("complete rules should not produce multiple outputs"))
-                            }
+                    if value == Value::Undefined {
+                        // TODO: clean this assumption between Undefined vs Object.
+                        obj.get_or_insert_with(p, Value::new_object);
+                    } else {
+                        let existing = obj.get_or_insert_with(p, || value.clone());
+                        if *existing != value {
+                            bail!(span.error("complete rules should not produce multiple outputs"))
                         }
                     }
                 }
@@ -1716,8 +1775,7 @@ impl Interpreter {
                 obj = obj
                     .as_object_mut()
                     .map_err(|_| anyhow!(span.error("previous value is not an object")))?
-                    .entry(p)
-                    .or_insert(Value::new_object());
+                    .get_or_insert_with(p, Value::new_object);
             }
         }
         Ok(())
@@ -1762,6 +1820,10 @@ impl Interpreter {
     }
 
     fn eval_output_expr_in_loop(&mut self, loops: &[HoistedLoop]) -> Result<bool> {
+        self.with_native_depth(|this| this.eval_output_expr_in_loop_impl(loops))
+    }
+
+    fn eval_output_expr_in_loop_impl(&mut self, loops: &[HoistedLoop]) -> Result<bool> {
         self.check_execution_time()?;
         if loops.is_empty() {
             let (key_expr, output_expr) = self.get_exprs_from_context()?;
@@ -1785,6 +1847,7 @@ impl Interpreter {
 
                 let mut comps = self.eval_rule_ref(&rule_ref)?;
                 if let Some(ke) = &key_expr {
+                    is_const_rule = is_const_rule && Self::is_simple_literal(ke)?;
                     comps.push(self.eval_expr(ke)?);
                 }
                 let output = if let Some(oe) = &output_expr {
@@ -1824,8 +1887,7 @@ impl Interpreter {
                     let set = ctx_mut
                         .rule_value
                         .as_object_mut()?
-                        .entry(Value::from_array(comps))
-                        .or_insert(Value::new_set());
+                        .get_or_insert_with(Value::from_array(comps), Value::new_set);
                     if output != Value::Undefined {
                         set.as_set_mut()?.insert(output);
                         return Ok(true);
@@ -1834,22 +1896,13 @@ impl Interpreter {
                 }
 
                 // Non-set rule.
-                match ctx_mut
-                    .rule_value
-                    .as_object_mut()?
-                    .entry(Value::from_array(comps))
-                {
-                    BTreeMapEntry::Vacant(v) => {
-                        v.insert(output);
-                    }
-                    BTreeMapEntry::Occupied(o) if o.get() != &output => {
-                        bail!(rule_ref
-                            .span()
-                            .error("rules must not produce multiple outputs"))
-                    }
-                    _ => {
-                        // Rule produced same value.
-                    }
+                let key = Value::from_array(comps);
+                let obj_mut = ctx_mut.rule_value.as_object_mut()?;
+                let existing = obj_mut.get_or_insert_with(key, || output.clone());
+                if *existing != output {
+                    bail!(rule_ref
+                        .span()
+                        .error("rules must not produce multiple outputs"));
                 }
 
                 return Ok(true);
@@ -1870,10 +1923,10 @@ impl Interpreter {
                                     span.line,
                                     span.col,
                                     format!(
-                                        "value for key `{}` generated multiple times: `{}` and `{}`",
-                                        serde_json::to_string_pretty(&key).map_err(anyhow::Error::msg)?,
-                                        serde_json::to_string_pretty(&pv).map_err(anyhow::Error::msg)?,
-                                        serde_json::to_string_pretty(&value).map_err(anyhow::Error::msg)?,
+					"value for key `{}` generated multiple times: `{}` and `{}`",
+					serde_json::to_string_pretty(&key).map_err(anyhow::Error::msg)?,
+					serde_json::to_string_pretty(&pv).map_err(anyhow::Error::msg)?,
+					serde_json::to_string_pretty(&value).map_err(anyhow::Error::msg)?,
                                     )
                                     .as_str(),
                                 ));
@@ -2007,8 +2060,7 @@ impl Interpreter {
         // Get pre-computed loops for key expression
         if let Some(ke) = &key_expr {
             match self
-                .compiled_policy
-                .loop_hoisting_table
+                .loop_hoisting_table(self.current_module_index)
                 .get_expr_loops(self.current_module_index, ke.as_ref().eidx())
                 .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
             {
@@ -2024,8 +2076,7 @@ impl Interpreter {
         // Get pre-computed loops for output expression
         if let Some(oe) = &output_expr {
             match self
-                .compiled_policy
-                .loop_hoisting_table
+                .loop_hoisting_table(self.current_module_index)
                 .get_expr_loops(self.current_module_index, oe.as_ref().eidx())
                 .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
             {
@@ -2047,85 +2098,238 @@ impl Interpreter {
     }
 
     fn eval_stmts(&mut self, stmts: &[&LiteralStmt]) -> Result<bool> {
-        let mut eval_success = true;
+        self.with_native_depth(|this| this.eval_stmts_impl(stmts))
+    }
 
-        for (idx, stmt) in stmts.iter().enumerate() {
-            self.memory_check()?;
-
-            if !eval_success {
-                break;
-            }
-
-            // Get pre-computed hoisted loops from compilation phase
-            let loop_exprs: Vec<HoistedLoop> = match self
-                .compiled_policy
-                .loop_hoisting_table
+    fn statement_position<'a>(
+        &self,
+        stmts: &'a [&'a LiteralStmt],
+    ) -> Result<StatementPosition<'a>> {
+        let loops = if let Some(stmt) = stmts.first() {
+            self
+                .loop_hoisting_table(self.current_module_index)
                 .get_statement_loops(self.current_module_index, stmt.sidx)
                 .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
-            {
-                Some(hoisted_loops) => {
-                    // Use pre-computed loops from compilation phase
-                    hoisted_loops.clone()
-                }
-                None => {
-                    // Loop hoisting should have been done during compilation
-                    // If we reach here, it means the hoisting pass didn't process this statement
-                    bail!(stmt.span.error("Loop hoisting information not found for statement. This is likely a bug in the compilation phase."));
-                }
-            };
-
-            if !loop_exprs.is_empty() {
-                // If there are hoisted loop expressions, execute subsequent statements
-                // within loops.
-                let remaining = stmts.get(idx..).unwrap_or(&[]);
-                return self.eval_stmts_in_loop(remaining, &loop_exprs[..]);
-            }
-
-            let tail = idx
-                .checked_add(1)
-                .and_then(|n| stmts.get(n..))
-                .unwrap_or(&[]);
-
-            eval_success = self.eval_stmt(stmt, tail)?;
-
-            if matches!(&stmt.literal, Literal::SomeIn { .. }) {
-                return Ok(eval_success);
-            }
-        }
-
-        if eval_success {
-            eval_success = self.eval_output_expr()?;
+                .cloned()
+                .ok_or_else(|| stmt.span.error("Loop hoisting information not found for statement. This is likely a bug in the compilation phase."))?
         } else {
-            // If a query snippet is being run, gather results.
-            let result_opt = {
-                let ctx = self.get_current_context_mut()?;
-                ctx.result.clone()
-            };
+            Vec::new()
+        };
+        Ok(StatementPosition {
+            stmts,
+            loops: (!loops.is_empty()).then(|| Rc::new(loops)),
+            next_loop: 0,
+        })
+    }
 
-            if let Some(mut gathered_result) = result_opt {
-                if let Some(scope) = self.scopes.last() {
-                    for (name, value) in scope.iter() {
-                        gathered_result
-                            .bindings
-                            .as_object_mut()?
-                            .insert(Value::String(name.to_string().into()), value.clone());
-                    }
-                }
-
-                if gathered_result.expressions.len() == 1 // Single expression query
-                    || gathered_result // Multi expression query where no value is false
+    fn begin_some_in<'a>(
+        &mut self,
+        stmt: &LiteralStmt,
+        tail: &'a [&'a LiteralStmt],
+        collection: &ExprRef,
+    ) -> Result<Option<StatementLoop<'a>>> {
+        let (saved_state, skip_exec) = self.apply_with_modifiers(stmt)?;
+        if skip_exec {
+            self.restore_state(saved_state)?;
+            return Ok(None);
+        }
+        let result = (|| {
+            if let Some(result) = &mut self.get_current_context_mut()?.result {
+                result
                     .expressions
-                    .iter()
-                    .all(|v| v.value != Value::Undefined && v.value != Value::Bool(false))
-                        && !gathered_result.expressions.is_empty()
-                {
-                    let ctx = self.get_current_context_mut()?;
-                    ctx.results.result.push(gathered_result);
-                }
+                    .push(Self::make_expression_result(&stmt.span, &Value::Bool(true)));
+            }
+            let saved_scope = Some(self.current_scope()?.clone());
+            let module_idx = self.current_module_index;
+            let Some(BindingPlan::SomeIn {
+                key_plan,
+                value_plan,
+                ..
+            }) = self
+                .loop_hoisting_table(module_idx)
+                .get_expr_binding_plan(module_idx, collection.eidx())
+                .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
+                .cloned()
+            else {
+                bail!("internal error: missing binding plan for some..in expression");
+            };
+            let value = self.eval_expr(collection)?;
+            if !matches!(
+                value,
+                Value::Array(_) | Value::Set(_) | Value::Object(_) | Value::Undefined
+            ) {
+                bail!(collection.span().error(
+                    format!("`some .. in collection` expects array/set/object. Got `{value}`")
+                        .as_str()
+                ));
+            }
+            Ok(StatementLoop {
+                position: self.statement_position(tail)?,
+                cursor: statement_cursor(value, &mut || {
+                    self.memory_check()?;
+                    self.check_execution_time()
+                })?,
+                key_plan,
+                value_plan: Some(value_plan),
+                target: None,
+                previous_loop_value: None,
+                saved_scope,
+                query_result: None,
+                saved_state: None,
+                started: false,
+                success: false,
+            })
+        })();
+        match result {
+            Ok(mut frame) => {
+                frame.saved_state = saved_state;
+                Ok(Some(frame))
+            }
+            Err(error) => {
+                self.restore_state(saved_state)?;
+                Err(error)
             }
         }
+    }
 
-        Ok(eval_success)
+    fn gather_failed_statement_result(&mut self) -> Result<()> {
+        if let Some(mut result) = self.get_current_context()?.result.clone() {
+            if let Some(scope) = self.scopes.last() {
+                for (name, value) in scope {
+                    result
+                        .bindings
+                        .as_object_mut()?
+                        .insert(Value::String(name.to_string().into()), value.clone());
+                }
+            }
+            if result.expressions.len() == 1
+                || !result.expressions.is_empty()
+                    && result
+                        .expressions
+                        .iter()
+                        .all(|v| v.value != Value::Undefined && v.value != Value::Bool(false))
+            {
+                self.get_current_context_mut()?.results.result.push(result);
+            }
+        }
+        Ok(())
+    }
+
+    fn eval_stmts_impl(&mut self, stmts: &[&LiteralStmt]) -> Result<bool> {
+        let mut position = Some(self.statement_position(stmts)?);
+        let mut frames = Vec::new();
+        let result = (|| {
+            let mut success = false;
+            loop {
+                self.memory_check()?;
+                self.check_execution_time()?;
+                if let Some(mut current) = position.take() {
+                    let Some((stmt, tail)) = current.stmts.split_first() else {
+                        success = self.eval_output_expr()?;
+                        continue;
+                    };
+                    if let Some(loop_info) = current
+                        .loops
+                        .as_ref()
+                        .and_then(|loops| loops.get(current.next_loop))
+                    {
+                        let loop_value =
+                            self.eval_loop_collection(stmt, Self::loop_collection_expr(loop_info))?;
+                        let walk_plan = self.get_walk_binding_plan(loop_info)?;
+                        let index_expr = Self::loop_index_expr(loop_info);
+                        if walk_plan.is_none() {
+                            if let Some(Expr::Var { span, .. }) = index_expr.map(|e| e.as_ref()) {
+                                if let Some(index) = self.lookup_local_var(&span.source_str()) {
+                                    if loop_value[&index] != Value::Undefined {
+                                        current.next_loop = current.next_loop.saturating_add(1);
+                                        position = Some(current);
+                                        continue;
+                                    } else if index != Value::Undefined {
+                                        success = false;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        let (key_plan, value_plan) = if let Some(plan) = walk_plan {
+                            if !matches!(loop_value, Value::Array(_) | Value::Undefined) {
+                                bail!(Self::loop_span(loop_info).error(
+                                    format!("walk expected array result, got `{loop_value}`")
+                                        .as_str()
+                                ));
+                            }
+                            (None, Some(plan))
+                        } else {
+                            let index = index_expr.ok_or_else(|| {
+                                anyhow!("internal error: no binding plan found for loop index expression")
+                            })?;
+                            let Some(BindingPlan::LoopIndex {
+                                destructuring_plan, ..
+                            }) = self
+                                .loop_hoisting_table(self.current_module_index)
+                                .get_expr_binding_plan(self.current_module_index, index.eidx())
+                                .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
+                                .cloned()
+                            else {
+                                bail!("internal error: expected LoopIndex binding plan");
+                            };
+                            (Some(destructuring_plan), None)
+                        };
+                        let target = Self::loop_assignment_expr(loop_info).clone();
+                        let previous_loop_value = self.get_loop_var_value(&target)?.cloned();
+                        let query_result = self.get_current_context()?.result.clone();
+                        current.next_loop = current.next_loop.saturating_add(1);
+                        frames.push(StatementLoop {
+                            position: current,
+                            cursor: statement_cursor(loop_value, &mut || {
+                                self.memory_check()?;
+                                self.check_execution_time()
+                            })?,
+                            key_plan,
+                            value_plan,
+                            target: Some(target),
+                            previous_loop_value,
+                            saved_scope: None,
+                            query_result,
+                            saved_state: None,
+                            started: false,
+                            success: false,
+                        });
+                        self.scopes.push(Scope::default());
+                        continue;
+                    }
+                    if let Literal::SomeIn { collection, .. } = &stmt.literal {
+                        if let Some(frame) = self.begin_some_in(stmt, tail, collection)? {
+                            frames.push(frame);
+                        }
+                        success = false;
+                    } else if self.eval_stmt(stmt)? {
+                        position = Some(self.statement_position(tail)?);
+                    } else {
+                        success = false;
+                        if current.loops.is_none() {
+                            self.gather_failed_statement_result()?;
+                        }
+                    }
+                    continue;
+                }
+                // A branch finished (or a new loop needs its first item).
+                // Resume the closest choice point without calling eval_stmts
+                // again, regardless of the number of sequential statements.
+                let Some(frame) = frames.last_mut() else {
+                    return Ok(success);
+                };
+                if self.next_statement_iteration(frame, success)? {
+                    position = Some(frame.position.clone());
+                } else if let Some(completed_frame) = frames.pop() {
+                    success = completed_frame.success;
+                    self.finish_statement_loop(completed_frame)?;
+                }
+            }
+        })();
+        // On error, unwind in exactly the same order as recursive WITH/scope
+        // lifetimes, including failures while preparing a later collection.
+        self.finish_statement_loops(frames, result)
     }
 
     fn eval_query(&mut self, query: &Ref<Query>) -> Result<bool> {
@@ -2373,6 +2577,8 @@ impl Interpreter {
     fn lookup_function_by_name(&self, path: &str) -> Option<(&Vec<Ref<Rule>>, &Ref<Module>)> {
         let mut path = path.to_owned();
         if !path.starts_with("data.") {
+            // `path` is already a canonical Rego path; its first component is an
+            // identifier, so the separator here cannot flatten a string key.
             path = format!("{}.{}", self.current_module_path, path);
         }
 
@@ -2380,6 +2586,64 @@ impl Interpreter {
             Some((f, _, m)) => Some((f, m)),
             _ => None,
         }
+    }
+
+    /// Look up the import of the current module with the given alias, e.g.
+    /// the `data.a.b` import expression for `b` after `import data.a.b`.
+    fn lookup_import(&self, alias: &str) -> Option<&Ref<Expr>> {
+        if self.compiled_policy.imports.is_empty() {
+            return None;
+        }
+        let import_key = append_path_component(&self.current_module_path, alias).ok()?;
+        self.compiled_policy.imports.get(&import_key)
+    }
+
+    /// Rewrite a path whose leading component is an import alias of the
+    /// current module to the import's target, e.g. `b.f` to `data.a.b.f`
+    /// after `import data.a.b`.
+    fn rewrite_path_through_imports(&self, path: &str) -> Option<String> {
+        if self.compiled_policy.imports.is_empty() {
+            return None;
+        }
+        let (alias, suffix) = split_canonical_path_root(path)?;
+        if alias == "data" {
+            return None;
+        }
+        let import = self.lookup_import(alias)?;
+        let mut target_path = get_path_string(import.as_ref(), None).ok()?;
+        target_path.push_str(suffix);
+        Some(target_path)
+    }
+
+    /// Rewrite an import-aliased call path to its target, e.g. `b.f(1)` to
+    /// `data.a.b.f` after `import data.a.b`. Resolves only when the target is
+    /// a known function or default function, so an alias whose target defines
+    /// the called function shadows a like-named builtin namespace, while other
+    /// spellings keep their prior meaning (e.g. a builtin call). OPA instead
+    /// rewrites aliases unconditionally and rejects calls to a missing target
+    /// at compile time.
+    fn resolve_fcn_path_through_imports(&self, path: &str) -> Option<String> {
+        let candidate = self.rewrite_path_through_imports(path)?;
+        (self.compiled_policy.functions.contains_key(&candidate)
+            || self.is_default_function(&candidate))
+        .then_some(candidate)
+    }
+
+    /// True if `path` is the exact path of a `default` function rule.
+    /// `default_rules` also indexes every prefix of a rule path, so it cannot
+    /// be consulted alone: `rule_paths` holds only exact rule paths, and the
+    /// non-empty argument list distinguishes functions from value rules.
+    fn is_default_function(&self, path: &str) -> bool {
+        self.compiled_policy.rule_paths.contains(path)
+            && self
+                .compiled_policy
+                .default_rules
+                .get(path)
+                .is_some_and(|rules| {
+                    rules.iter().any(|(rule, _)| {
+                        matches!(rule.as_ref(), Rule::Default { args, .. } if !args.is_empty())
+                    })
+                })
     }
 
     fn eval_builtin_call(
@@ -2410,8 +2674,14 @@ impl Interpreter {
             self.compiled_policy.strict_builtin_errors,
         ) {
             Ok(v) => v,
-            // Ignore errors if we are not evaluating in strict mode.
-            Err(_) if !self.compiled_policy.strict_builtin_errors => return Ok(Value::Undefined),
+            // Resource-limit errors must always propagate, even in non-strict
+            // mode, to prevent `not builtin(...)` from silently flipping to true.
+            Err(e) if !self.compiled_policy.strict_builtin_errors => {
+                if is_evaluation_limit_error(&e) {
+                    return Err(e);
+                }
+                return Ok(Value::Undefined);
+            }
             Err(e) => Err(e)?,
         };
 
@@ -2445,42 +2715,67 @@ impl Interpreter {
         path == "print" || matches!(Self::lookup_builtin(span, path), Ok(Some(_)))
     }
 
-    fn to_printable(value: &Value, s: &mut String) {
-        match value {
-            Value::Array(array) => {
-                s.push('[');
-                for (idx, e) in array.iter().enumerate() {
-                    if idx > 0 {
-                        s.push_str(", ");
-                    }
-                    Self::to_printable(e, s);
-                }
-                s.push(']');
-            }
-            Value::Set(set) => {
-                s.push('{');
-                for (idx, e) in set.iter().enumerate() {
-                    if idx > 0 {
-                        s.push_str(", ");
-                    }
-                    Self::to_printable(e, s);
-                }
-                s.push('}');
-            }
-            Value::Object(map) => {
-                s.push('{');
-                for (idx, (k, entry_value)) in map.iter().enumerate() {
-                    if idx > 0 {
-                        s.push_str(", ");
-                    }
-                    Self::to_printable(k, s);
-                    s.push_str(": ");
-                    Self::to_printable(entry_value, s);
-                }
-                s.push('}');
-            }
-            other => s.push_str(&format!("{other}")),
+    fn to_printable(root: &Value, s: &mut String) -> Result<()> {
+        enum Frame<'a> {
+            Value(&'a Value),
+            Text(&'static str),
+            Array(ArrayIter<'a>, bool),
+            Set(SetIter<'a>, bool),
+            Object(Iter<'a>, bool),
         }
+        let mut pending = vec![Frame::Value(root)];
+        while let Some(frame) = pending.pop() {
+            crate::utils::limits::check_memory_limit_if_needed()?;
+            match frame {
+                Frame::Value(Value::Array(array)) => {
+                    s.push('[');
+                    pending.push(Frame::Array(array.iter(), true));
+                }
+                Frame::Value(Value::Set(set)) => {
+                    s.push('{');
+                    pending.push(Frame::Set(set.iter(), true));
+                }
+                Frame::Value(Value::Object(object)) => {
+                    s.push('{');
+                    pending.push(Frame::Object(object.iter_sorted(), true));
+                }
+                Frame::Value(value) => s.push_str(&format!("{value}")),
+                Frame::Text(text) => s.push_str(text),
+                Frame::Array(mut values, first) => match values.next() {
+                    Some(value) => {
+                        if !first {
+                            s.push_str(", ");
+                        }
+                        pending.push(Frame::Array(values, false));
+                        pending.push(Frame::Value(value));
+                    }
+                    None => s.push(']'),
+                },
+                Frame::Set(mut values, first) => match values.next() {
+                    Some(value) => {
+                        if !first {
+                            s.push_str(", ");
+                        }
+                        pending.push(Frame::Set(values, false));
+                        pending.push(Frame::Value(value));
+                    }
+                    None => s.push('}'),
+                },
+                Frame::Object(mut values, first) => match values.next() {
+                    Some((key, value)) => {
+                        if !first {
+                            s.push_str(", ");
+                        }
+                        pending.push(Frame::Object(values, false));
+                        pending.push(Frame::Value(value));
+                        pending.push(Frame::Text(": "));
+                        pending.push(Frame::Value(key));
+                    }
+                    None => s.push('}'),
+                },
+            }
+        }
+        Ok(())
     }
 
     fn eval_print(&mut self, span: &Span, params: &[ExprRef], args: Vec<Value>) -> Result<Value> {
@@ -2505,7 +2800,7 @@ impl Interpreter {
                 Value::Undefined => msg.push_str("<undefined>"),
                 // Do not print quotes for string values.
                 Value::String(s) => msg.push_str(&format!("{s}")),
-                a => Self::to_printable(&a, &mut msg),
+                a => Self::to_printable(&a, &mut msg)?,
             }
         }
 
@@ -2531,6 +2826,16 @@ impl Interpreter {
         fcn: &ExprRef,
         params: &[ExprRef],
     ) -> Result<Value> {
+        self.with_native_depth(|this| this.eval_call_inner(span, expr, fcn, params))
+    }
+
+    fn eval_call_inner(
+        &mut self,
+        span: &Span,
+        expr: &ExprRef,
+        fcn: &ExprRef,
+        params: &[ExprRef],
+    ) -> Result<Value> {
         self.check_execution_time()?;
         // Return generated values of walk builtin.
         if let Some(v) = self.get_loop_var_value(expr)? {
@@ -2546,6 +2851,13 @@ impl Interpreter {
         for p in params {
             param_values.push(self.eval_expr(p)?);
         }
+
+        // Resolve a leading import alias before the `with` override and builtin
+        // lookups, so an override keyed by the full path reaches aliased calls
+        // and the alias shadows a like-named builtin namespace (matching OPA).
+        let fcn_path = self
+            .resolve_fcn_path_through_imports(&fcn_path)
+            .unwrap_or(fcn_path);
 
         let orig_fcn_path = fcn_path.clone();
 
@@ -2631,6 +2943,7 @@ impl Interpreter {
             }
             match r {
                 Ok(v) => return Ok(v),
+                Err(e) if is_evaluation_limit_error(&e) => return Err(e),
                 Err(e) => bail!(span.error(&format!("{e}"))),
             }
         }
@@ -2690,8 +3003,7 @@ impl Interpreter {
                     destructuring_plan,
                     ..
                 }) = self
-                    .compiled_policy
-                    .loop_hoisting_table
+                    .loop_hoisting_table(module_idx)
                     .get_expr_binding_plan(module_idx, expr_idx)
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
                     .cloned()
@@ -2723,9 +3035,20 @@ impl Interpreter {
             let value = match self.eval_rule_bodies(ctx, span, bodies) {
                 Ok(v) => v,
                 Err(e) => {
-                    // If the rule produces an error, save the error.
-                    errors.push(e);
+                    // If the rule produces an error, save the error. Restore
+                    // the caller's module even so: leaving the callee's module
+                    // in place would make the rest of the caller's body
+                    // resolve paths through the wrong module's imports when
+                    // the error is swallowed below in non-strict mode.
+                    self.set_current_module(prev_module)?;
                     self.scopes = scopes;
+                    if is_evaluation_limit_error(&e) {
+                        if let Some(with_functions) = with_functions_saved {
+                            self.with_functions = with_functions;
+                        }
+                        return Err(e);
+                    }
+                    errors.push(e);
                     continue;
                 }
             };
@@ -2800,6 +3123,13 @@ impl Interpreter {
                         if let Rule::Default { value, .. } = rule.as_ref() {
                             match self.eval_expr(value) {
                                 Ok(v) => results.push(v),
+                                Err(e) if is_evaluation_limit_error(&e) => {
+                                    self.scopes = scopes;
+                                    if let Some(with_functions) = with_functions_saved {
+                                        self.with_functions = with_functions;
+                                    }
+                                    return Err(e);
+                                }
                                 Err(e) => errors.push(e),
                             }
                         }
@@ -2862,8 +3192,7 @@ impl Interpreter {
                 if let Some(BindingPlan::Parameter {
                     destructuring_plan, ..
                 }) = self
-                    .compiled_policy
-                    .loop_hoisting_table
+                    .loop_hoisting_table(module_idx)
                     .get_expr_binding_plan(module_idx, expr_idx)
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
                     .cloned()
@@ -2897,26 +3226,41 @@ impl Interpreter {
         None
     }
 
-    fn ensure_module_evaluated(&mut self, path: String) -> Result<()> {
+    fn ensure_module_evaluated(&mut self, path: &[String]) -> Result<()> {
         self.check_execution_time()?;
         for module in self.compiled_policy.modules.clone().iter().cloned() {
             if Some(&module) == self.module.as_ref() {
                 // Prevent cyclic evaluation.
                 continue;
             }
-            let module_path_str = get_path_string(&module.package.refr, Some("data"))?;
-            let has_dot_after_prefix = module_path_str
-                .get(path.len()..)
-                .is_some_and(|suffix| suffix.starts_with('.'));
+            let mut module_path_components = vec!["data".to_string()];
+            module_path_components.extend(Parser::get_static_string_path_components(
+                &module.package.refr,
+            )?);
 
-            if module_path_str.starts_with(&path)
-                && (module_path_str.len() == path.len() || has_dot_after_prefix)
-            {
+            if path.len() > 1 && module_path_components.starts_with(path) {
                 // Ensure that the module is created.
-                let module_path_components = Parser::get_path_ref_components(&module.package.refr)?;
-                let module_path_components: Vec<&str> =
-                    module_path_components.iter().map(|s| s.text()).collect();
-                let vref = Self::make_or_get_value_mut(&mut self.data, &module_path_components)?;
+                let module_value_components =
+                    Parser::get_static_string_path_components(&module.package.refr)?;
+                let module_value_components: Vec<&str> =
+                    module_value_components.iter().map(String::as_str).collect();
+                if self.has_explicit_data_with_override_ancestor(&module_value_components)? {
+                    continue;
+                }
+
+                // A parent package can be processed before its child modules are materialized.
+                if self.is_processed(&[])?
+                    || (!module.policy.is_empty()
+                        && module
+                            .policy
+                            .iter()
+                            .all(|rule| self.processed.contains(rule))
+                        && self.is_processed(&module_value_components)?)
+                {
+                    continue;
+                }
+
+                let vref = Self::make_or_get_value_mut(&mut self.data, &module_value_components)?;
                 if *vref == Value::Undefined {
                     *vref = Value::new_object();
                 }
@@ -2928,13 +3272,33 @@ impl Interpreter {
                 }
 
                 let prev_module = self.set_current_module(Some(module.clone()))?;
-                for rule in &module.policy {
-                    if !self.processed.contains(rule) {
-                        self.eval_default_rule(rule)?;
+                let default_result = (|| -> Result<()> {
+                    for rule in &module.policy {
+                        if !self.processed.contains(rule) {
+                            if let Rule::Default { refr, args, .. } = rule.as_ref() {
+                                if args.is_empty() {
+                                    let refr = match refr.as_ref() {
+                                        Expr::RefBrack { refr, .. } => refr,
+                                        _ => refr,
+                                    };
+                                    let mut rule_path =
+                                        vec![PathComponent::String("data".to_string())];
+                                    rule_path
+                                        .extend(get_rule_path_components(&module.package.refr)?);
+                                    rule_path.extend(get_rule_path_components(refr)?);
+                                    self.ensure_rule_evaluated(format_path_components(
+                                        &rule_path,
+                                    )?)?;
+                                }
+                            }
+                            self.eval_default_rule(rule)?;
+                        }
                     }
-                }
+                    Ok(())
+                })();
                 self.set_current_module(prev_module)?;
-                self.mark_processed(&module_path_components)?;
+                default_result?;
+                self.mark_processed(&module_value_components)?;
             }
         }
 
@@ -2968,10 +3332,17 @@ impl Interpreter {
         }
 
         if matched {
-            let comps: Vec<&str> = path.split('.').collect();
-            if let Some((_, tail)) = comps.split_first() {
-                self.mark_processed(tail)?;
-            }
+            let components = self
+                .compiled_policy
+                .rule_path_components
+                .get(&path)
+                .cloned()
+                .ok_or_else(|| anyhow!("missing components for registered rule path {path}"))?;
+            let comps: Vec<&str> = components.iter().map(String::as_str).collect();
+            let (_, tail) = comps
+                .split_first()
+                .ok_or_else(|| anyhow!("internal error: expected rule path components"))?;
+            self.mark_processed(tail)?;
         }
         Ok(())
     }
@@ -3001,6 +3372,42 @@ impl Interpreter {
         }
         obj.as_object_mut()?.insert(Value::Undefined, Value::Null);
         Ok(())
+    }
+
+    fn mark_data_with_override(&mut self, path: &[&str]) -> Result<()> {
+        self.mark_processed(path)?;
+        let obj = self.processed_paths.make_or_get_value_mut(path)?;
+        obj.as_object_mut()?
+            .insert(EXPLICIT_DATA_WITH_OVERRIDE_MARKER.clone(), Value::Null);
+        Ok(())
+    }
+
+    fn has_explicit_data_with_override_ancestor(&self, path: &[&str]) -> Result<bool> {
+        let mut obj = &self.processed_paths;
+        if obj
+            .as_object()?
+            .get(&EXPLICIT_DATA_WITH_OVERRIDE_MARKER)
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        for component in path {
+            match &obj[*component] {
+                Value::Undefined => return Ok(false),
+                value => obj = value,
+            }
+
+            if obj
+                .as_object()?
+                .get(&EXPLICIT_DATA_WITH_OVERRIDE_MARKER)
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     fn lookup_var(&mut self, span: &Span, fields: &[&str], no_error: bool) -> Result<Value> {
@@ -3041,12 +3448,17 @@ impl Interpreter {
 
             // With modifiers may be used to specify part of a module that that not yet been
             // evaluated. Therefore ensure that module is evaluated first.
-            let requested_path = format!("data.{}", fields.join("."));
-            self.ensure_module_evaluated(requested_path.clone())?;
+            let requested_path: Vec<String> = core::iter::once("data".to_string())
+                .chain(fields.iter().map(|field| (*field).to_string()))
+                .collect();
+            self.ensure_module_evaluated(&requested_path)?;
 
             for i in (1..=fields.len()).rev() {
                 let prefix = fields.iter().take(i).copied().collect::<Vec<_>>();
-                let prefix_path = format!("data.{}", prefix.join("."));
+                let prefix_components = core::iter::once("data")
+                    .chain(prefix.iter().copied())
+                    .collect::<Vec<_>>();
+                let prefix_path = format_string_path(&prefix_components)?;
                 if self.compiled_policy.rules.contains_key(&prefix_path)
                     || self
                         .compiled_policy
@@ -3061,17 +3473,22 @@ impl Interpreter {
             Ok(Self::get_value_chained(self.data.clone(), fields))
         } else if !self.compiled_policy.modules.is_empty() {
             let module = self.current_module()?;
-            let parsed_path = Parser::get_path_ref_components(&module.package.refr)?;
-            let mut module_var_path: Vec<&str> = parsed_path.iter().map(|s| s.text()).collect();
-            module_var_path.push(name.text());
+            let mut module_var_path =
+                Parser::get_static_string_path_components(&module.package.refr)?;
+            module_var_path.push(name.text().to_string());
+            let module_var_path_refs: Vec<&str> =
+                module_var_path.iter().map(String::as_str).collect();
 
-            if self.is_processed(&module_var_path)? {
-                let value = Self::get_value_chained(self.data.clone(), &module_var_path);
+            if self.is_processed(&module_var_path_refs)? {
+                let value = Self::get_value_chained(self.data.clone(), &module_var_path_refs);
                 return Ok(Self::get_value_chained(value, fields));
             }
 
             // Ensure that all the rules having common prefix (name) are evaluated.
-            let rule_path = format!("data.{}", module_var_path.join("."));
+            let rule_path_components = core::iter::once("data")
+                .chain(module_var_path.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            let rule_path = format_string_path(&rule_path_components)?;
 
             if !no_error
                 && !self.compiled_policy.rules.contains_key(&rule_path)
@@ -3091,11 +3508,10 @@ impl Interpreter {
             let mut found = false;
             for i in (0..=fields.len()).rev() {
                 let comps = fields.iter().take(i).copied().collect::<Vec<_>>();
-                let path = if comps.is_empty() {
-                    rule_path.clone()
-                } else {
-                    format!("{}.{}", rule_path, comps.join("."))
-                };
+                let mut path = rule_path.clone();
+                for component in comps {
+                    path = append_path_component(&path, component)?;
+                }
 
                 if self.compiled_policy.rules.contains_key(&path)
                     || self.compiled_policy.default_rules.contains_key(&path)
@@ -3115,7 +3531,7 @@ impl Interpreter {
                 }
             }
 
-            let value = Self::get_value_chained(self.data.clone(), &module_var_path[..]);
+            let value = Self::get_value_chained(self.data.clone(), &module_var_path_refs[..]);
             Ok(Self::get_value_chained(value, fields))
         } else {
             Ok(Value::Undefined)
@@ -3123,6 +3539,10 @@ impl Interpreter {
     }
 
     fn eval_expr(&mut self, expr: &ExprRef) -> Result<Value> {
+        self.with_native_depth(|this| this.eval_expr_impl(expr))
+    }
+
+    fn eval_expr_impl(&mut self, expr: &ExprRef) -> Result<Value> {
         self.check_execution_time()?;
         #[cfg(feature = "coverage")]
         if self.enable_coverage {
@@ -3174,8 +3594,7 @@ impl Interpreter {
                 let expr_idx = expr.as_ref().eidx();
                 let expr_text = expr.span().text().to_string();
                 let binding_plan = self
-                    .compiled_policy
-                    .loop_hoisting_table
+                    .loop_hoisting_table(module_idx)
                     .get_expr_binding_plan(module_idx, expr_idx)
                     .map_err(|err| anyhow!("loop hoisting table out of bounds: {err}"))?
                     .cloned()
@@ -3306,30 +3725,72 @@ impl Interpreter {
     ) -> Result<Value> {
         self.check_execution_time()?;
         let n_scopes = self.scopes.len();
+        // Independent bodies of a partial (object/set) rule each contribute
+        // keys/members. Bodies introduced by `else`, however, are mutually
+        // exclusive even for partial rules and must short-circuit.
+        let is_partial = ctx.is_set || ctx.key_expr.is_some();
         let result = if bodies.is_empty() {
             self.contexts.push(ctx.clone());
             self.eval_output_expr()
         } else {
             let mut result = Ok(true);
+            let mut any_success = false;
             for (idx, body) in bodies.iter().enumerate() {
                 if idx == 0 {
                     self.contexts.push(ctx.clone());
                 } else {
-                    self.contexts.pop();
-                    let output_expr = body.assign.as_ref().map(|e| e.value.clone());
-                    self.contexts.push(Context {
+                    let popped = self
+                        .contexts
+                        .pop()
+                        .ok_or_else(|| anyhow!("internal error: rule's context already popped"))?;
+                    // An assignment on an else body overrides the rule-head
+                    // value. Without one, OPA retains the head assignment.
+                    let output_expr = body.assign.as_ref().map(|e| e.value.clone()).or_else(|| {
+                        // Complete-rule `else if { ... }` has an implicit
+                        // boolean result. Partial rules retain their head
+                        // value so every independent body contributes it.
+                        if is_partial {
+                            ctx.output_expr.clone()
+                        } else {
+                            None
+                        }
+                    });
+                    let mut next_ctx = Context {
                         output_expr,
                         //                        value: Value::new_array(),
                         //                        ..Context::default()
                         ..ctx.clone()
-                    });
+                    };
+                    if is_partial {
+                        // Carry the accumulator forward so this body adds to
+                        // (rather than replaces) what earlier bodies
+                        // produced.
+                        next_ctx.rule_value = popped.rule_value;
+                        next_ctx.value = popped.value;
+                    }
+                    self.contexts.push(next_ctx);
                 }
                 result = self.eval_query(&body.query);
-                if matches!(&result, Ok(true) | Err(_)) {
-                    break;
+                match &result {
+                    Ok(true) => {
+                        any_success = true;
+                        let next_is_else = idx
+                            .checked_add(1)
+                            .and_then(|next_idx| bodies.get(next_idx))
+                            .is_some_and(|next| next.is_else);
+                        if !is_partial || next_is_else {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                    Ok(false) => {}
                 }
             }
-            result
+            if is_partial {
+                result.map(|_| any_success)
+            } else {
+                result
+            }
         };
 
         let popped_ctx = match self.contexts.pop() {
@@ -3424,41 +3885,21 @@ impl Interpreter {
         }
     }
 
-    pub fn get_path_string(refr: &Expr, document: Option<&str>) -> Result<String> {
-        let mut comps = vec![];
-        let mut expr_opt = Some(refr);
-        while let Some(expr) = expr_opt {
-            match expr {
-                Expr::RefDot {
-                    refr: nested_refr,
-                    field,
-                    ..
-                } => {
-                    comps.push(field.0.text());
-                    expr_opt = Some(nested_refr);
-                }
-                Expr::RefBrack {
-                    refr: nested_refr,
-                    index,
-                    ..
-                } if matches!(index.as_ref(), Expr::String { .. }) => {
-                    if let Expr::String { span: s, .. } = index.as_ref() {
-                        comps.push(s.text());
-                        expr_opt = Some(nested_refr);
-                    }
-                }
-                Expr::Var { span: v, .. } => {
-                    comps.push(v.text());
-                    expr_opt = None;
-                }
-                _ => bail!(expr.span().error("invalid ref expression")),
-            }
+    /// Materialize a complete-rule value: the existing value must be absent or *exactly equal*
+    /// to `new`, else it is a conflict.
+    ///
+    /// Unlike the shallow [`Self::merge_rule_value`], differing outputs conflict instead of
+    /// combining — `f() := {"a": 1}` and `f() := {"b": 2}` conflict — matching OPA's semantics
+    /// for zero-arg functions.
+    fn merge_rule_value_strict(span: &Span, value: &mut Value, new: Value) -> Result<()> {
+        if *value == Value::Undefined {
+            *value = new;
+            Ok(())
+        } else if *value == new {
+            Ok(())
+        } else {
+            Err(span.error("rules should not produce multiple outputs."))
         }
-        if let Some(doc_component) = document {
-            comps.push(doc_component);
-        };
-        comps.reverse();
-        Ok(comps.join("."))
     }
 
     pub fn set_current_module(
@@ -3467,8 +3908,7 @@ impl Interpreter {
     ) -> Result<Option<Ref<Module>>> {
         let previous_module = self.module.clone();
         if let Some(new_module) = &module {
-            self.current_module_path =
-                Self::get_path_string(&new_module.package.refr, Some("data"))?;
+            self.current_module_path = get_path_string(&new_module.package.refr, Some("data"))?;
             self.current_module_index = self.find_module_index(new_module);
         }
         self.module = module;
@@ -3586,51 +4026,53 @@ impl Interpreter {
             }
 
             let scopes = core::mem::take(&mut self.scopes);
+            let result: Result<()> = (|| {
+                let module = self.current_module()?;
+                let mut path = get_rule_path_components(&module.package.refr)?;
 
-            let module = self.current_module()?;
-            let mut path = Parser::get_path_ref_components(&module.package.refr)?;
+                let (refr, index) = match refr.as_ref() {
+                    Expr::RefBrack { refr, index, .. } => (refr, Some(index.clone())),
+                    Expr::RefDot { .. } => (refr, None),
+                    Expr::Var { .. } => (refr, None),
+                    _ => bail!(refr
+                        .span()
+                        .error(&format!("invalid token {refr:?} with the default keyword"))),
+                };
 
-            let (refr, index) = match refr.as_ref() {
-                Expr::RefBrack { refr, index, .. } => (refr, Some(index.clone())),
-                Expr::RefDot { .. } => (refr, None),
-                Expr::Var { .. } => (refr, None),
-                _ => bail!(refr
-                    .span()
-                    .error(&format!("invalid token {refr:?} with the default keyword"))),
-            };
+                path.extend(get_rule_path_components(refr)?);
+                let paths: Vec<&str> = path.iter().map(PathComponent::value).collect();
 
-            Parser::get_path_ref_components_into(refr, &mut path)?;
-            let paths: Vec<&str> = path.iter().map(|s| s.text()).collect();
+                Self::check_default_value(value)?;
+                let value = self.eval_expr(value)?;
 
-            Self::check_default_value(value)?;
-            let value = self.eval_expr(value)?;
+                // Assume at this point that all the non-default rules have been evaluated.
+                // Merge the default value only if
+                // 1. The corresponding variable does not have value yet
+                // 2. The corresponding index in the object does not have value yet
+                if let Some(index) = index {
+                    let index = self.eval_expr(&index)?;
+                    let mut object = Value::new_object();
+                    object.as_object_mut()?.insert(index.clone(), value);
 
-            // Assume at this point that all the non-default rules have been evaluated.
-            // Merge the default value only if
-            // 1. The corresponding variable does not have value yet
-            // 2. The corresponding index in the object does not have value yet
-            if let Some(index) = index {
-                let index = self.eval_expr(&index)?;
-                let mut object = Value::new_object();
-                object.as_object_mut()?.insert(index.clone(), value);
+                    let vref = Self::make_or_get_value_mut(&mut self.data, &paths)?;
 
-                let vref = Self::make_or_get_value_mut(&mut self.data, &paths)?;
-
-                if let Value::Object(btree) = &vref {
-                    if !btree.contains_key(&index) {
+                    if let Value::Object(btree) = &vref {
+                        if !btree.contains_key(&index) {
+                            Self::merge_rule_value(span, vref, object)?;
+                        }
+                    } else if let Value::Undefined = vref {
                         Self::merge_rule_value(span, vref, object)?;
                     }
-                } else if let Value::Undefined = vref {
-                    Self::merge_rule_value(span, vref, object)?;
-                }
-            } else {
-                let vref = Self::make_or_get_value_mut(&mut self.data, &paths)?;
-                if let Value::Undefined = &vref {
-                    Self::merge_rule_value(span, vref, value)?;
-                }
-            };
-
+                } else {
+                    let vref = Self::make_or_get_value_mut(&mut self.data, &paths)?;
+                    if let Value::Undefined = &vref {
+                        Self::merge_rule_value(span, vref, value)?;
+                    }
+                };
+                Ok(())
+            })();
             self.scopes = scopes;
+            result?;
             self.processed.insert(rule.clone());
         }
 
@@ -3656,8 +4098,24 @@ impl Interpreter {
                         self.set_current_module(prev_module)?;
 
                         if result.is_ok() {
-                            let components: Vec<&str> = rule_path.split('.').skip(1).collect();
-                            let value = Self::get_value_chained(self.data.clone(), &components);
+                            let registered_components = self
+                                .compiled_policy
+                                .rule_path_components
+                                .get(rule_path)
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "missing components for registered rule path {rule_path}"
+                                    )
+                                })?;
+                            let (root, tail) =
+                                registered_components.split_first().ok_or_else(|| {
+                                    anyhow!("internal error: expected rule path components")
+                                })?;
+                            if root != "data" {
+                                bail!("internal error: rule path must start with data");
+                            }
+                            let value_path: Vec<&str> = tail.iter().map(String::as_str).collect();
+                            let value = Self::get_value_chained(self.data.clone(), &value_path);
 
                             if value != Value::Undefined {
                                 return Ok(value);
@@ -3679,6 +4137,7 @@ impl Interpreter {
         _refr: &Expr,
         path: &[&str],
         value: Value,
+        merge: RuleValueMerge,
     ) -> Result<()> {
         if value == Value::Undefined {
             return Ok(());
@@ -3686,7 +4145,10 @@ impl Interpreter {
         // Ensure that path is created.
         let vref = Self::make_or_get_value_mut(&mut self.data, path)?;
         if Self::get_value_chained(self.init_data.clone(), path) == Value::Undefined {
-            Self::merge_rule_value(span, vref, value)
+            match merge {
+                RuleValueMerge::Strict => Self::merge_rule_value_strict(span, vref, value),
+                RuleValueMerge::Combine => Self::merge_rule_value(span, vref, value),
+            }
         } else {
             // Retain specified value.
             Ok(())
@@ -3719,8 +4181,15 @@ impl Interpreter {
 
         if let Some((_, r)) = conflict {
             bail!(refr.span().error(&format!(
-                "rule conflicts with the following rule:\n{}",
-                r.span().message("", "defined here")
+                "rule conflicts with rule at {}:{}:{}",
+                r.span()
+                    .source
+                    .file()
+                    .replace('%', "%25")
+                    .replace('\n', "%0A")
+                    .replace('\r', "%0D"),
+                r.span().line,
+                r.span().col
             )));
         }
         self.rule_values
@@ -3749,7 +4218,7 @@ impl Interpreter {
                         if value != Value::Undefined {
                             for (path, value_in_map) in value.as_object()? {
                                 let mut full_path = package_components.clone();
-                                full_path.append(&mut path.as_array()?.clone());
+                                full_path.append(&mut path.as_array()?.to_vec());
                                 self.check_rule_path(refr, &full_path, value_in_map, is_set)?;
                                 self.update_rule_value(
                                     span,
@@ -3759,23 +4228,40 @@ impl Interpreter {
                                 )?;
                             }
                         } else if is_set {
-                            if let Ok(mut comps) = self.eval_rule_ref(refr) {
-                                let mut full_path = package_components;
-                                full_path.append(&mut comps);
-                                self.update_rule_value(span, full_path, Value::new_set(), true)?;
-                            }
-                        } else if is_object {
-                            // Fetch the rule, ignoring the key.
-                            if let Expr::RefBrack { refr, .. } = refr.as_ref() {
-                                if let Ok(mut comps) = self.eval_rule_ref(refr) {
+                            match self.eval_rule_ref(refr) {
+                                Ok(mut comps) => {
                                     let mut full_path = package_components;
                                     full_path.append(&mut comps);
                                     self.update_rule_value(
                                         span,
                                         full_path,
-                                        Value::Undefined,
-                                        false,
+                                        Value::new_set(),
+                                        true,
                                     )?;
+                                }
+                                Err(error) if is_evaluation_limit_error(&error) => {
+                                    return Err(error)
+                                }
+                                Err(_) => {}
+                            }
+                        } else if is_object {
+                            // Fetch the rule, ignoring the key.
+                            if let Expr::RefBrack { refr, .. } = refr.as_ref() {
+                                match self.eval_rule_ref(refr) {
+                                    Ok(mut comps) => {
+                                        let mut full_path = package_components;
+                                        full_path.append(&mut comps);
+                                        self.update_rule_value(
+                                            span,
+                                            full_path,
+                                            Value::Undefined,
+                                            false,
+                                        )?;
+                                    }
+                                    Err(error) if is_evaluation_limit_error(&error) => {
+                                        return Err(error);
+                                    }
+                                    Err(_) => {}
                                 }
                             }
                         }
@@ -3784,17 +4270,23 @@ impl Interpreter {
                     RuleHead::Func {
                         refr, args, assign, ..
                     } => {
+                        let current_module = self.current_module()?;
                         let mut path =
-                            Parser::get_path_ref_components(&self.current_module()?.package.refr)?;
-
-                        Parser::get_path_ref_components_into(refr, &mut path)?;
-                        let path: Vec<&str> = path.iter().map(|s| s.text()).collect();
+                            Self::get_rule_path_components(&current_module.package.refr)?;
+                        path.extend(Self::get_rule_path_components(refr)?);
+                        let path: Vec<&str> = path.iter().map(|s| s.as_ref()).collect();
 
                         // Ensure that for functions with a nesting level (e.g: a.foo),
                         // `a` is created as an empty object.
                         if let Some((_, prefix)) = path.split_last() {
                             if !prefix.is_empty() {
-                                self.update_data(span, refr, prefix, Value::new_object())?;
+                                self.update_data(
+                                    span,
+                                    refr,
+                                    prefix,
+                                    Value::new_object(),
+                                    RuleValueMerge::Combine,
+                                )?;
                             }
                         }
 
@@ -3806,7 +4298,13 @@ impl Interpreter {
                             };
 
                             let value = self.eval_rule_bodies(ctx, span, rule_body)?;
-                            self.update_data(refr.span(), refr, &path[..], value)?;
+                            self.update_data(
+                                refr.span(),
+                                refr,
+                                &path[..],
+                                value,
+                                RuleValueMerge::Strict,
+                            )?;
                         }
                     }
                 }
@@ -3859,7 +4357,7 @@ impl Interpreter {
         let scopes = core::mem::take(&mut self.scopes);
         let prev_module = self.set_current_module(Some(module.clone()))?;
 
-        let res = self.eval_rule_impl(module, rule);
+        let res = self.with_native_depth(|this| this.eval_rule_impl(module, rule));
 
         self.set_current_module(prev_module)?;
         self.scopes = scopes;
@@ -4001,8 +4499,8 @@ impl Interpreter {
                     break;
                 }
                 Expr::RefBrack { refr, index, .. } => {
-                    if let Expr::String { span: s, .. } = index.as_ref() {
-                        components.push(s.text().into());
+                    if let Expr::String { value, .. } = index.as_ref() {
+                        components.push(value.as_string()?.clone());
                     } else {
                         components.clear();
                     }
@@ -4053,6 +4551,7 @@ impl Interpreter {
                         rule_refr,
                         &prefix_path,
                         Value::new_object(),
+                        RuleValueMerge::Combine,
                     )?;
                 }
             }
@@ -4061,25 +4560,32 @@ impl Interpreter {
         Ok(())
     }
 
+    fn current_module_data_path_components(&self) -> Result<Vec<PathComponent>> {
+        let module = self.current_module()?;
+        let mut components = vec![PathComponent::String("data".to_string())];
+        components.extend(get_rule_path_components(&module.package.refr)?);
+        Ok(components)
+    }
+
     fn record_rule(&mut self, refr: &Ref<Expr>, rule: Ref<Rule>) -> Result<()> {
-        let comps = Parser::get_path_ref_components(refr)?;
-        let comps: Vec<&str> = comps.iter().map(|s| s.text()).collect();
-        for (c, _) in comps.iter().enumerate() {
-            let path = format!(
-                "{}.{}",
-                self.current_module_path,
-                comps
-                    .iter()
-                    .take(c.saturating_add(1))
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(".")
-            );
-            if c == comps.len().saturating_sub(1) {
-                self.compiled_policy_mut().rule_paths.insert(path.clone());
+        let rule_components = get_rule_path_components(refr)?;
+        let mut path_components = self.current_module_data_path_components()?;
+        for (index, component) in rule_components.iter().enumerate() {
+            path_components.push(component.clone());
+            let path = format_path_components(&path_components)?;
+            let string_components = path_components
+                .iter()
+                .map(|path_component| path_component.value().to_string())
+                .collect();
+            let compiled_policy = self.compiled_policy_mut();
+            compiled_policy
+                .rule_path_components
+                .insert(path.clone(), string_components);
+            if index == rule_components.len().saturating_sub(1) {
+                compiled_policy.rule_paths.insert(path.clone());
             }
 
-            match self.compiled_policy_mut().rules.entry(path) {
+            match compiled_policy.rules.entry(path) {
                 MapEntry::Occupied(o) => {
                     o.into_mut().push(rule.clone());
                 }
@@ -4098,32 +4604,30 @@ impl Interpreter {
         rule: &Ref<Rule>,
         index: Option<String>,
     ) -> Result<()> {
-        let comps = Parser::get_path_ref_components(refr)?;
-        let comps: Vec<&str> = comps.iter().map(|s| s.text()).collect();
-        for (idx, comp_idx) in (0..comps.len()).enumerate() {
-            let path = format!(
-                "{}.{}",
-                self.current_module_path,
-                comps
-                    .iter()
-                    .take(comp_idx.saturating_add(1))
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(".")
-            );
-            if comp_idx == comps.len().saturating_sub(1) {
-                self.compiled_policy_mut().rule_paths.insert(path.clone());
+        let rule_components = get_rule_path_components(refr)?;
+        let mut path_components = self.current_module_data_path_components()?;
+        for (idx, component) in rule_components.iter().enumerate() {
+            path_components.push(component.clone());
+            let path = format_path_components(&path_components)?;
+            let string_components = path_components
+                .iter()
+                .map(|path_component| path_component.value().to_string())
+                .collect();
+            let compiled_policy = self.compiled_policy_mut();
+            compiled_policy
+                .rule_path_components
+                .insert(path.clone(), string_components);
+            if idx == rule_components.len().saturating_sub(1) {
+                compiled_policy.rule_paths.insert(path.clone());
             }
 
-            match self.compiled_policy_mut().default_rules.entry(path) {
+            match compiled_policy.default_rules.entry(path) {
                 MapEntry::Occupied(o) => {
-                    if idx == comps.len().saturating_sub(1) {
+                    if idx == rule_components.len().saturating_sub(1) {
                         for (_, i) in o.get() {
                             if let (Some(old), Some(new)) = (i, &index) {
                                 if old == new {
-                                    bail!(refr
-                                        .span()
-                                        .error("multiple default rules for the variable with the same index"));
+                                    bail!(refr.span().error("multiple default rules for the variable with the same index"));
                                 }
                             } else if index.is_some() || i.is_some() {
                                 bail!(refr.span().error("conflict type with the default rules"));
@@ -4141,17 +4645,25 @@ impl Interpreter {
         Ok(())
     }
 
+    fn clear_rule_registrations(&mut self) {
+        let compiled_policy = self.compiled_policy_mut();
+        compiled_policy.rules.clear();
+        compiled_policy.default_rules.clear();
+        compiled_policy.rule_paths.clear();
+        compiled_policy.rule_path_components.clear();
+    }
+
     pub fn process_imports(&mut self) -> Result<()> {
         for module in self.compiled_policy.modules.clone().iter() {
             let module_path = get_path_string(&module.package.refr, Some("data"))?;
             for import in &module.imports {
                 let target = match &import.r#as {
-                    Some(s) => s.text(),
+                    Some(s) => s.text().to_string(),
                     _ => match import.refr.as_ref() {
-                        Expr::RefDot { field, .. } => field.0.text(),
+                        Expr::RefDot { field, .. } => field.0.text().to_string(),
                         Expr::RefBrack { index, .. } => match index.as_ref() {
-                            Expr::String { span: s, .. } => s.text(),
-                            _ => "",
+                            Expr::String { value, .. } => value.as_string()?.as_ref().to_string(),
+                            _ => String::new(),
                         },
                         Expr::Var { span: v, .. } if v.text() == "input" => {
                             // Warn redundant import of input. Ignore it.
@@ -4165,7 +4677,7 @@ impl Interpreter {
                             );
                             continue;
                         }
-                        _ => "",
+                        _ => String::new(),
                     },
                 };
                 if target.is_empty() {
@@ -4174,58 +4686,74 @@ impl Interpreter {
                         .span()
                         .message("warning", "invalid ref in import"));
                 }
+                let import_key = append_path_component(&module_path, &target)?;
                 self.compiled_policy_mut()
                     .imports
-                    .insert(format!("{}.{}", module_path, target), import.refr.clone());
+                    .insert(import_key, import.refr.clone());
             }
         }
         Ok(())
     }
 
     pub fn gather_rules(&mut self) -> Result<()> {
-        for module in self.compiled_policy.modules.clone().iter() {
-            let prev_module = self.set_current_module(Some(module.clone()))?;
-            for rule in &module.policy {
-                let refr = Self::get_rule_refr(rule);
+        self.clear_rule_registrations();
+        let result = (|| -> Result<()> {
+            for module in self.compiled_policy.modules.clone().iter() {
+                let prev_module = self.set_current_module(Some(module.clone()))?;
+                let registration_result = (|| -> Result<()> {
+                    for rule in &module.policy {
+                        let refr = Self::get_rule_refr(rule);
 
-                if let Rule::Spec { .. } = rule.as_ref() {
-                    // Adjust refr to ensure simple ref.
-                    // TODO: refactor.
-                    let refr = match refr.as_ref() {
-                        Expr::RefBrack { index, .. }
-                            if matches!(index.as_ref(), Expr::String { .. }) =>
-                        {
-                            refr
+                        if let Rule::Spec { .. } = rule.as_ref() {
+                            // Adjust refr to ensure simple ref.
+                            // TODO: refactor.
+                            let refr = match refr.as_ref() {
+                                Expr::RefBrack { index, .. }
+                                    if matches!(index.as_ref(), Expr::String { .. }) =>
+                                {
+                                    refr
+                                }
+                                Expr::RefBrack { refr, .. } => refr,
+                                _ => refr,
+                            };
+                            self.record_rule(refr, rule.clone())?;
+                            self.memory_check()?;
+                        } else if let Rule::Default { .. } = rule.as_ref() {
+                            let (refr, index) = match refr.as_ref() {
+                                // TODO: Validate the index
+                                Expr::RefBrack { refr, index, .. } => {
+                                    if !matches!(
+                                        index.as_ref(),
+                                        Expr::Bool { .. }
+                                            | Expr::Number { .. }
+                                            | Expr::String { .. }
+                                    ) {
+                                        // OPA's behavior is ignoring the non-scalar index
+                                        bail!(index.span().error("index is not a scalar value"));
+                                    }
+
+                                    let index = self.eval_expr(index)?;
+
+                                    (refr, Some(index.to_string()))
+                                }
+                                _ => (refr, None),
+                            };
+
+                            self.record_default_rule(refr, rule, index)?;
+                            self.memory_check()?;
                         }
-                        Expr::RefBrack { refr, .. } => refr,
-                        _ => refr,
-                    };
-                    self.record_rule(refr, rule.clone())?;
-                } else if let Rule::Default { .. } = rule.as_ref() {
-                    let (refr, index) = match refr.as_ref() {
-                        // TODO: Validate the index
-                        Expr::RefBrack { refr, index, .. } => {
-                            if !matches!(
-                                index.as_ref(),
-                                Expr::Bool { .. } | Expr::Number { .. } | Expr::String { .. }
-                            ) {
-                                // OPA's behavior is ignoring the non-scalar index
-                                bail!(index.span().error("index is not a scalar value"));
-                            }
-
-                            let index = self.eval_expr(index)?;
-
-                            (refr, Some(index.to_string()))
-                        }
-                        _ => (refr, None),
-                    };
-
-                    self.record_default_rule(refr, rule, index)?;
-                }
+                    }
+                    Ok(())
+                })();
+                self.set_current_module(prev_module)?;
+                registration_result?;
             }
-            self.set_current_module(prev_module)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.clear_rule_registrations();
         }
-        Ok(())
+        result
     }
 
     pub fn add_extension(
@@ -4384,19 +4912,49 @@ impl Interpreter {
         Ok(core::mem::take(&mut self.prints))
     }
 
-    pub fn eval_rule_in_path(&mut self, path: String) -> Result<Value> {
-        self.check_execution_time()?;
-        if !self.compiled_policy.rule_paths.contains(&path) {
+    fn canonical_rule_path(&self, path: &str) -> Result<String> {
+        if self.compiled_policy.rule_paths.contains(path) {
+            return Ok(path.to_string());
+        }
+
+        let max_components = self
+            .compiled_policy
+            .rule_path_components
+            .values()
+            .map(Vec::len)
+            .max()
+            .unwrap_or_default();
+        let requested_components = Parser::parse_static_path_components(path, max_components)
+            .map_err(|_| anyhow!("not a valid rule path"))?;
+        let component_refs: Vec<&str> = requested_components.iter().map(String::as_str).collect();
+        let canonical_path =
+            format_string_path(&component_refs).map_err(|_| anyhow!("not a valid rule path"))?;
+        if !self.compiled_policy.rule_paths.contains(&canonical_path) {
             bail!("not a valid rule path");
         }
-        self.ensure_rule_evaluated(path.clone())?;
-        let parts: Vec<&str> = path.split('.').collect();
+        Ok(canonical_path)
+    }
 
-        let (_, tail) = parts
+    pub fn eval_rule_in_path(&mut self, path: String) -> Result<Value> {
+        self.check_execution_time()?;
+        let canonical_path = self.canonical_rule_path(&path)?;
+        self.ensure_rule_evaluated(canonical_path.clone())?;
+        let registered_components = self
+            .compiled_policy
+            .rule_path_components
+            .get(&canonical_path)
+            .ok_or_else(|| {
+                anyhow!("missing components for registered rule path {canonical_path}")
+            })?;
+        let (root, tail) = registered_components
             .split_first()
-            .ok_or_else(|| anyhow!("internal error: expected rule path"))?;
+            .ok_or_else(|| anyhow!("internal error: expected rule path components"))?;
+        if root != "data" {
+            bail!("internal error: rule path must start with data");
+        }
+        let tail: Vec<&str> = tail.iter().map(String::as_str).collect();
 
-        let value = Self::get_value_chained(self.data.clone(), tail);
+        let value = Self::get_value_chained(self.data.clone(), &tail);
         #[cfg(feature = "azure_policy")]
         {
             if let Some(target_info) = &self.compiled_policy.target_info {
@@ -4412,22 +4970,23 @@ impl Interpreter {
     pub fn compile(&mut self, rule: Option<Rc<str>>) -> Result<Rc<CompiledPolicyData>> {
         let data = Some(self.init_data.clone());
         let extensions = self.extensions.clone();
-        let compiled_policy = self.compiled_policy_mut();
-
-        compiled_policy.data = data;
-        compiled_policy.extensions = extensions;
+        {
+            let compiled_policy = self.compiled_policy_mut();
+            compiled_policy.data = data;
+            compiled_policy.extensions = extensions;
+        }
         if let Some(rule) = rule {
-            if !compiled_policy.rule_paths.contains(rule.as_ref()) {
-                bail!("not a valid rule path");
-            }
-            compiled_policy.rule_to_evaluate = rule;
+            let canonical_path = self.canonical_rule_path(rule.as_ref())?;
+            let compiled_policy = self.compiled_policy_mut();
+            compiled_policy.rule_to_evaluate = canonical_path.into();
         } else {
-            compiled_policy.rule_to_evaluate = "".into();
+            self.compiled_policy_mut().rule_to_evaluate = "".into();
         }
 
         // Populate loop hoisting lookup table
         use crate::compiler::hoist::LoopHoister;
         // Re-run hoisting with the analyzer's schedule so statement order is preserved.
+        let compiled_policy = self.compiled_policy_mut();
         let hoister = compiled_policy
             .schedule
             .clone()
@@ -4435,6 +4994,180 @@ impl Interpreter {
         let loop_lookup = hoister.populate(compiled_policy.modules.as_ref())?;
         compiled_policy.loop_hoisting_table = loop_lookup;
 
+        crate::utils::limits::enforce_memory_limit().map_err(|err| anyhow!(err))?;
         Ok(self.compiled_policy.clone())
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::{
+        merge_statement_cleanup, statement_cursor, Interpreter, NativeEvaluationDepthExceeded,
+        Scope, StatementLoop, StatementPosition,
+    };
+    use crate::{LimitError, Rc, Value};
+    use alloc::collections::{BTreeMap, BTreeSet};
+    use alloc::format;
+    use anyhow::{anyhow, ensure, Result};
+
+    fn missing_scope_frame(input: bool) -> StatementLoop<'static> {
+        StatementLoop {
+            position: StatementPosition {
+                stmts: &[],
+                loops: None,
+                next_loop: 0,
+            },
+            cursor: alloc::boxed::Box::new(core::iter::empty()),
+            key_plan: None,
+            value_plan: None,
+            target: None,
+            previous_loop_value: None,
+            saved_scope: Some(Scope::new()),
+            query_result: None,
+            saved_state: Some((
+                Value::new_object(),
+                input.into(),
+                Value::new_object(),
+                BTreeSet::new(),
+                Value::new_object(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )),
+            started: true,
+            success: false,
+        }
+    }
+
+    #[test]
+    fn statement_cleanup_unwinds_all_frames_after_scope_failure() -> Result<()> {
+        let mut interpreter = Interpreter::new();
+        interpreter.scopes.clear();
+        let error = interpreter
+            .finish_statement_loops(
+                alloc::vec![missing_scope_frame(false), missing_scope_frame(true)],
+                Err(NativeEvaluationDepthExceeded.into()),
+            )
+            .err()
+            .ok_or_else(|| anyhow!("expected original fatal error"))?;
+        ensure!(error
+            .downcast_ref::<NativeEvaluationDepthExceeded>()
+            .is_some());
+        ensure!(format!("{error:#}").contains("no active scope"));
+        ensure!(interpreter.input == Value::Bool(false));
+
+        // An independent cleanup failure is still an error on a successful
+        // evaluation path, and must not prevent the outer WITH restoration.
+        let cleanup_error = interpreter
+            .finish_statement_loops(
+                alloc::vec![missing_scope_frame(false), missing_scope_frame(true)],
+                Ok(true),
+            )
+            .err()
+            .ok_or_else(|| anyhow!("successful evaluation must not hide cleanup failures"))?;
+        ensure!(format!("{cleanup_error:#}").contains("no active scope"));
+        ensure!(interpreter.input == Value::Bool(false));
+        Ok(())
+    }
+
+    #[test]
+    fn statement_cleanup_keeps_fatal_error_precedence() -> Result<()> {
+        let limit = LimitError::MemoryLimitExceeded { usage: 2, limit: 1 };
+        let error = merge_statement_cleanup::<bool>(Err(anyhow!("ordinary")), Err(limit.into()))
+            .err()
+            .ok_or_else(|| anyhow!("expected fatal cleanup error"))?;
+        ensure!(error.downcast_ref::<LimitError>() == Some(&limit));
+        ensure!(format!("{error:#}").contains("ordinary"));
+
+        let fatal_evaluation_error = merge_statement_cleanup::<bool>(
+            Err(NativeEvaluationDepthExceeded.into()),
+            Err(limit.into()),
+        )
+        .err()
+        .ok_or_else(|| anyhow!("expected original fatal evaluation error"))?;
+        ensure!(fatal_evaluation_error
+            .downcast_ref::<NativeEvaluationDepthExceeded>()
+            .is_some());
+        ensure!(format!("{fatal_evaluation_error:#}").contains("execution exceeded memory limit"));
+        ensure!(merge_statement_cleanup(Ok(true), Ok(()))?);
+        Ok(())
+    }
+
+    #[test]
+    fn statement_cursor_snapshot_checkpoints() -> Result<()> {
+        let shared = Value::from(alloc::vec![Value::Null]);
+        let Value::Array(values) = &shared else {
+            return Err(anyhow!("expected shared array"));
+        };
+        let mut object = Value::new_object();
+        for key in 0..4 {
+            object.as_object_mut()?.insert(key.into(), shared.clone());
+        }
+        let baseline = Rc::strong_count(values);
+        let mut owners = alloc::vec::Vec::new();
+        let cursor = statement_cursor(object.clone(), &mut || {
+            owners.push(Rc::strong_count(values));
+            Ok(())
+        })?;
+        // One initial checkpoint, then before/after each shallow entry push.
+        let expected = core::iter::once(baseline)
+            .chain((0_usize..4).flat_map(|index| {
+                [
+                    baseline.saturating_add(index),
+                    baseline.saturating_add(index).saturating_add(1),
+                ]
+            }))
+            .collect::<alloc::vec::Vec<_>>();
+        ensure!(owners == expected);
+        ensure!(cursor.count() == 4);
+        ensure!(Rc::strong_count(values) == baseline);
+
+        let mut set = Value::new_set();
+        for key in 0..4 {
+            set.as_set_mut()?
+                .insert(Value::from(alloc::vec![shared.clone(), key.into()]));
+        }
+        let mut checkpoints: usize = 0;
+        let set_cursor = statement_cursor(set.clone(), &mut || {
+            checkpoints = checkpoints.saturating_add(1);
+            Ok(())
+        })?;
+        ensure!(checkpoints == 9);
+        ensure!(set_cursor.count() == 4);
+
+        let array = Value::from(alloc::vec![shared; 1024]);
+        checkpoints = 0;
+        let array_cursor = statement_cursor(array, &mut || {
+            checkpoints = checkpoints.saturating_add(1);
+            Ok(())
+        })?;
+        ensure!(checkpoints == 1, "arrays retain their lazy fast path");
+        ensure!(array_cursor.count() == 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn statement_cursor_snapshot_cancellation() -> Result<()> {
+        let mut object = Value::new_object();
+        let mut set = Value::new_set();
+        for key in 0..64 {
+            object.as_object_mut()?.insert(key.into(), Value::Null);
+            set.as_set_mut()?.insert(key.into());
+        }
+        let limit = LimitError::MemoryLimitExceeded { usage: 2, limit: 1 };
+        for collection in [object, set] {
+            let mut checkpoints: usize = 0;
+            let error = statement_cursor(collection, &mut || {
+                checkpoints = checkpoints.saturating_add(1);
+                if checkpoints == 4 {
+                    return Err(limit.into());
+                }
+                Ok(())
+            })
+            .err()
+            .ok_or_else(|| anyhow!("snapshot must stop at its checkpoint error"))?;
+            ensure!(checkpoints == 4);
+            ensure!(error.downcast_ref::<LimitError>() == Some(&limit));
+        }
+        Ok(())
     }
 }

@@ -1,12 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{
-    ffi::OsString,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;

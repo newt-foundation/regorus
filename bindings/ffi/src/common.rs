@@ -1,14 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use anyhow::{anyhow, bail, Result};
 use core::ffi::{c_char, c_longlong, c_void, CStr};
-use core::ptr;
+use core::{mem, ptr};
 
 /// Status of a call on `RegorusEngine`.
+#[derive(Debug, PartialEq)]
 #[repr(C)]
 pub enum RegorusStatus {
     /// The operation was successful.
@@ -40,6 +43,13 @@ pub enum RegorusStatus {
 
     /// The engine remains poisoned because a previous panic was detected.
     Poisoned,
+
+    /// An RVM execution exceeded its configured memory budget.
+    MemoryBudgetExceeded,
+
+    /// Reserved for ABI compatibility.
+    #[allow(dead_code)]
+    MemoryBudgetUnsupportedInSuspendableExecution,
 }
 
 /// Type of data contained in RegorusResult
@@ -90,6 +100,19 @@ pub struct RegorusResult {
     pub(crate) error_message: *mut c_char,
 }
 
+/// Byte buffer returned from FFI for binary payloads.
+///
+/// Must be freed using `regorus_buffer_drop`.
+#[repr(C)]
+pub struct RegorusBuffer {
+    /// Pointer to byte buffer data.
+    pub data: *mut u8,
+    /// Number of bytes stored in `data`.
+    pub len: usize,
+    /// Capacity of the allocation backing `data`.
+    pub capacity: usize,
+}
+
 impl RegorusResult {
     /// Create a successful result with no data.
     pub(crate) fn ok_void() -> Self {
@@ -110,6 +133,19 @@ impl RegorusResult {
             status: RegorusStatus::Ok,
             data_type: RegorusDataType::String,
             output: to_c_str(output),
+            bool_value: false,
+            int_value: 0,
+            pointer_value: ptr::null_mut(),
+            error_message: ptr::null_mut(),
+        }
+    }
+
+    /// Create a successful result from an already allocated C string.
+    pub(crate) fn ok_c_string(output: CString) -> Self {
+        Self {
+            status: RegorusStatus::Ok,
+            data_type: RegorusDataType::String,
+            output: output.into_raw(),
             bool_value: false,
             int_value: 0,
             pointer_value: ptr::null_mut(),
@@ -185,6 +221,18 @@ impl RegorusResult {
     }
 }
 
+impl RegorusBuffer {
+    pub(crate) fn from_vec(mut data: Vec<u8>) -> *mut RegorusBuffer {
+        let buffer = RegorusBuffer {
+            data: data.as_mut_ptr(),
+            len: data.len(),
+            capacity: data.capacity(),
+        };
+        mem::forget(data);
+        Box::into_raw(Box::new(buffer))
+    }
+}
+
 pub(crate) fn to_c_str(s: String) -> *mut c_char {
     match CString::new(s) {
         Ok(cs) => cs.into_raw(),
@@ -208,6 +256,10 @@ pub(crate) fn to_ref<'a, T>(t: *mut T) -> Result<&'a mut T> {
     unsafe { t.as_mut().ok_or_else(|| anyhow!("null pointer")) }
 }
 
+pub(crate) fn to_shared_ref<'a, T>(t: *const T) -> Result<&'a T> {
+    unsafe { t.as_ref().ok_or_else(|| anyhow!("null pointer")) }
+}
+
 pub(crate) fn to_regorus_result(r: Result<()>) -> RegorusResult {
     match r {
         Ok(()) => RegorusResult::ok_void(),
@@ -219,6 +271,21 @@ pub(crate) fn to_regorus_string_result(r: Result<String>) -> RegorusResult {
     match r {
         Ok(s) => RegorusResult::ok_string(s),
         Err(e) => RegorusResult::err_with_message(RegorusStatus::Error, format!("{e}")),
+    }
+}
+
+/// Drop a `RegorusBuffer`.
+///
+/// `data` is not valid after drop.
+#[no_mangle]
+pub extern "C" fn regorus_buffer_drop(buffer: *mut RegorusBuffer) {
+    if let Ok(buffer) = to_ref(buffer) {
+        unsafe {
+            if !buffer.data.is_null() {
+                let _ = Vec::from_raw_parts(buffer.data, buffer.len, buffer.capacity);
+            }
+            let _ = Box::from_raw(ptr::from_mut(buffer));
+        }
     }
 }
 

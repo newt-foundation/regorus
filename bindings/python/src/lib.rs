@@ -1,19 +1,39 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 use anyhow::{anyhow, Result};
-use pyo3::exceptions::PyTypeError;
+use core::num::{NonZeroU32, NonZeroUsize};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::*;
 use pyo3::IntoPyObjectExt;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ::regorus::Value;
+use ::regorus::languages::rego::compiler::Compiler;
+use ::regorus::rvm::program::{
+    generate_assembly_listing, generate_tabular_assembly_listing, AssemblyListingConfig,
+    DeserializationResult, Program as RvmProgram,
+};
+use ::regorus::rvm::vm::{ExecutionMode, RegoVM};
+use ::regorus::{compile_policy_with_entrypoint, PolicyModule, Rc, Value};
+use std::sync::Arc;
 
 /// Regorus engine.
 #[pyclass(unsendable)]
 pub struct Engine {
     engine: ::regorus::Engine,
+}
+
+/// RVM program wrapper.
+#[pyclass(unsendable)]
+pub struct Program {
+    program: Arc<RvmProgram>,
+}
+
+/// RVM runtime wrapper.
+#[pyclass(unsendable)]
+pub struct Rvm {
+    vm: RegoVM,
 }
 
 impl Default for Engine {
@@ -23,42 +43,73 @@ impl Default for Engine {
 }
 
 fn from(ob: &Bound<'_, PyAny>) -> Result<Value, PyErr> {
+    from_active(ob, &mut Vec::new())
+}
+
+const MAX_CONVERSION_DEPTH: usize = 32;
+
+fn from_active(ob: &Bound<'_, PyAny>, active: &mut Vec<usize>) -> Result<Value, PyErr> {
+    let container = !ob.is_instance_of::<PyString>()
+        && (ob.cast::<PyDict>().is_ok()
+            || ob.cast::<PySet>().is_ok()
+            || ob.cast::<PyFrozenSet>().is_ok()
+            || ob.cast::<PySequence>().is_ok()
+            || ob.cast::<PyMapping>().is_ok());
+    if !container {
+        return from_children(ob, active);
+    }
+    let identity = ob.as_ptr() as usize;
+    if active.contains(&identity) {
+        return Err(PyValueError::new_err("cyclic native value"));
+    }
+    if active.len() >= MAX_CONVERSION_DEPTH {
+        return Err(PyValueError::new_err(
+            "native conversion nesting limit exceeded",
+        ));
+    }
+    active.push(identity);
+    let result = from_children(ob, active);
+    active.pop();
+    result
+}
+
+fn from_children(ob: &Bound<'_, PyAny>, active: &mut Vec<usize>) -> Result<Value, PyErr> {
     // dicts
-    Ok(if let Ok(dict) = ob.downcast::<PyDict>() {
+    Ok(if let Ok(dict) = ob.cast::<PyDict>() {
         let mut map = BTreeMap::new();
         for (k, v) in dict {
-            map.insert(from(&k)?, from(&v)?);
+            map.insert(from_active(&k, active)?, from_active(&v, active)?);
         }
         map.into()
     }
     // set
-    else if let Ok(pset) = ob.downcast::<PySet>() {
+    else if let Ok(pset) = ob.cast::<PySet>() {
         let mut set = BTreeSet::new();
         for v in pset {
-            set.insert(from(&v)?);
+            set.insert(from_active(&v, active)?);
         }
         set.into()
     }
     // frozen set
-    else if let Ok(pfset) = ob.downcast::<PyFrozenSet>() {
+    else if let Ok(pfset) = ob.cast::<PyFrozenSet>() {
         //
         let mut set = BTreeSet::new();
         for v in pfset {
-            set.insert(from(&v)?);
+            set.insert(from_active(&v, active)?);
         }
         set.into()
     }
     // lists and tuples
-    else if let Ok(plist) = ob.downcast::<PyList>() {
+    else if let Ok(plist) = ob.cast::<PyList>() {
         let mut array = Vec::new();
         for v in plist {
-            array.push(from(&v)?);
+            array.push(from_active(&v, active)?);
         }
         array.into()
-    } else if let Ok(ptuple) = ob.downcast::<PyTuple>() {
+    } else if let Ok(ptuple) = ob.cast::<PyTuple>() {
         let mut array = Vec::new();
         for v in ptuple {
-            array.push(from(&v)?);
+            array.push(from_active(&v, active)?);
         }
         array.into()
     }
@@ -66,39 +117,44 @@ fn from(ob: &Bound<'_, PyAny>) -> Result<Value, PyErr> {
     else if let Ok(s) = ob.extract::<String>() {
         s.into()
     }
+    // Boolean
+    else if let Ok(b) = ob.extract::<bool>() {
+        b.into()
+    }
     // Numeric
     else if let Ok(v) = ob.extract::<i64>() {
         v.into()
     } else if let Ok(v) = ob.extract::<u64>() {
         v.into()
     } else if let Ok(v) = ob.extract::<f64>() {
+        if !v.is_finite() {
+            return Err(PyErr::new::<PyValueError, _>(
+                "NaN and infinity are not valid Rego numbers",
+            ));
+        }
         v.into()
     }
-    // Boolean
-    else if let Ok(b) = ob.extract::<bool>() {
-        b.into()
-    }
     // None
-    else if ob.downcast::<PyNone>().is_ok() {
+    else if ob.cast::<PyNone>().is_ok() {
         Value::Null
     }
     // Anything that is a sequence
-    else if let Ok(pseq) = ob.downcast::<PySequence>() {
+    else if let Ok(pseq) = ob.cast::<PySequence>() {
         let mut array = Vec::new();
         for i in 0..pseq.len()? {
-            array.push(from(&pseq.get_item(i)?)?);
+            array.push(from_active(&pseq.get_item(i)?, active)?);
         }
         array.into()
     }
     // Anything that is a map
-    else if let Ok(pmap) = ob.downcast::<PyMapping>() {
+    else if let Ok(pmap) = ob.cast::<PyMapping>() {
         let mut map = BTreeMap::new();
         let keys = pmap.keys()?;
         let values = pmap.values()?;
         for i in 0..keys.len() {
             let key = keys.get_item(i)?;
             let value = values.get_item(i)?;
-            map.insert(from(&key)?, from(&value)?);
+            map.insert(from_active(&key, active)?, from_active(&value, active)?);
         }
         map.into()
     } else {
@@ -108,7 +164,18 @@ fn from(ob: &Bound<'_, PyAny>) -> Result<Value, PyErr> {
     })
 }
 
-fn to(mut v: Value, py: Python<'_>) -> Result<PyObject> {
+fn to(v: Value, py: Python<'_>) -> Result<Py<PyAny>> {
+    to_remaining(v, py, MAX_CONVERSION_DEPTH)
+}
+
+fn to_remaining(mut v: Value, py: Python<'_>, remaining: usize) -> Result<Py<PyAny>> {
+    let remaining = if matches!(v, Value::Array(_) | Value::Object(_) | Value::Set(_)) {
+        remaining
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("native conversion nesting limit exceeded"))?
+    } else {
+        remaining
+    };
     let obj = match v {
         Value::Null => None::<u64>.into_bound_py_any(py),
 
@@ -119,19 +186,24 @@ fn to(mut v: Value, py: Python<'_>) -> Result<PyObject> {
         Value::String(s) => s.into_bound_py_any(py),
 
         Value::Number(_) => {
-            if let Ok(f) = v.as_f64() {
+            if v.as_number()?.is_integer() {
+                if let Ok(u) = v.as_u64() {
+                    u.into_bound_py_any(py)
+                } else {
+                    v.as_i64()?.into_bound_py_any(py)
+                }
+            } else if let Ok(f) = v.as_f64() {
                 f.into_bound_py_any(py)
-            } else if let Ok(u) = v.as_u64() {
-                u.into_bound_py_any(py)
             } else {
-                v.as_i64()?.into_bound_py_any(py)
+                // fallback
+                v.as_f64()?.into_bound_py_any(py)
             }
         }
 
         Value::Array(_) => {
             let list = PyList::empty(py);
             for v in std::mem::take(v.as_array_mut()?) {
-                list.append(to(v, py)?)?;
+                list.append(to_remaining(v, py, remaining)?)?;
             }
             list.into_bound_py_any(py)
         }
@@ -139,7 +211,7 @@ fn to(mut v: Value, py: Python<'_>) -> Result<PyObject> {
         Value::Set(_) => {
             let set = PySet::empty(py)?;
             for v in std::mem::take(v.as_set_mut()?) {
-                set.add(to(v, py)?)?;
+                set.add(to_remaining(v, py, remaining)?)?;
             }
             set.into_bound_py_any(py)
         }
@@ -147,7 +219,10 @@ fn to(mut v: Value, py: Python<'_>) -> Result<PyObject> {
         Value::Object(_) => {
             let dict = PyDict::new(py);
             for (k, v) in std::mem::take(v.as_object_mut()?) {
-                dict.set_item(to(k, py)?, to(v, py)?)?;
+                dict.set_item(
+                    to_remaining(k, py, remaining)?,
+                    to_remaining(v, py, remaining)?,
+                )?;
             }
             dict.into_bound_py_any(py)
         }
@@ -272,7 +347,7 @@ impl Engine {
     /// Evaluate query.
     ///
     /// * `query`: Rego expression to be evaluate.
-    pub fn eval_query(&mut self, query: String, py: Python<'_>) -> Result<PyObject> {
+    pub fn eval_query(&mut self, query: String, py: Python<'_>) -> Result<Py<PyAny>> {
         let results = self.engine.eval_query(query, false)?;
 
         let rlist = PyList::empty(py);
@@ -313,7 +388,7 @@ impl Engine {
     /// Evaluate rule.
     ///
     /// * `rule`: Full path to the rule.
-    pub fn eval_rule(&mut self, rule: String, py: Python<'_>) -> Result<PyObject> {
+    pub fn eval_rule(&mut self, rule: String, py: Python<'_>) -> Result<Py<PyAny>> {
         to(self.engine.eval_rule(rule)?, py)
     }
 
@@ -323,6 +398,78 @@ impl Engine {
     pub fn eval_rule_as_json(&mut self, rule: String) -> Result<String> {
         let v = self.engine.eval_rule(rule)?;
         v.to_json_str()
+    }
+
+    /// Registers a custom Python function as a Rego extension.
+    ///
+    /// This allows you to define functions in Python that can be called directly
+    /// from your Rego policies. The Python function will be called synchronously
+    /// during policy evaluation.
+    ///
+    /// Arguments passed from Rego are automatically converted to their corresponding
+    /// Python types. The return value is converted back to a Rego value.
+    ///
+    /// * `path`: Full path to the function as it will be used in Rego.
+    /// * `nargs`: The number of arguments the function expects.
+    /// * `extension`: The Python function to execute. Must accept exactly `nargs` arguments.
+    ///
+    /// Note: When the engine is cloned, extensions share the same Python callable reference
+    /// rather than being deep-copied. Stateful callables will share state across clones.
+    pub fn add_extension(&mut self, path: String, nargs: u8, extension: Py<PyAny>) -> Result<()> {
+        Python::attach(|py| {
+            if !extension.bind(py).is_callable() {
+                return Err(anyhow!("extension '{}' must be callable", path));
+            }
+            Ok(())
+        })?;
+
+        let func_ref = Arc::new(extension);
+        let path_clone = path.clone();
+
+        let extension_impl = move |args: Vec<Value>| -> Result<Value, anyhow::Error> {
+            Python::attach(|py| {
+                let py_args_vec: Result<Vec<Py<PyAny>>> =
+                    args.into_iter().map(|arg| to(arg, py)).collect();
+                let py_args = PyTuple::new(py, py_args_vec?)?;
+                let py_result = func_ref.call1(py, py_args).map_err(|e| {
+                    anyhow!("extension '{}' raises Python error: {}", path_clone, e)
+                })?;
+                let rego_result = from(&py_result.into_bound(py))?;
+                Ok(rego_result)
+            })
+        };
+
+        self.engine
+            .add_extension(path, nargs, Box::new(extension_impl))
+    }
+
+    /// Set the policy length limits used when loading policies.
+    ///
+    /// * `max_col`: Maximum column width per line.
+    /// * `max_file_bytes`: Maximum policy file size in bytes.
+    /// * `max_lines`: Maximum number of lines per policy file.
+    #[pyo3(signature = (*, max_col, max_file_bytes, max_lines))]
+    pub fn set_policy_length_config(
+        &mut self,
+        max_col: u32,
+        max_file_bytes: usize,
+        max_lines: usize,
+    ) -> Result<()> {
+        self.engine
+            .set_policy_length_config(::regorus::PolicyLengthConfig {
+                max_col: NonZeroU32::new(max_col)
+                    .ok_or_else(|| anyhow!("max_col must be non-zero"))?,
+                max_file_bytes: NonZeroUsize::new(max_file_bytes)
+                    .ok_or_else(|| anyhow!("max_file_bytes must be non-zero"))?,
+                max_lines: NonZeroUsize::new(max_lines)
+                    .ok_or_else(|| anyhow!("max_lines must be non-zero"))?,
+            });
+        Ok(())
+    }
+
+    /// Clear the policy length configuration, reverting to defaults.
+    pub fn clear_policy_length_config(&mut self) {
+        self.engine.clear_policy_length_config();
     }
 
     /// Enable code coverage
@@ -384,7 +531,174 @@ impl Engine {
     }
 }
 
+#[pymethods]
+impl Program {
+    /// Compile an RVM program from modules and entry points.
+    #[staticmethod]
+    pub fn compile_from_modules(
+        data_json: String,
+        modules: Vec<(String, String)>,
+        entry_points: Vec<String>,
+    ) -> Result<Self> {
+        if entry_points.is_empty() {
+            return Err(anyhow!("entry_points must contain at least one entry"));
+        }
+
+        let data = Value::from_json_str(&data_json)?;
+        let policy_modules: Vec<PolicyModule> = modules
+            .into_iter()
+            .map(|(id, content)| PolicyModule {
+                id: Rc::from(id.as_str()),
+                content: Rc::from(content.as_str()),
+            })
+            .collect();
+
+        let entry_points_ref: Vec<&str> = entry_points.iter().map(|s| s.as_str()).collect();
+        let entry_rule = Rc::from(entry_points_ref[0]);
+        let compiled = compile_policy_with_entrypoint(data, &policy_modules, entry_rule)?;
+        let program = Compiler::compile_from_policy(&compiled, &entry_points_ref)?;
+        Ok(Self { program })
+    }
+
+    /// Deserialize an RVM program from binary data.
+    #[staticmethod]
+    pub fn deserialize_binary(data: Vec<u8>) -> Result<(Self, bool)> {
+        let (program, is_partial) =
+            match RvmProgram::deserialize_binary(&data).map_err(|e: String| anyhow!(e))? {
+                DeserializationResult::Complete(program) => (program, false),
+                DeserializationResult::Partial(program) => (program, true),
+            };
+        Ok((
+            Self {
+                program: Arc::new(program),
+            },
+            is_partial,
+        ))
+    }
+
+    /// Serialize a program to binary format.
+    pub fn serialize_binary(&self) -> Result<Vec<u8>> {
+        self.program
+            .serialize_binary()
+            .map_err(|e: String| anyhow!(e))
+    }
+
+    /// Generate a readable assembly listing.
+    pub fn generate_listing(&self) -> Result<String> {
+        Ok(generate_assembly_listing(
+            self.program.as_ref(),
+            &AssemblyListingConfig::default(),
+        ))
+    }
+
+    /// Generate a tabular assembly listing.
+    pub fn generate_tabular_listing(&self) -> Result<String> {
+        Ok(generate_tabular_assembly_listing(
+            self.program.as_ref(),
+            &AssemblyListingConfig::default(),
+        ))
+    }
+}
+
+impl Default for Rvm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[pymethods]
+impl Rvm {
+    #[new]
+    pub fn new() -> Self {
+        Self { vm: RegoVM::new() }
+    }
+
+    /// Load an RVM program into the VM.
+    pub fn load_program(&mut self, program: &Program) -> Result<()> {
+        self.vm.load_program(program.program.clone());
+        Ok(())
+    }
+
+    /// Set data JSON for the VM.
+    pub fn set_data_json(&mut self, data_json: String) -> Result<()> {
+        let data = Value::from_json_str(&data_json)?;
+        self.vm.set_data(data)?;
+        Ok(())
+    }
+
+    /// Set input JSON for the VM.
+    pub fn set_input_json(&mut self, input_json: String) -> Result<()> {
+        let input = Value::from_json_str(&input_json)?;
+        self.vm.set_input(input);
+        Ok(())
+    }
+
+    /// Set execution mode (0 = run-to-completion, 1 = suspendable).
+    pub fn set_execution_mode(&mut self, mode: u8) -> Result<()> {
+        let mode = match mode {
+            0 => ExecutionMode::RunToCompletion,
+            1 => ExecutionMode::Suspendable,
+            _ => return Err(anyhow!("invalid execution mode")),
+        };
+        self.vm.set_execution_mode(mode);
+        Ok(())
+    }
+
+    /// Execute the program and return the JSON result.
+    pub fn execute(&mut self) -> Result<String> {
+        self.vm.execute()?.to_json_str()
+    }
+
+    /// Execute an entry point by name and return the JSON result.
+    pub fn execute_entry_point(&mut self, entry_point: String) -> Result<String> {
+        self.vm
+            .execute_entry_point_by_name(&entry_point)?
+            .to_json_str()
+    }
+
+    /// Resume execution with an optional JSON value.
+    pub fn resume(&mut self, resume_json: Option<String>) -> Result<String> {
+        let value = if let Some(json) = resume_json {
+            Some(Value::from_json_str(&json)?)
+        } else {
+            None
+        };
+        self.vm.resume(value)?.to_json_str()
+    }
+
+    /// Get the execution state as a string.
+    pub fn get_execution_state(&self) -> Result<String> {
+        Ok(format!("{:?}", self.vm.execution_state()))
+    }
+}
+
+/// Configure the global pattern caches used by `regex.*` and `glob.*` builtins.
+///
+/// * `regex`: Maximum cached compiled regex patterns (default 256, 0 = disabled).
+/// * `glob`: Maximum cached compiled glob matchers (default 128, 0 = disabled).
+#[cfg(feature = "cache")]
+#[pyfunction]
+#[pyo3(signature = (*, regex = 256, glob = 128))]
+fn set_cache_config(regex: usize, glob: usize) {
+    ::regorus::cache::configure(::regorus::cache::Config { regex, glob });
+}
+
+/// Clear all entries from every pattern cache.
+#[cfg(feature = "cache")]
+#[pyfunction]
+fn clear_cache() {
+    ::regorus::cache::clear();
+}
+
 #[pymodule]
 pub fn regorus(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<crate::Engine>()
+    m.add_class::<crate::Engine>()?;
+    m.add_class::<crate::Program>()?;
+    m.add_class::<crate::Rvm>()?;
+    #[cfg(feature = "cache")]
+    {
+        m.add_function(wrap_pyfunction!(set_cache_config, m)?)?;
+        m.add_function(wrap_pyfunction!(clear_cache, m)?)?;
+    }
+    Ok(())
 }

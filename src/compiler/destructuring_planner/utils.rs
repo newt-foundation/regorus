@@ -8,20 +8,16 @@
 
 //! Shared helper routines for the destructuring planner modules.
 
-use alloc::{
-    collections::BTreeSet,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::collections::BTreeSet;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-use crate::{
-    ast::{Expr, ExprRef},
-    compiler::destructuring_planner::{
-        BindingPlannerError, DestructuringPlan, Result, ScopingMode, VariableBindingContext,
-    },
-    lexer::Span,
-    value::Value,
+use crate::ast::{Expr, ExprRef};
+use crate::compiler::destructuring_planner::{
+    BindingPlannerError, DestructuringPlan, Result, ScopingMode, VariableBindingContext,
 };
+use crate::lexer::Span;
+use crate::value::Value;
 
 /// Result of statically comparing a destructuring plan with a literal expression.
 pub(crate) enum LiteralStructureCheck {

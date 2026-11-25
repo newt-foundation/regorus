@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+#
 name: bindings/wasm
 
 on:
@@ -14,14 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup Rust toolchain
         uses: ./.github/actions/toolchains/rust
       - name: Cache cargo
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ${{ runner.os }}-regorus
       - name: Fetch dependencies
@@ -31,12 +33,12 @@ jobs:
         run: cargo fetch --locked --manifest-path bindings/wasm/Cargo.toml
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
       - name: Install wasmlpack
-        run: cargo install wasm-pack
+        run: cargo install wasm-pack --locked
 
       - name: Test wasm binding via xtask
         run: cargo xtask test-wasm --release --frozen --node node

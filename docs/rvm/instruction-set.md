@@ -61,6 +61,12 @@ must have been allocated by the current frame.
 `handle_condition` routes through `loops.rs` to propagate failures to loop and
 comprehension contexts. Outside loops it aborts the current rule.
 
+Rego rule yields guard against undefined values (and object keys) before
+updating the accumulator. A missing candidate contributes no answer and cannot
+overwrite an earlier result; `false` and `null` remain valid output values.
+These guards do not change the generic `Move`, `ObjectSet`, or `Index`
+instructions.
+
 ---
 
 ## Collection and indexing instructions
@@ -128,7 +134,7 @@ both execution modes. In suspendable mode, loops own their own `ExecutionFrame`.
 | Mnemonic             | Operands / Params       | Behaviour                                          |
 | :------------------- | :---------------------- | :------------------------------------------------- |
 | `ComprehensionBegin` | `params_index=pN`       | Allocates collection builder and iteration context. |
-| `ComprehensionYield` | `value_reg`, `key_reg?` | Emits value (and optional key) into builder.        |
+| `ComprehensionYield` | `value_reg`, `key_reg?` | Emits defined values/keys into builder; skips undefined candidates. |
 | `ComprehensionEnd`   | —                       | Finalises collection and stores result.             |
 
 `ComprehensionBeginParams` captures:
@@ -138,6 +144,12 @@ both execution modes. In suspendable mode, loops own their own `ExecutionFrame`.
 - `result_reg`: register that will hold the final collection
 - `key_reg` / `value_reg`: iteration registers
 - `body_start` / `comprehension_end`: branch targets
+
+Skipping an undefined comprehension yield still advances any automatic
+iteration. It does not fail an enclosing loop: for example,
+`p := [x.missing | true] if some x in [{}]` produces `[]`, not undefined.
+This yield-local handling applies in both execution modes and retains `false`
+and `null`.
 
 Comprehensions manage their own stack (`ComprehensionContext`) to maintain
 ordering guarantees (arrays), uniqueness (sets) or key/value pairing (objects).
@@ -176,6 +188,96 @@ Parameter tables:
   the identifier register. Missing responses raise `VmError::HostAwaitResponseMissing`.
 - Suspendable: emits `InstructionOutcome::Suspend` with `SuspendReason::HostAwait`.
   The host must resume with a value that will be written into `dest`.
+
+### Registered host-await builtins
+
+The compiler can be configured with a list of function names that map directly
+to `HostAwait` instructions. This allows policy authors to write natural
+function calls (e.g. `lookup(input.account_id)`) instead of the raw
+`__builtin_host_await(payload, identifier)` builtin.
+
+Registration is done at compile time via `Compiler::compile_from_policy_with_host_await`:
+
+```rust
+let builtins = [("lookup", 1), ("persist", 1)];
+let program = Compiler::compile_from_policy_with_host_await(
+    &compiled_policy, &entry_points, &builtins,
+)?;
+```
+
+Each registered name is a `(name, arg_count)` pair. The count is the exact
+number of input arguments; the optional Rego output parameter is excluded.
+When the compiler encounters a registered call, it evaluates inputs once in
+order, packs their native values into an array, and skips the call and its
+output-binding epilogue if any input is undefined:
+
+| Registered policy call | `HostAwait` argument |
+| :--------------------- | :------------------ |
+| `lookup()` | `[]` |
+| `lookup(x)` | `[x]` |
+| `lookup(x, y)` | `[x, y]` |
+| `lookup(x, {"nested": [y]})` | `[x, {"nested": [y]}]` |
+
+The optional Rego output parameter does not appear in these arrays. Host
+responses remain unwrapped: the value supplied by the host is the value
+returned or bound by the policy.
+
+Both the explicit `__builtin_host_await(arg, id)` call and a registered
+builtin call converge on the same `HostAwait` bytecode instruction, but their
+payload construction differs. Explicit calls pass the supplied `arg` value
+and `id` register through unchanged. Registered calls create the ordered input
+array, guard against undefined inputs, and load the registered name as the
+identifier. Previously compiled programs retain their original raw
+registered-call payloads after deserialization. Since an old raw payload may
+itself be an array, payload shape cannot identify the program generation.
+Applications must deploy a matching program/handler/native/managed bundle or
+provide their own explicit legacy routing; no runtime format inference or
+compatibility handshake is provided.
+
+The public low-level Rust method `Compiler::alloc_register` now returns
+`Result<Register, SpannedCompilerError>` so callers must handle register-window
+overflow. This is a source-level API break; the
+`Compiler::register_host_await_builtin` signature is unchanged.
+
+**Resolution order** in `determine_call_target()`:
+1. `__builtin_host_await` (magic 2-argument form)
+2. Registered host-await builtins (matched by **bare** function name only)
+3. User-defined functions (matched by package-qualified path)
+4. Standard builtins (matched by bare function name)
+
+Registered names shadow both user-defined functions and standard builtins.
+This means `time.parse_duration_ns` can be overridden to route through the
+host instead of the built-in Rust implementation.
+
+**Only unqualified calls are intercepted.** Registration matches a call by
+the name *as written in the policy*. A bare call — `lookup(x)` — is
+intercepted and compiled to a `HostAwait`. A package-qualified call —
+`data.pkg.lookup(x)` — is **not** intercepted; it is resolved normally, as
+if the name were never registered.
+
+```rego
+# "lookup" is registered as a host-await builtin.
+
+package other
+import rego.v1
+lookup(k) := k            # an ordinary rule that happens to share the name
+
+package demo
+import rego.v1
+a := lookup(input.k)             # intercepted     -> HostAwait
+b := data.other.lookup(input.k)  # NOT intercepted -> calls other.lookup
+```
+
+The qualified form is resolved exactly as it would be without registration:
+if a rule exists at that path it is called, otherwise compilation fails with
+`Unknown function`. (A standard builtin like `count` has no qualified form at
+all, so `data.pkg.count(x)` is always an `Unknown function` error, registered
+or not.)
+
+**Undefined handling**: Registered inputs are evaluated under normal Rego
+semantics. If any input is undefined, the registered host call is skipped and
+no response is consumed. Explicit `__builtin_host_await` calls retain their
+existing raw-payload behavior.
 
 ---
 
@@ -235,4 +337,3 @@ artifacts. Some contain `Vec` fields; the compiler is responsible for ensuring
 indices remain valid and stable across serialization boundaries.
 
 ---
-

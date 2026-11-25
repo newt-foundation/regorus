@@ -3,15 +3,16 @@
 #![allow(clippy::unused_trait_names)]
 #![allow(missing_debug_implementations)] // parser structs are internal; Debug not required
 
-use alloc::{boxed::Box, format, string::ToString};
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::ToString;
 
-use crate::{
-    languages::azure_rbac::ast::{
-        BinaryExpression, ConditionExpr, ConditionExpression, ConditionOperator, EmptySpan,
-        LogicalExpression, LogicalOperator, UnaryExpression, UnaryOperator,
-    },
-    lexer::{AzureRbacTokenKind, Lexer, Source, Token, TokenKind},
+use crate::languages::azure_rbac::ast::{
+    BinaryExpression, ConditionExpr, ConditionExpression, EmptySpan, LogicalExpression,
+    LogicalOperator, UnaryExpression, UnaryOperator,
 };
+use crate::languages::azure_rbac::builtins::RbacBuiltin;
+use crate::lexer::{AzureRbacTokenKind, Lexer, Source, Token, TokenKind};
 
 use super::error::ConditionParseError;
 
@@ -185,7 +186,7 @@ impl<'source> ConditionParser<'source> {
             let op_text = self.current_text().to_string();
 
             // Check if this is a known operator
-            if let Some(operator) = ConditionOperator::from_name(&op_text) {
+            if let Some(operator) = RbacBuiltin::parse_operator(&op_text) {
                 self.advance()?;
                 let right = self.parse_primary_expression()?;
                 return Ok(ConditionExpr::Binary(BinaryExpression {

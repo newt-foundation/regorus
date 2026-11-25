@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 #![allow(clippy::pattern_type_mismatch)]
 
-use alloc::{format, string::String};
+use alloc::format;
+use alloc::string::String;
 
 use crate::lexer::Span;
 use core::fmt;
@@ -50,6 +51,11 @@ pub enum CompilerError {
     #[error("Unknown function: '{name}'")]
     UnknownFunction { name: String },
 
+    #[error(
+        "Register overflow: cannot allocate {additional} register(s) at register {current} within the 255-register window"
+    )]
+    RegisterOverflow { current: u8, additional: usize },
+
     #[error("Undefined variable: '{name}'")]
     UndefinedVariable { name: String },
 
@@ -61,6 +67,14 @@ pub enum CompilerError {
 
     #[error("Invalid function expression with package")]
     InvalidFunctionExpressionWithPackage,
+
+    #[error("partial object rules with constant keys are not yet supported by the RVM compiler")]
+    PartialObjectConstantKeyUnsupported,
+
+    #[error(
+        "partial object rules with nested bracket keys are not yet supported by the RVM compiler"
+    )]
+    PartialObjectNestedKeyUnsupported,
 
     #[error("Compilation error: {message}")]
     General { message: String },

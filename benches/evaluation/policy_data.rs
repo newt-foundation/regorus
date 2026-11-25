@@ -1,7 +1,8 @@
 // This module provides the full set of policies, inputs, and policy names for evaluation benchmarks.
 // Policies and inputs are now loaded from external files.
 
-use std::{fs, path::Path};
+use std::fs;
+use std::path::Path;
 
 pub fn policies_with_inputs() -> Vec<(String, Vec<String>)> {
     let policy_with_input_files = [

@@ -1,12 +1,27 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Unsafe code should not be used.
-// Hard to reason about correctness, and maintainability.
-#![forbid(unsafe_code)]
+// Unsafe code should not be used since it's hard to reason about
+// its correctness and maintainability.
+// However, `verus_keep_ghost` is only set during verification,
+// never in production builds, so it's OK to allow unsafe code
+// during verification. The `forbid` remains in force for all
+// shipped code.
+#![cfg_attr(not(verus_keep_ghost), forbid(unsafe_code))]
+// `anyhow!` with a literal lowers to `Arguments::from_str`, which is unstable.
+// Verus needs to name it to give it a specification. Verification builds use the
+// Verus toolchain, so this gate never applies to shipped code.
+#![cfg_attr(verus_keep_ghost, feature(fmt_arguments_from_str))]
+// Loop invariants are attached with `#[verus_spec(invariant ...)]` on the loop
+// statement itself. Applying a proc-macro attribute in statement position is
+// still unstable, so verification builds opt in. Shipped builds strip the
+// attribute via `cfg_attr` and therefore never need this feature.
+#![cfg_attr(verus_keep_ghost, feature(proc_macro_hygiene))]
 // Ensure that all lint names are valid.
 #![deny(unknown_lints)]
 // Fail-fast lints: correctness, safety, and API surface
+#![cfg_attr(not(verus_keep_ghost), deny(dead_code))] // ban unused items
+#![cfg_attr(not(verus_keep_ghost), deny(missing_debug_implementations))] // require Debug on public types
 #![deny(
     // Panic sources - catch all ways code can panic
     clippy::panic, // forbid explicit panic! macro
@@ -21,7 +36,6 @@
     clippy::panic_in_result_fn, // disallow panic inside functions returning Result
 
     // Rust warnings/upstream
-    dead_code, // ban unused items
     deprecated, // prevent use of deprecated APIs
     deprecated_in_future, // catch items scheduled for deprecation
     exported_private_dependencies, // avoid leaking private deps in public API
@@ -29,7 +43,6 @@
     invalid_doc_attributes, // ensure doc attributes are valid
     keyword_idents, // disallow identifiers that are keywords
     macro_use_extern_crate, // block legacy macro_use extern crate
-    missing_debug_implementations, // require Debug on public types
     // TODO: Address in future pass
     // missing_docs, // require docs on public items
     non_ascii_idents, // disallow non-ASCII identifiers
@@ -123,10 +136,18 @@ mod compile;
 mod compiled_policy;
 mod compiler;
 mod engine;
+#[cfg(feature = "explanations")]
+#[cfg_attr(docsrs, doc(cfg(feature = "explanations")))]
+pub mod explain;
 mod indexchecker;
 mod interpreter;
+#[cfg(any(verus_keep_ghost, test))]
+mod verify;
 
 pub mod languages {
+    #[cfg(feature = "azure_policy")]
+    pub mod azure_policy;
+
     #[cfg(feature = "azure-rbac")]
     pub mod azure_rbac;
 
@@ -152,12 +173,11 @@ pub mod target;
 #[cfg(any(test, all(feature = "yaml", feature = "std")))]
 pub mod test_utils;
 pub mod utils;
-mod value;
+pub mod value;
 
 #[cfg(any(
     feature = "newton-crypto",
     feature = "newton-identity",
-    feature = "newton-tlsn",
     feature = "newton-confidential",
     feature = "newton-time"
 ))]
@@ -172,17 +192,38 @@ pub use {
 
 pub use compile::{compile_policy_with_entrypoint, PolicyModule};
 pub use compiled_policy::CompiledPolicy;
-pub use engine::Engine;
+pub use engine::{Engine, InvalidRuleRootError, PolicyPackageComponents};
 pub use lexer::Source;
 pub use policy_info::PolicyInfo;
 pub use utils::limits::LimitError;
-#[cfg(feature = "allocator-memory-limits")]
+pub use utils::limits::PolicyLengthConfig;
+#[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+#[cfg_attr(docsrs, doc(cfg(feature = "allocator-memory-limits")))]
 pub use utils::limits::{
     check_global_memory_limit, enforce_memory_limit, flush_thread_memory_counters,
     global_memory_limit, set_global_memory_limit, set_thread_flush_threshold_override,
-    thread_memory_flush_threshold,
+    thread_memory_flush_threshold, MemoryBudgetConfig,
 };
 pub use value::Value;
+
+/// Compiled-pattern caches for the `regex.*` and `glob.*` Rego builtins.
+///
+/// When the `cache` feature is enabled, compiled patterns are held in
+/// bounded LRU caches so that repeated evaluations avoid recompilation.
+///
+/// # Examples
+///
+/// ```ignore
+/// use regorus::cache;
+///
+/// cache::configure(cache::Config {
+///     regex: 256,
+///     glob: 128,
+/// });
+/// cache::clear();
+/// ```
+#[cfg(feature = "cache")]
+pub mod cache;
 
 #[cfg(feature = "arc")]
 pub use alloc::sync::Arc as Rc;
@@ -191,10 +232,10 @@ pub use alloc::sync::Arc as Rc;
 pub use alloc::rc::Rc;
 
 #[cfg(feature = "std")]
-use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as Set};
+use std::collections::{hash_map::Entry as MapEntry, HashMap as Map, HashSet as MapSet};
 
 #[cfg(not(feature = "std"))]
-use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as Set};
+use alloc::collections::{btree_map::Entry as MapEntry, BTreeMap as Map, BTreeSet as MapSet};
 
 use alloc::{
     borrow::ToOwned as _,
@@ -342,6 +383,7 @@ pub struct QueryResult {
     /// Expressions in the query.
     ///
     /// Each statement in the query is treated as a separte expression.
+    ///
     pub expressions: Vec<Expression>,
 
     /// Bindings created in the query.
@@ -435,34 +477,16 @@ impl Default for QueryResult {
 ///
 /// // Assert expressions and bindings of results.
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
-/// assert_eq!(
-///     results.result[0].expressions[0].text.as_ref(),
-///     "x = [1, 2, 3][_]"
-/// );
-/// assert_eq!(
-///     results.result[0].bindings[&Value::from("x")],
-///     Value::from(1u64)
-/// );
+/// assert_eq!(results.result[0].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
+/// assert_eq!(results.result[0].bindings[&Value::from("x")], Value::from(1u64));
 ///
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
-/// assert_eq!(
-///     results.result[1].expressions[0].text.as_ref(),
-///     "x = [1, 2, 3][_]"
-/// );
-/// assert_eq!(
-///     results.result[1].bindings[&Value::from("x")],
-///     Value::from(2u64)
-/// );
+/// assert_eq!(results.result[1].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
+/// assert_eq!(results.result[1].bindings[&Value::from("x")], Value::from(2u64));
 ///
 /// assert_eq!(results.result[2].expressions[0].value, Value::Bool(true));
-/// assert_eq!(
-///     results.result[2].expressions[0].text.as_ref(),
-///     "x = [1, 2, 3][_]"
-/// );
-/// assert_eq!(
-///     results.result[2].bindings[&Value::from("x")],
-///     Value::from(3u64)
-/// );
+/// assert_eq!(results.result[2].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
+/// assert_eq!(results.result[2].bindings[&Value::from("x")], Value::from(3u64));
 /// # Ok(())
 /// # }
 /// ```
@@ -478,28 +502,16 @@ impl Default for QueryResult {
 ///
 /// // Assert expressions and bindings of results.
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
-/// assert_eq!(
-///     results.result[0].expressions[0].text.as_ref(),
-///     "x = [1, 2, 3][_]"
-/// );
+/// assert_eq!(results.result[0].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
 /// assert_eq!(results.result[0].expressions[0].value, Value::Bool(true));
 /// assert_eq!(results.result[0].expressions[1].text.as_ref(), "x >= 2");
-/// assert_eq!(
-///     results.result[0].bindings[&Value::from("x")],
-///     Value::from(2u64)
-/// );
+/// assert_eq!(results.result[0].bindings[&Value::from("x")], Value::from(2u64));
 ///
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
-/// assert_eq!(
-///     results.result[1].expressions[0].text.as_ref(),
-///     "x = [1, 2, 3][_]"
-/// );
+/// assert_eq!(results.result[1].expressions[0].text.as_ref(), "x = [1, 2, 3][_]");
 /// assert_eq!(results.result[1].expressions[0].value, Value::Bool(true));
 /// assert_eq!(results.result[1].expressions[1].text.as_ref(), "x >= 2");
-/// assert_eq!(
-///     results.result[1].bindings[&Value::from("x")],
-///     Value::from(3u64)
-/// );
+/// assert_eq!(results.result[1].bindings[&Value::from("x")], Value::from(3u64));
 /// # Ok(())
 /// # }
 /// ```
@@ -510,6 +522,16 @@ pub struct QueryResults {
     /// Collection of results of evaluting a query.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub result: Vec<QueryResult>,
+}
+
+impl QueryResults {
+    /// Serialize query results as pretty JSON, preserving the Serde field layout.
+    ///
+    /// Value fields are encoded iteratively without Serde's container nesting
+    /// budget. Resource failures are returned as errors.
+    pub fn to_json_str(&self) -> anyhow::Result<String> {
+        crate::value::query_results_to_json(self)
+    }
 }
 
 /// A user defined builtin function implementation.
@@ -618,7 +640,10 @@ pub mod coverage {
 /// Items in `unstable` are likely to change.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::{ast::*, lexer::*, parser::*};
+    pub use crate::ast::*;
+    pub use crate::builtins::*;
+    pub use crate::lexer::*;
+    pub use crate::parser::*;
 }
 
 #[cfg(test)]

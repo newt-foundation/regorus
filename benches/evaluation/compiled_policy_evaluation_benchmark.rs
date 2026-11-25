@@ -1,12 +1,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use regorus::{compile_policy_with_entrypoint, CompiledPolicy, PolicyModule, Value};
-use std::{
-    collections::HashMap,
-    hint::black_box,
-    sync::{Arc, Barrier, Mutex},
-    thread,
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::hint::black_box;
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
+use std::time::Duration;
 
 mod policy_data;
 
@@ -207,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
                             // Sanity check: Ensure the expected number of evaluations matches the actual number performed per iteration batch.
                             // total_evals is the expected number for this batch, total_evals_aggregated is the sum over all iters.
-                            assert_eq!(total_evals, total_evals_aggregated / iters as usize);
+                            assert_eq!(total_evals, total_evals_aggregated/iters as usize);
 
                             // On one iteration, print policy evaluation statistics
                             if iters == 1 {
@@ -215,10 +213,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 for (policy_name, count) in &policy_counters {
                                     // println!("  {}: {} evaluations", policy_name, count);
                                     if *count == 0 {
-                                        println!(
-                                            "\x1b[31mERROR: Policy '{}' was never evaluated successfully!\x1b[0m",
-                                            policy_name
-                                        );
+                                        println!("\x1b[31mERROR: Policy '{}' was never evaluated successfully!\x1b[0m", policy_name);
                                     }
                                 }
                             }

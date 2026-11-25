@@ -395,7 +395,8 @@ fn test_azure_policy_effect_removal() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_effect_schema_access() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     let barrier = Rc::new(Barrier::new(3));
     let mut handles = vec![];

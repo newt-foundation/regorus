@@ -1,10 +1,9 @@
-use super::super::{error::TargetCompileError, *};
-use crate::{
-    ast::{BoolOp, Expr, Literal, Query, Rule},
-    compiled_policy::InferredResourceTypes,
-    value::Value,
-    Rc, Schema,
-};
+use super::super::error::TargetCompileError;
+use super::super::*;
+use crate::ast::{BoolOp, Expr, Literal, Query, Rule};
+use crate::compiled_policy::InferredResourceTypes;
+use crate::value::Value;
+use crate::{Rc, Schema};
 
 type String = Rc<str>;
 
@@ -266,8 +265,7 @@ fn validate_default_schema_compatibility(
                 format!(
                     "Default resource schema must either have additional properties enabled or contain a '{}' property",
                     resource_selector
-                )
-                .into(),
+                ).into()
             ))
         }
         _ => {

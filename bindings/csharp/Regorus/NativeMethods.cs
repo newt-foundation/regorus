@@ -26,6 +26,13 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_result_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern void regorus_result_drop(RegorusResult result);
 
+        /// <summary>
+        /// Drop a RegorusBuffer.
+        /// data is not valid after drop.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_buffer_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_buffer_drop(RegorusBuffer* buffer);
+
         #endregion
 
         #region Memory Limit Methods
@@ -86,10 +93,194 @@ namespace Regorus.Internal
         internal static extern RegorusEngine* regorus_engine_clone(RegorusEngine* engine);
 
         /// <summary>
+        /// Compile an RVM program from the engine state with entry points.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_compile_program_with_entrypoints", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_compile_program_with_entrypoints(RegorusEngine* engine, byte** entryPoints, UIntPtr entryPointsLen);
+
+        /// <summary>
         /// Drop a RegorusEngine.
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern void regorus_engine_drop(RegorusEngine* engine);
+
+        /// <summary>
+
+        /// <summary>
+        /// Compile an RVM program from data/modules and entry points.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_compile_from_modules", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_compile_from_modules(byte* data_json, RegorusPolicyModule* modules, UIntPtr modules_len, byte** entry_points, UIntPtr entry_points_len);
+
+        /// <summary>
+        /// Construct a new empty program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusProgram* regorus_program_new();
+
+        /// <summary>
+        /// Drop a program handle.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_program_drop(RegorusProgram* program);
+
+        /// <summary>
+        /// Serialize a program to binary format.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_serialize_binary", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_serialize_binary(RegorusProgram* program);
+
+        /// <summary>
+        /// Get the builtin names recorded in a program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_get_builtin_names", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_get_builtin_names(RegorusProgram* program);
+
+        /// <summary>
+        /// Deserialize a program from binary format.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_deserialize_binary", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_deserialize_binary(byte* data, UIntPtr len, byte* is_partial);
+
+        /// <summary>
+        /// Generate a readable assembly listing for the program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_generate_listing", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_generate_listing(RegorusProgram* program);
+
+        /// <summary>
+        /// Create a new RVM instance.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusRvm* regorus_rvm_new();
+
+        /// <summary>
+        /// Create a new RVM instance from a compiled policy.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_new_with_policy", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_new_with_policy(RegorusCompiledPolicy* compiled_policy);
+
+        /// <summary>
+        /// Drop an RVM instance.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_rvm_drop(RegorusRvm* vm);
+
+        /// <summary>
+        /// Load a program into the RVM.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_load_program", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_load_program(RegorusRvm* vm, RegorusProgram* program);
+
+        /// <summary>
+        /// Set the data document for the RVM.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_data", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_data(RegorusRvm* vm, byte* data_json);
+
+        /// <summary>
+        /// Set the input document for the RVM.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_input", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_input(RegorusRvm* vm, byte* input_json);
+
+        /// <summary>
+        /// Set the context document for the RVM.
+        /// The context provides host-supplied ambient data (e.g. resourceGroup(), subscription())
+        /// that Azure Policy functions can access.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_context", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_context(RegorusRvm* vm, byte* context_json);
+
+        /// <summary>
+        /// Execute the program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_execute", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_execute(RegorusRvm* vm);
+
+        /// <summary>
+        /// Execute an entry point by name.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_execute_entry_point_by_name", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_execute_entry_point_by_name(RegorusRvm* vm, byte* entry_point);
+
+        /// <summary>
+        /// Execute an entry point by index.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_execute_entry_point_by_index", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_execute_entry_point_by_index(RegorusRvm* vm, UIntPtr index);
+
+        /// <summary>
+        /// Resume execution.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_resume", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_resume(RegorusRvm* vm, byte* resume_value_json, [MarshalAs(UnmanagedType.I1)] bool has_value);
+
+        /// <summary>
+        /// Get the current execution state.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_get_execution_state", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_get_execution_state(RegorusRvm* vm);
+
+        /// <summary>
+        /// Set the maximum instruction limit.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_max_instructions", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_max_instructions(RegorusRvm* vm, UIntPtr max_instructions);
+
+        /// <summary>
+        /// Set strict builtin error handling.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_strict_builtin_errors", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_strict_builtin_errors(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool strict);
+
+        /// <summary>
+        /// Set execution mode (0 run-to-completion, 1 suspendable).
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_execution_mode", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_execution_mode(RegorusRvm* vm, byte mode);
+
+        /// <summary>
+        /// Set step mode for suspendable execution.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_step_mode", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_step_mode(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool enabled);
+
+        /// <summary>
+        /// Set execution timer configuration.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_execution_timer_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_execution_timer_config(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool has_config, RegorusExecutionTimerConfig config);
+
+        /// <summary>
+        /// Set memory budget configuration.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_memory_budget_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_memory_budget_config(RegorusRvm* vm, [MarshalAs(UnmanagedType.I1)] bool has_config, RegorusMemoryBudgetConfig config);
+
+        /// <summary>
+        /// Pre-load HostAwait responses for run-to-completion mode.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_set_host_await_responses", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_set_host_await_responses(RegorusRvm* vm, RegorusHostAwaitResponseSet* response_sets, UIntPtr response_sets_len, UIntPtr response_set_size);
+
+        /// <summary>
+        /// Get the HostAwait argument as a JSON string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_get_host_await_argument", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_get_host_await_argument(RegorusRvm* vm);
+
+        /// <summary>
+        /// Get the HostAwait identifier as a raw UTF-8 string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rvm_get_host_await_identifier", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rvm_get_host_await_identifier(RegorusRvm* vm);
+
+        /// <summary>
+        /// Compile an RVM program from data/modules/entry-points with registered host-awaitable builtins.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_program_compile_from_modules_with_host_await", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_program_compile_from_modules_with_host_await(byte* data_json, RegorusPolicyModule* modules, UIntPtr modules_len, byte** entry_points, UIntPtr entry_points_len, RegorusHostAwaitBuiltin* host_await_builtins, UIntPtr host_await_builtins_len, UIntPtr host_await_builtin_size);
 
         /// <summary>
         /// Add a policy.
@@ -98,6 +289,12 @@ namespace Regorus.Internal
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_engine_add_policy", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_engine_add_policy(RegorusEngine* engine, byte* path, byte* rego);
+
+        /// <summary>
+        /// Check whether the policy module at the exact source path declares a rule at rootName or a component-wise descendant.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_has_declared_rule_rooted_at", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_has_declared_rule_rooted_at(RegorusEngine* engine, byte* path, byte* rootName);
 
         /// <summary>
         /// Add a policy from file.
@@ -223,6 +420,12 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_engine_get_ast_as_json(RegorusEngine* engine);
 
         /// <summary>
+        /// Gets each loaded module's source label and decoded package components as JSON.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_get_policy_package_components", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_get_policy_package_components(RegorusEngine* engine);
+
+        /// <summary>
         /// Gets the package names defined in each policy added to the engine.
         /// See https://docs.rs/regorus/latest/regorus/coverage/struct.Engine.html#method.get_policy_package_names
         /// </summary>
@@ -283,6 +486,18 @@ namespace Regorus.Internal
         [DllImport(LibraryName, EntryPoint = "regorus_engine_clear_execution_timer_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_engine_clear_execution_timer_config(RegorusEngine* engine);
 
+        /// <summary>
+        /// Set the policy length limits for a specific engine instance.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_set_policy_length_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_set_policy_length_config(RegorusEngine* engine, RegorusPolicyLengthConfig config);
+
+        /// <summary>
+        /// Clear the policy length configuration for a specific engine instance.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_engine_clear_policy_length_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_engine_clear_policy_length_config(RegorusEngine* engine);
+
         #endregion
 
         #region Execution Timer Global Methods
@@ -301,6 +516,22 @@ namespace Regorus.Internal
 
         #endregion
 
+        #region Cache Configuration Global Methods
+
+        /// <summary>
+        /// Configure the global pattern caches used by regex and glob builtins.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_set_cache_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_set_cache_config(RegorusCacheConfig config);
+
+        /// <summary>
+        /// Clear all entries from every pattern cache.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_clear_cache", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_clear_cache();
+
+        #endregion
+
         #region Compilation Methods
 
         /// <summary>
@@ -316,6 +547,20 @@ namespace Regorus.Internal
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_compile_policy_for_target", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_compile_policy_for_target(byte* data_json, RegorusPolicyModule* modules, UIntPtr modules_len);
+
+        /// <summary>
+        /// Compile an Azure Policy JSON policy rule into an RVM program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_compile_azure_policy_rule", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_compile_azure_policy_rule(
+            RegorusAliasRegistry* registry, byte* policy_rule_json);
+
+        /// <summary>
+        /// Compile a full Azure Policy definition JSON into an RVM program.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_compile_azure_policy_definition", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_compile_azure_policy_definition(
+            RegorusAliasRegistry* registry, byte* policy_definition_json);
 
         #endregion
 
@@ -344,6 +589,16 @@ namespace Regorus.Internal
         /// </summary>
         [DllImport(LibraryName, EntryPoint = "regorus_compiled_policy_get_policy_info", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern RegorusResult regorus_compiled_policy_get_policy_info(RegorusCompiledPolicy* compiled_policy);
+
+        #endregion
+
+        #region RBAC Methods
+
+        /// <summary>
+        /// Evaluate an Azure RBAC condition expression against a JSON evaluation context.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_rbac_engine_eval_condition", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_rbac_engine_eval_condition(byte* condition, byte* context_json);
 
         #endregion
 
@@ -486,6 +741,67 @@ namespace Regorus.Internal
         internal static extern RegorusResult regorus_effect_schema_clear();
 
         #endregion
+
+        #region Alias Registry Methods
+
+        /// <summary>
+        /// Create a new alias registry builder.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_builder_new", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusAliasRegistryBuilder* regorus_alias_registry_builder_new();
+
+        /// <summary>
+        /// Drop an alias registry builder.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_builder_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_alias_registry_builder_drop(RegorusAliasRegistryBuilder* builder);
+
+        /// <summary>
+        /// Load control-plane alias data into the builder.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_builder_load_json", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_builder_load_json(RegorusAliasRegistryBuilder* builder, byte* json);
+
+        /// <summary>
+        /// Load a data-plane policy manifest into the builder.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_builder_load_manifest", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_builder_load_manifest(RegorusAliasRegistryBuilder* builder, byte* json);
+
+        /// <summary>
+        /// Freeze a builder into an immutable alias registry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_builder_build", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_builder_build(RegorusAliasRegistryBuilder* builder);
+
+        /// <summary>
+        /// Drop an AliasRegistry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_drop", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern void regorus_alias_registry_drop(RegorusAliasRegistry* registry);
+
+        /// <summary>
+        /// Return the number of resource types loaded in the alias registry.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_len", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_len(RegorusAliasRegistry* registry);
+
+        /// <summary>
+        /// Normalize an ARM resource JSON and wrap it into the standard input envelope.
+        /// Returns a JSON string.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_normalize_and_wrap", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_normalize_and_wrap(
+            RegorusAliasRegistry* registry, byte* resource_json, byte* api_version, byte* context_json, byte* parameters_json);
+
+        /// <summary>
+        /// Denormalize a previously-normalized resource JSON back to ARM format.
+        /// </summary>
+        [DllImport(LibraryName, EntryPoint = "regorus_alias_registry_denormalize", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern RegorusResult regorus_alias_registry_denormalize(
+            RegorusAliasRegistry* registry, byte* normalized_json, byte* api_version);
+
+        #endregion
     }
 
     #region Native Structures
@@ -562,6 +878,14 @@ namespace Regorus.Internal
         /// The engine remains poisoned because a previous panic was detected.
         /// </summary>
         Poisoned,
+        /// <summary>
+        /// An RVM execution exceeded its configured memory budget.
+        /// </summary>
+        MemoryBudgetExceeded,
+        /// <summary>
+        /// Reserved for native ABI compatibility.
+        /// </summary>
+        MemoryBudgetUnsupportedInSuspendableExecution,
     }
 
     /// <summary>
@@ -618,6 +942,47 @@ namespace Regorus.Internal
     }
 
     /// <summary>
+    /// FFI representation of the RVM memory budget configuration.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RegorusMemoryBudgetConfig
+    {
+        public ulong limit_bytes;
+    }
+
+    /// <summary>
+    /// FFI representation of the policy length configuration.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RegorusPolicyLengthConfig
+    {
+        public uint max_col;
+        public UIntPtr max_file_bytes;
+        public UIntPtr max_lines;
+    }
+
+    /// <summary>
+    /// FFI representation of the cache configuration.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RegorusCacheConfig
+    {
+        public UIntPtr regex;
+        public UIntPtr glob;
+    }
+
+    /// <summary>
+    /// Byte buffer returned from FFI.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct RegorusBuffer
+    {
+        public byte* data;
+        public UIntPtr len;
+        public UIntPtr capacity;
+    }
+
+    /// <summary>
     /// Wrapper for regorus::Engine.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -634,6 +999,22 @@ namespace Regorus.Internal
     }
 
     /// <summary>
+    /// Wrapper for regorus::rvm::Program.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusProgram
+    {
+    }
+
+    /// <summary>
+    /// Wrapper for regorus::rvm::RegoVM.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusRvm
+    {
+    }
+
+    /// <summary>
     /// FFI wrapper for PolicyModule struct.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -641,6 +1022,43 @@ namespace Regorus.Internal
     {
         public byte* id;
         public byte* content;
+    }
+
+    /// <summary>
+    /// Wrapper for AliasRegistryBuilder.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusAliasRegistryBuilder
+    {
+    }
+
+    /// <summary>
+    /// Wrapper for AliasRegistry.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusAliasRegistry
+    {
+    }
+
+    /// <summary>
+    /// FFI wrapper for HostAwaitBuiltin struct.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusHostAwaitBuiltin
+    {
+        public byte* name;
+        public UIntPtr arg_count;
+    }
+
+    /// <summary>
+    /// FFI wrapper for a per-identifier set of pre-loaded HostAwait response values.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe partial struct RegorusHostAwaitResponseSet
+    {
+        public byte* identifier;
+        public byte** values_json;
+        public UIntPtr values_len;
     }
 
     #endregion

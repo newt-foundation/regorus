@@ -1,14 +1,29 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::{rvm::instructions::LoopMode, value::Value};
+use crate::rvm::instructions::LoopMode;
+use crate::value::Value;
+use crate::Rc;
 
-use super::{
-    context::{IterationState, LoopContext},
-    errors::{Result, VmError},
-    execution_model::{ExecutionFrame, ExecutionMode, FrameKind},
-    machine::RegoVM,
-};
+use super::context::{IterationState, LoopContext};
+use super::errors::{Result, VmError};
+use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
+use super::machine::RegoVM;
+
+/// Result for a loop over a non-iterable value (null, string, number, bool, Undefined).
+/// In standard Rego mode, this helper is used for all loop modes when the
+/// collection operand is not iterable: `Every` over empty is vacuously `true`,
+/// and `Any`/`ForEach` over empty are `false`.
+/// In Azure Policy mode, this helper is still used for `Any`/`ForEach` when an
+/// object or other non-collection is encountered and short-circuits to `false`;
+/// `Every` with virtual elements is handled via a different code path.
+#[inline]
+const fn non_collection_result(mode: &LoopMode) -> Value {
+    match *mode {
+        LoopMode::Every => Value::Bool(true),
+        LoopMode::Any | LoopMode::ForEach => Value::Bool(false),
+    }
+}
 
 fn compute_body_resume_pc(loop_start_pc: usize, body_start: u16) -> usize {
     if body_start == 0 {
@@ -73,53 +88,15 @@ impl RegoVM {
         mode: &LoopMode,
         params: LoopParams,
     ) -> Result<()> {
-        let initial_result = match *mode {
-            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-        };
-        self.set_register(params.result_reg, initial_result.clone())?;
-        let collection_value = self.get_register(params.collection)?.clone();
+        self.set_register(params.result_reg, Value::Bool(false))?;
 
-        let iteration_state = match collection_value {
-            Value::Array(ref items) => {
-                if items.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Array {
-                    items: items.clone(),
-                    index: 0,
-                }
-            }
-            Value::Object(ref obj) => {
-                if obj.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
-                }
-            }
-            Value::Set(ref set) => {
-                if set.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Set {
-                    items: set.clone(),
-                    current_item: None,
-                    first_iteration: true,
-                }
-            }
-            _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                return Ok(());
-            }
+        let mut iteration_state = match self.resolve_iteration_state(mode, &params)? {
+            Some(state) => state,
+            None => return Ok(()),
         };
 
         let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+            self.setup_next_iteration(&mut iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -170,38 +147,18 @@ impl RegoVM {
             let action = Self::determine_loop_action(&loop_ctx.mode, iteration_succeeded);
 
             match action {
-                LoopAction::ExitWithSuccess => {
-                    self.set_register(loop_ctx.result_reg, Value::Bool(true))?;
-                    self.pc = usize::from(loop_end_local.saturating_sub(1));
-                    return Ok(());
-                }
-                LoopAction::ExitWithFailure => {
-                    self.set_register(loop_ctx.result_reg, Value::Bool(false))?;
+                LoopAction::ExitWithSuccess | LoopAction::ExitWithFailure => {
+                    let result_value = matches!(action, LoopAction::ExitWithSuccess);
+                    self.set_register(loop_ctx.result_reg, Value::Bool(result_value))?;
                     self.pc = usize::from(loop_end_local.saturating_sub(1));
                     return Ok(());
                 }
                 LoopAction::Continue => {}
             }
 
-            if let &mut IterationState::Object {
-                ref mut current_key,
-                ..
-            } = &mut loop_ctx.iteration_state
-            {
-                if loop_ctx.key_reg != loop_ctx.value_reg {
-                    *current_key = Some(self.get_register(loop_ctx.key_reg)?.clone());
-                }
-            } else if let &mut IterationState::Set {
-                ref mut current_item,
-                ..
-            } = &mut loop_ctx.iteration_state
-            {
-                *current_item = Some(self.get_register(loop_ctx.value_reg)?.clone());
-            }
-
             loop_ctx.iteration_state.advance();
             let has_next = self.setup_next_iteration(
-                &loop_ctx.iteration_state,
+                &mut loop_ctx.iteration_state,
                 loop_ctx.key_reg,
                 loop_ctx.value_reg,
             )?;
@@ -237,54 +194,15 @@ impl RegoVM {
         mode: &LoopMode,
         params: LoopParams,
     ) -> Result<()> {
-        let initial_result = match *mode {
-            LoopMode::Any | LoopMode::Every | LoopMode::ForEach => Value::Bool(false),
-        };
-        self.set_register(params.result_reg, initial_result.clone())?;
+        self.set_register(params.result_reg, Value::Bool(false))?;
 
-        let collection_value = self.get_register(params.collection)?.clone();
-
-        let iteration_state = match collection_value {
-            Value::Array(ref items) => {
-                if items.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Array {
-                    items: items.clone(),
-                    index: 0,
-                }
-            }
-            Value::Object(ref obj) => {
-                if obj.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Object {
-                    obj: obj.clone(),
-                    current_key: None,
-                    first_iteration: true,
-                }
-            }
-            Value::Set(ref set) => {
-                if set.is_empty() {
-                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                    return Ok(());
-                }
-                IterationState::Set {
-                    items: set.clone(),
-                    current_item: None,
-                    first_iteration: true,
-                }
-            }
-            _ => {
-                self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
-                return Ok(());
-            }
+        let mut iteration_state = match self.resolve_iteration_state(mode, &params)? {
+            Some(state) => state,
+            None => return Ok(()),
         };
 
         let has_next =
-            self.setup_next_iteration(&iteration_state, params.key_reg, params.value_reg)?;
+            self.setup_next_iteration(&mut iteration_state, params.key_reg, params.value_reg)?;
         if !has_next {
             self.pc = usize::from(params.loop_end);
             return Ok(());
@@ -368,21 +286,9 @@ impl RegoVM {
         let action = Self::determine_loop_action(&loop_mode, iteration_succeeded);
 
         match action {
-            LoopAction::ExitWithSuccess => {
-                self.set_register(result_reg, Value::Bool(true))?;
-                let completed_frame = self
-                    .execution_stack
-                    .pop()
-                    .ok_or(VmError::AssertionFailed { pc: self.pc })?;
-                if let Some(parent) = self.execution_stack.last_mut() {
-                    parent.pc = resume_pc;
-                    self.frame_pc_overridden = true;
-                }
-                drop(completed_frame);
-                Ok(())
-            }
-            LoopAction::ExitWithFailure => {
-                self.set_register(result_reg, Value::Bool(false))?;
+            LoopAction::ExitWithSuccess | LoopAction::ExitWithFailure => {
+                let result_value = matches!(action, LoopAction::ExitWithSuccess);
+                self.set_register(result_reg, Value::Bool(result_value))?;
                 let completed_frame = self
                     .execution_stack
                     .pop()
@@ -395,7 +301,14 @@ impl RegoVM {
                 Ok(())
             }
             LoopAction::Continue => {
-                let (mode, success_count, total_iterations, key_reg, value_reg, iteration_state) = {
+                let (
+                    mode,
+                    success_count,
+                    total_iterations,
+                    key_reg,
+                    value_reg,
+                    mut iteration_state,
+                ) = {
                     let (mode, success_count, total_iterations, key_reg, value_reg) = {
                         let frame = self
                             .execution_stack
@@ -413,13 +326,6 @@ impl RegoVM {
                         }
                     };
 
-                    let key_value = if key_reg != value_reg {
-                        Some(self.get_register(key_reg)?.clone())
-                    } else {
-                        None
-                    };
-                    let value_value = self.get_register(value_reg)?.clone();
-
                     let frame = self
                         .execution_stack
                         .last_mut()
@@ -428,22 +334,6 @@ impl RegoVM {
                         &mut FrameKind::Loop {
                             ref mut context, ..
                         } => {
-                            if let &mut IterationState::Object {
-                                ref mut current_key,
-                                ..
-                            } = &mut context.iteration_state
-                            {
-                                if context.key_reg != context.value_reg {
-                                    *current_key = key_value;
-                                }
-                            } else if let &mut IterationState::Set {
-                                ref mut current_item,
-                                ..
-                            } = &mut context.iteration_state
-                            {
-                                *current_item = Some(value_value.clone());
-                            }
-
                             context.iteration_state.advance();
                             context.current_iteration_failed = false;
 
@@ -460,7 +350,21 @@ impl RegoVM {
                     }
                 };
 
-                let has_next = self.setup_next_iteration(&iteration_state, key_reg, value_reg)?;
+                let has_next =
+                    self.setup_next_iteration(&mut iteration_state, key_reg, value_reg)?;
+
+                // `setup_next_iteration` advances Object's internal cursor;
+                // the owning frame holds the iteration_state, so we must
+                // write the updated state back. (Array/Set are unchanged by
+                // the call, so the writeback is uniform.)
+                if let Some(frame) = self.execution_stack.last_mut() {
+                    if let FrameKind::Loop {
+                        ref mut context, ..
+                    } = frame.kind
+                    {
+                        context.iteration_state = iteration_state;
+                    }
+                }
 
                 if has_next {
                     if let Some(frame) = self.execution_stack.last_mut() {
@@ -497,6 +401,92 @@ impl RegoVM {
         }
     }
 
+    /// Resolve the collection value into an `IterationState`, handling empty
+    /// collections and non-iterable values.
+    ///
+    /// Returns `Some(state)` when iteration should proceed, or `None` when the
+    /// loop was short-circuited (registers and PC already adjusted).
+    fn resolve_iteration_state(
+        &mut self,
+        mode: &LoopMode,
+        params: &LoopParams,
+    ) -> Result<Option<IterationState>> {
+        let collection_value = self.get_register(params.collection)?.clone();
+
+        match collection_value {
+            Value::Array(ref items) => {
+                if items.is_empty() {
+                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                    return Ok(None);
+                }
+                Ok(Some(IterationState::Array {
+                    items: items.clone(),
+                    index: 0,
+                }))
+            }
+            Value::Object(ref obj) => {
+                if self.virtual_element_on_non_collection {
+                    // Azure Policy: `[*]` expects an array.  Objects are
+                    // treated as non-collections — virtual element for Every
+                    // mode, immediate false for Any/ForEach.
+                    if *mode == LoopMode::Every {
+                        Ok(Some(IterationState::Single { consumed: false }))
+                    } else {
+                        let result = non_collection_result(mode);
+                        self.set_register(params.result_reg, result)?;
+                        self.pc = usize::from(params.loop_end).saturating_sub(1);
+                        Ok(None)
+                    }
+                } else {
+                    if obj.is_empty() {
+                        self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                        return Ok(None);
+                    }
+                    // O(1) resumable cursor over the shared Rc<Object>.
+                    // No eager pair snapshot: avoids O(N) setup, O(N) memory
+                    // floor, and O(N) memory-limit checks. Snapshot
+                    // independence is via the shared Rc (CoW).
+                    let cursor = obj.cursor();
+                    Ok(Some(IterationState::Object {
+                        obj: Rc::clone(obj),
+                        cursor,
+                    }))
+                }
+            }
+            Value::Set(ref set) => {
+                if set.is_empty() {
+                    self.handle_empty_collection(mode, params.result_reg, params.loop_end)?;
+                    return Ok(None);
+                }
+                let cursor = set.cursor();
+                Ok(Some(IterationState::Set {
+                    items: set.clone(),
+                    cursor,
+                }))
+            }
+            _ => {
+                if self.virtual_element_on_non_collection && *mode == LoopMode::Every {
+                    // Azure Policy: allOf [*] on non-collection iterates once
+                    // over a virtual null element.
+                    Ok(Some(IterationState::Single { consumed: false }))
+                } else {
+                    // Standard Rego: iterating a non-collection scalar (number,
+                    // string, bool, null, undefined) yields no iterations. For
+                    // `every` this makes the quantifier undefined (it fails) — it
+                    // is NOT vacuously true, which only applies to a genuinely
+                    // empty collection. `any`/`forEach` remain false.
+                    let result = match *mode {
+                        LoopMode::Every => Value::Undefined,
+                        LoopMode::Any | LoopMode::ForEach => Value::Bool(false),
+                    };
+                    self.set_register(params.result_reg, result)?;
+                    self.pc = usize::from(params.loop_end).saturating_sub(1);
+                    Ok(None)
+                }
+            }
+        }
+    }
+
     fn handle_empty_collection(
         &mut self,
         mode: &LoopMode,
@@ -516,7 +506,7 @@ impl RegoVM {
 
     pub(super) fn setup_next_iteration(
         &mut self,
-        state: &IterationState,
+        state: &mut IterationState,
         key_reg: u8,
         value_reg: u8,
     ) -> Result<bool> {
@@ -542,68 +532,49 @@ impl RegoVM {
             }
             IterationState::Object {
                 ref obj,
-                ref current_key,
-                ref first_iteration,
+                ref mut cursor,
             } => {
-                if *first_iteration {
-                    if let Some((key, value)) = obj.iter().next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, key.clone())?;
-                        }
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                // Object iterates via a resumable cursor on the shared
+                // `Rc<Object>`; `next` both yields the current entry and
+                // advances the cursor. No explicit `current_key` snapshot is
+                // needed — see the doc on `IterationState`.
+                if let Some((key, value)) = obj.next(cursor) {
+                    let value = value.clone();
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, key.clone())?;
                     }
-                } else if let Some(ref current) = *current_key {
-                    let mut range_iter = obj.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some((key, value)) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, key.clone())?;
-                        }
-                        self.set_register(value_reg, value.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, value)?;
+                    Ok(true)
                 } else {
                     Ok(false)
                 }
             }
             IterationState::Set {
                 ref items,
-                ref current_item,
-                ref first_iteration,
+                ref mut cursor,
             } => {
-                if *first_iteration {
-                    if let Some(item) = items.iter().next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
+                if let Some(item) = items.next(cursor) {
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, item.clone())?;
                     }
-                } else if let Some(ref current) = *current_item {
-                    let mut range_iter = items.range((
-                        core::ops::Bound::Excluded(current),
-                        core::ops::Bound::Unbounded,
-                    ));
-                    if let Some(item) = range_iter.next() {
-                        if key_reg != value_reg {
-                            self.set_register(key_reg, item.clone())?;
-                        }
-                        self.set_register(value_reg, item.clone())?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
+                    self.set_register(value_reg, item.clone())?;
+                    Ok(true)
                 } else {
                     Ok(false)
+                }
+            }
+            IterationState::Single { ref consumed } => {
+                if *consumed {
+                    Ok(false)
+                } else {
+                    // Virtual single element: key=0, value=Null.
+                    // Sub-field accesses on Null produce Undefined, which is
+                    // what Azure Policy expects for missing/non-array [*].
+                    if key_reg != value_reg {
+                        self.set_register(key_reg, Value::from(0))?;
+                    }
+                    self.set_register(value_reg, Value::Null)?;
+                    Ok(true)
                 }
             }
         }
@@ -627,7 +598,15 @@ impl RegoVM {
             return Ok(());
         }
 
-        if !self.loop_stack.is_empty() {
+        // The failure belongs to the innermost active construct. A comprehension
+        // that began after every loop on the stack (e.g. inside a loop body)
+        // is innermost and must handle the failure itself.
+        let comprehension_is_innermost = self
+            .comprehension_stack
+            .last()
+            .is_some_and(|context| context.loop_depth >= self.loop_stack.len());
+
+        if !comprehension_is_innermost && !self.loop_stack.is_empty() {
             let (loop_mode, loop_next_pc, loop_end, result_reg) = {
                 let loop_ctx = self
                     .loop_stack

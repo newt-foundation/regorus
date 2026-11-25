@@ -11,28 +11,39 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, ContextType, Result, WorklistEntry};
-use crate::{
-    ast::{Expr, Rule, RuleHead},
-    compiler::destructuring_planner::plans::BindingPlan,
-    lexer::Span,
-    rvm::{
-        program::{Program, RuleType},
-        Instruction,
-    },
-    utils::get_path_string,
-    CompiledPolicy, Map, Value,
-};
-use alloc::{
-    collections::BTreeSet,
-    format,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use crate::ast::{Expr, ExprRef, Rule, RuleHead};
+use crate::compiler::destructuring_planner::plans::BindingPlan;
+use crate::lexer::Span;
+use crate::parser::Parser;
+use crate::rvm::program::{Program, RuleType};
+use crate::rvm::Instruction;
+use crate::utils::{format_string_path, get_path_string};
+use crate::Map;
+use crate::{CompiledPolicy, Value};
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
+    /// Extract a compile-time constant `Value` from an optional expression.
+    /// Returns `Some(Value::Bool(true))` for the implicit-true case (`expr_ref`
+    /// is `None`), delegates to `try_eval_const` for actual expressions.
+    fn static_value_of_expr(expr_ref: &Option<ExprRef>) -> Option<Value> {
+        match expr_ref {
+            None => Some(Value::Bool(true)),
+            Some(expr) => super::expressions::try_eval_const(expr.as_ref()),
+        }
+    }
+
     pub(super) fn compute_rule_type(&self, rule_path: &str) -> Result<RuleType> {
         let Some(definitions) = self.policy.inner.rules.get(rule_path) else {
+            // Default-only rules (e.g., `default deny := true`) have no regular definitions
+            // in the `rules` map — they only exist in `default_rules`. Treat them as Complete.
+            if self.policy.inner.default_rules.contains_key(rule_path) {
+                return Ok(RuleType::Complete);
+            }
             return Err(CompilerError::General {
                 message: format!("no definitions found for rule path '{}'", rule_path),
             }
@@ -49,7 +60,7 @@ impl<'a> Compiler<'a> {
                             crate::ast::Expr::RefBrack { .. } if assign.is_some() => {
                                 RuleType::PartialObject
                             }
-                            crate::ast::Expr::RefBrack { .. } => RuleType::PartialSet,
+                            crate::ast::Expr::RefBrack { .. } => RuleType::PartialObject,
                             _ => RuleType::Complete,
                         },
                         _ => RuleType::Complete,
@@ -76,6 +87,54 @@ impl<'a> Compiler<'a> {
             }
             .into()
         })
+    }
+
+    fn validate_partial_object_shape(&self, refr: &ExprRef) -> Result<()> {
+        let Expr::RefBrack {
+            refr: prefix,
+            index,
+            ..
+        } = refr.as_ref()
+        else {
+            return Ok(());
+        };
+
+        if Self::has_unsupported_bracket_prefix(prefix) {
+            return Err(CompilerError::PartialObjectNestedKeyUnsupported.at(refr.span()));
+        }
+
+        if Self::is_simple_literal(index) {
+            return Err(CompilerError::PartialObjectConstantKeyUnsupported.at(index.span()));
+        }
+
+        Ok(())
+    }
+
+    fn has_unsupported_bracket_prefix(expr: &ExprRef) -> bool {
+        match expr.as_ref() {
+            Expr::RefBrack { refr, index, .. } => {
+                !Self::is_string_literal(index) || Self::has_unsupported_bracket_prefix(refr)
+            }
+            Expr::RefDot { refr, .. } => Self::has_unsupported_bracket_prefix(refr),
+            _ => false,
+        }
+    }
+
+    fn is_string_literal(expr: &ExprRef) -> bool {
+        matches!(expr.as_ref(), Expr::String { .. } | Expr::RawString { .. })
+    }
+
+    fn is_simple_literal(expr: &ExprRef) -> bool {
+        match expr.as_ref() {
+            Expr::String { .. }
+            | Expr::RawString { .. }
+            | Expr::Number { .. }
+            | Expr::Bool { .. }
+            | Expr::Null { .. } => true,
+            // Unary expressions like `-1` are constant literals too.
+            Expr::UnaryExpr { expr, .. } => Self::is_simple_literal(expr),
+            _ => false,
+        }
     }
 
     pub(super) fn get_or_assign_rule_index(&mut self, rule_path: &str) -> Result<u16> {
@@ -164,27 +223,84 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        let package = if let Some(last_dot) = rule_path.rfind('.') {
-            rule_path[..last_dot].to_string()
-        } else {
-            "data".to_string()
-        };
+        let package_components = self
+            .policy
+            .inner
+            .rule_path_components
+            .get(rule_path)
+            .ok_or_else(|| CompilerError::General {
+                message: format!("missing components for registered rule path '{rule_path}'"),
+            })?;
+        let (_, package_parts) =
+            package_components
+                .split_last()
+                .ok_or_else(|| CompilerError::General {
+                    message: format!("invalid registered rule path '{rule_path}'"),
+                })?;
+        let package_refs: Vec<&str> = package_parts.iter().map(String::as_str).collect();
+        let package =
+            format_string_path(&package_refs).map_err(|error| CompilerError::General {
+                message: format!("failed to format package path for '{rule_path}': {error}"),
+            })?;
         Ok((package, 0))
     }
 
-    /// Compile from a CompiledPolicy to RVM Program
+    /// Compile from a CompiledPolicy to RVM Program.
+    ///
+    /// Entry-point names are canonical Rego rule paths. Use bracketed string
+    /// components for literal keys that are not identifiers, such as
+    /// `data.graph.defUniqueName["1.0.0"].deny`.
     pub fn compile_from_policy(
         policy: &CompiledPolicy,
         entry_points: &[&str],
     ) -> Result<Arc<Program>> {
+        Self::compile_from_policy_with_host_await(policy, entry_points, &[])
+    }
+
+    /// Compile from a CompiledPolicy to RVM Program with registered host-awaitable builtins.
+    pub fn compile_from_policy_with_host_await(
+        policy: &CompiledPolicy,
+        entry_points: &[&str],
+        host_await_builtins: &[(&str, usize)],
+    ) -> Result<Arc<Program>> {
         let mut compiler = Compiler::with_policy(policy);
+        for &(name, arg_count) in host_await_builtins {
+            compiler.register_host_await_builtin(name, arg_count)?;
+        }
         compiler.current_rule_path = "".to_string();
         let rules = policy.get_rules();
+        let max_components = policy
+            .inner
+            .rule_path_components
+            .values()
+            .map(Vec::len)
+            .max()
+            .unwrap_or_default();
 
         for &entry_point_name in entry_points {
             let instruction_index = compiler.program.instructions.len();
-            let result_reg = compiler.alloc_register();
-            let rule_idx = compiler.get_or_assign_rule_index(entry_point_name)?;
+            let result_reg = compiler.alloc_register()?;
+            let rule_path = if policy.inner.rule_paths.contains(entry_point_name) {
+                entry_point_name.to_string()
+            } else {
+                let components =
+                    Parser::parse_static_path_components(entry_point_name, max_components)
+                        .map_err(|error| CompilerError::General {
+                            message: error.to_string(),
+                        })?;
+                let component_refs: Vec<&str> = components.iter().map(String::as_str).collect();
+                let canonical_path = format_string_path(&component_refs).map_err(|error| {
+                    CompilerError::General {
+                        message: error.to_string(),
+                    }
+                })?;
+                if policy.inner.rule_paths.contains(&canonical_path) {
+                    canonical_path
+                } else {
+                    entry_point_name.to_string()
+                }
+            };
+            let rule_idx = compiler.get_or_assign_rule_index(&rule_path)?;
             compiler
                 .entry_points
                 .insert(entry_point_name.to_string(), instruction_index);
@@ -316,6 +432,14 @@ impl<'a> Compiler<'a> {
                 self.rule_definition_destructuring_patterns.push(Vec::new());
             }
 
+            while self.rule_definition_else_bodies.len() <= rule_index as usize {
+                self.rule_definition_else_bodies.push(Vec::new());
+            }
+
+            while self.rule_definition_static_values.len() <= rule_index as usize {
+                self.rule_definition_static_values.push(Vec::new());
+            }
+
             let mut num_registers_used = 0;
             let mut rule_param_count: Option<usize> = None;
 
@@ -325,12 +449,16 @@ impl<'a> Compiler<'a> {
                     self.push_scope();
                     self.register_counter = 0;
 
-                    let result_register = self.alloc_register();
+                    let result_register = self.alloc_register()?;
 
                     self.current_module_index = self.find_module_index_for_rule(rule_ref)?;
 
                     let (key_expr, value_expr) = match head {
                         RuleHead::Compr { refr, assign, .. } => {
+                            if rule_type == RuleType::PartialObject {
+                                self.validate_partial_object_shape(refr)?;
+                            }
+
                             self.rule_definition_function_params[rule_index as usize].push(None);
                             self.rule_definition_destructuring_patterns[rule_index as usize]
                                 .push(None);
@@ -450,6 +578,7 @@ impl<'a> Compiler<'a> {
                     };
                     self.push_context(context);
                     let mut body_entry_points = Vec::new();
+                    let mut body_is_else = Vec::new();
 
                     if bodies.is_empty() {
                         let value_expr_opt = self.context_stack.last().unwrap().value_expr.clone();
@@ -480,6 +609,7 @@ impl<'a> Compiler<'a> {
 
                             let body_entry_point = self.program.instructions.len() as u32;
                             body_entry_points.push(body_entry_point);
+                            body_is_else.push(body.is_else);
 
                             ::core::convert::identity(body_idx);
 
@@ -489,7 +619,13 @@ impl<'a> Compiler<'a> {
                                 .and_then(|ctx| ctx.value_expr.clone());
                             let mut body_value_expr =
                                 body.assign.as_ref().map(|assign| assign.value.clone());
-                            if body_value_expr.is_none() && body_idx == 0 {
+                            if body_value_expr.is_none()
+                                && (body_idx == 0
+                                    || matches!(
+                                        rule_type,
+                                        RuleType::PartialSet | RuleType::PartialObject
+                                    ))
+                            {
                                 body_value_expr = previous_value_expr.clone();
                             }
 
@@ -530,7 +666,60 @@ impl<'a> Compiler<'a> {
 
                     self.pop_scope();
 
+                    // Compute this definition's static value for early-exit analysis.
+                    // A definition has a known static value if every body (including
+                    // else-branches) would produce the same literal.
+                    let def_static_value = if bodies.is_empty() {
+                        let head_value = self
+                            .context_stack
+                            .last()
+                            .and_then(|ctx| ctx.value_expr.clone());
+                        Self::static_value_of_expr(&head_value)
+                    } else {
+                        let head_value = self
+                            .context_stack
+                            .last()
+                            .and_then(|ctx| ctx.value_expr.clone());
+                        let mut consistent: Option<Value> = None;
+                        let mut all_same = true;
+                        for (bi, b) in bodies.iter().enumerate() {
+                            let mut bve: Option<ExprRef> =
+                                b.assign.as_ref().map(|a| a.value.clone());
+                            if bve.is_none()
+                                && (bi == 0
+                                    || matches!(
+                                        rule_type,
+                                        RuleType::PartialSet | RuleType::PartialObject
+                                    ))
+                            {
+                                bve = head_value.clone();
+                            }
+                            match Self::static_value_of_expr(&bve) {
+                                Some(v) => match &consistent {
+                                    None => consistent = Some(v),
+                                    Some(prev) => {
+                                        if *prev != v {
+                                            all_same = false;
+                                            break;
+                                        }
+                                    }
+                                },
+                                None => {
+                                    all_same = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if all_same {
+                            consistent
+                        } else {
+                            None
+                        }
+                    };
+                    self.rule_definition_static_values[rule_index as usize].push(def_static_value);
+
                     self.rule_definitions[rule_index as usize].push(body_entry_points);
+                    self.rule_definition_else_bodies[rule_index as usize].push(body_is_else);
 
                     if self.register_counter > num_registers_used {
                         num_registers_used = self.register_counter;
@@ -546,17 +735,60 @@ impl<'a> Compiler<'a> {
             self.rule_function_param_count[rule_index as usize] = rule_param_count;
 
             if rule_param_count.is_none() {
-                let rule_path_parts: Vec<&str> = rule_path.split('.').collect();
-                if let Some((rule_name, package_parts)) = rule_path_parts.split_last() {
-                    let package_path: Vec<String> =
-                        package_parts.iter().map(|s| s.to_string()).collect();
+                let components = self
+                    .policy
+                    .inner
+                    .rule_path_components
+                    .get(rule_path)
+                    .ok_or_else(|| CompilerError::General {
+                        message: format!(
+                            "missing components for registered rule path '{rule_path}'"
+                        ),
+                    })?;
+                let (rule_name, package_parts) =
+                    components
+                        .split_last()
+                        .ok_or_else(|| CompilerError::General {
+                            message: format!("invalid registered rule path '{rule_path}'"),
+                        })?;
+                let package_path = package_parts.to_vec();
+                self.program
+                    .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
+                    .map_err(CompilerError::from)?;
+            }
 
-                    let _ = self.program.add_rule_to_tree(
-                        &package_path,
-                        rule_name,
-                        rule_index as usize,
-                    );
+            self.register_counter = saved_register_counter;
+            self.current_package = saved_package;
+            self.current_module_index = saved_module_index;
+        } else {
+            // Default-only rule — no body definitions to compile.
+            // Ensure rule_num_registers is sized so finish() won't panic.
+            if let Some(&rule_index) = self.rule_index_map.get(rule_path) {
+                while self.rule_num_registers.len() <= rule_index as usize {
+                    self.rule_num_registers.push(0);
                 }
+
+                // Add the rule to the data tree so it is discoverable.
+                let components = self
+                    .policy
+                    .inner
+                    .rule_path_components
+                    .get(rule_path)
+                    .ok_or_else(|| CompilerError::General {
+                        message: format!(
+                            "missing components for registered rule path '{rule_path}'"
+                        ),
+                    })?;
+                let (rule_name, package_parts) =
+                    components
+                        .split_last()
+                        .ok_or_else(|| CompilerError::General {
+                            message: format!("invalid registered rule path '{rule_path}'"),
+                        })?;
+                let package_path = package_parts.to_vec();
+                self.program
+                    .add_rule_to_tree(&package_path, rule_name, rule_index as usize)
+                    .map_err(CompilerError::from)?;
             }
 
             self.register_counter = saved_register_counter;

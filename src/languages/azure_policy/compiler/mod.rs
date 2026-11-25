@@ -1,0 +1,157 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+#![allow(dead_code)]
+
+//! Azure Policy AST → RVM compiler.
+//!
+//! The compiler is split across several files:
+//! - [`binding_path`]: segment-wise matching of field paths against count
+//!   binding prefixes
+//! - [`core`]: `Compiler` struct, main pipeline, register/emit helpers
+//! - [`conditions`]: constraint / condition / LHS compilation
+//! - [`conditions_wildcard`]: implicit allOf for unbound `[*]` fields
+//! - [`count`]: `count` / `count.where` loops, existence-pattern optimization,
+//!   count-binding resolution and `current()` references
+//! - [`expressions`]: template-expression and call-expression compilation
+//! - [`fields`]: field-kind and resource-path compilation
+//! - [`template_dispatch`]: ARM template function dispatch
+//! - [`effects`]: effect compilation (dispatch + cross-resource)
+//! - [`effects_modify_append`]: Modify / Append detail compilation
+//! - [`metadata`]: annotation accumulation and population
+//! - [`utils`]: pure helper functions (path splitting, JSON conversion)
+
+mod binding_path;
+mod conditions;
+mod conditions_wildcard;
+mod core;
+mod count;
+mod effects;
+mod effects_modify_append;
+mod expressions;
+mod fields;
+mod metadata;
+mod template_dispatch;
+mod utils;
+
+use alloc::string::ToString as _;
+
+use anyhow::Result;
+
+use crate::languages::azure_policy::aliases::AliasRegistry;
+use crate::languages::azure_policy::ast::{PolicyDefinition, PolicyRule};
+use crate::rvm::program::Program;
+use crate::{Rc, Value};
+
+use self::core::Compiler;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Initialise compiler language metadata and effect annotation.
+fn init_effect_annotation(compiler: &mut Compiler, rule: &PolicyRule) {
+    compiler.program.metadata.language = "azure_policy".to_string();
+    let effect = compiler.resolve_effect_annotation(rule);
+    compiler
+        .program
+        .metadata
+        .annotations
+        .insert("effect".to_string(), Value::String(effect.as_str().into()));
+}
+
+// ---------------------------------------------------------------------------
+// Public entry points
+// ---------------------------------------------------------------------------
+
+/// Compile a parsed Azure Policy rule into an RVM program.
+pub fn compile_policy_rule(rule: &PolicyRule) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    init_effect_annotation(&mut compiler, rule);
+    compiler.compile(rule)
+}
+
+/// Compile a parsed Azure Policy rule with alias resolution.
+///
+/// The registry provides alias-to-short-name resolution and modifiability
+/// data.  Pass it as an `Rc` to avoid cloning the internal alias maps.
+pub fn compile_policy_rule_with_aliases(
+    rule: &PolicyRule,
+    registry: Rc<AliasRegistry>,
+) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    compiler.alias_registry = Some(registry);
+    init_effect_annotation(&mut compiler, rule);
+    compiler.compile(rule)
+}
+
+/// Compile a parsed Azure Policy definition into an RVM program.
+///
+/// This extracts the `policyRule` from the definition and compiles it.
+/// Parameter `defaultValue`s are collected so that later compiler passes
+/// (effect compilation, metadata population) can reference them.
+pub fn compile_policy_definition(defn: &PolicyDefinition) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    init_effect_annotation(&mut compiler, &defn.policy_rule);
+    compiler.compile(&defn.policy_rule)
+}
+
+/// Compile a parsed Azure Policy definition with alias resolution.
+pub fn compile_policy_definition_with_aliases(
+    defn: &PolicyDefinition,
+    registry: Rc<AliasRegistry>,
+) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    compiler.alias_registry = Some(registry);
+    compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    init_effect_annotation(&mut compiler, &defn.policy_rule);
+    compiler.compile(&defn.policy_rule)
+}
+
+/// Compile a parsed Azure Policy definition with alias resolution and
+/// optional fallback behaviour for unknown aliases.
+///
+/// When `alias_fallback_to_raw` is `true`, field paths that do not resolve to
+/// a known alias are silently treated as raw property paths.
+pub fn compile_policy_definition_with_aliases_opts(
+    defn: &PolicyDefinition,
+    registry: Rc<AliasRegistry>,
+    alias_fallback_to_raw: bool,
+) -> Result<Rc<Program>> {
+    let mut compiler = Compiler::new();
+    compiler.alias_registry = Some(registry);
+    compiler.alias_fallback_to_raw = alias_fallback_to_raw;
+    compiler.parameter_defaults = Some(build_parameter_defaults(&defn.parameters)?);
+    compiler.populate_definition_metadata(defn);
+    init_effect_annotation(&mut compiler, &defn.policy_rule);
+    compiler.compile(&defn.policy_rule)
+}
+
+/// Build a `Value::Object` of `{ param_name: defaultValue }` from
+/// the parsed parameter definitions.
+fn build_parameter_defaults(
+    params: &[crate::languages::azure_policy::ast::ParameterDefinition],
+) -> Result<Value> {
+    use crate::languages::azure_policy::compiler::expressions::check_json_depth;
+    use crate::languages::azure_policy::compiler::utils::json_value_to_runtime;
+    use alloc::format;
+    use anyhow::Context as _;
+    let mut obj = Value::new_object();
+    let map = obj.as_object_mut()?;
+    for param in params {
+        if let Some(ref default_val) = param.default_value {
+            check_json_depth(default_val, 0).with_context(|| {
+                format!(
+                    "invalid defaultValue for parameter '{}': exceeds maximum JSON depth",
+                    param.name
+                )
+            })?;
+            let runtime_val = json_value_to_runtime(default_val)
+                .with_context(|| format!("invalid defaultValue for parameter '{}'", param.name))?;
+            map.insert(Value::from(param.name.clone()), runtime_val);
+        }
+    }
+    Ok(obj)
+}

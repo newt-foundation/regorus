@@ -14,9 +14,15 @@
 )]
 #![allow(missing_debug_implementations)] // parser types are internal
 
-use crate::{ast::*, lexer::*, number::*, value::*, *};
+use crate::ast::*;
+use crate::lexer::*;
+use crate::number::*;
+use crate::value::*;
+use crate::*;
 
-use alloc::collections::BTreeMap;
+use crate::utils::limits::PolicyLengthConfig;
+use alloc::collections::{BTreeMap, BTreeSet};
+use core::num::NonZeroU32;
 use core::str::FromStr;
 
 use anyhow::{anyhow, bail, Result};
@@ -24,6 +30,39 @@ use anyhow::{anyhow, bail, Result};
 #[inline]
 fn check_memory_limit() -> Result<()> {
     crate::utils::limits::check_memory_limit_if_needed().map_err(|err| anyhow!(err))
+}
+
+#[derive(Clone, Debug)]
+pub struct ParserContext {
+    rego_v1: bool,
+    future_keywords: BTreeSet<String>,
+    policy_length_config: PolicyLengthConfig,
+}
+
+impl ParserContext {
+    pub(crate) fn create_rule_selector_source(&self, selector: &str) -> Result<Source> {
+        Source::from_contents_with_limits(
+            "<rule-root>".to_string(),
+            selector.to_string(),
+            self.policy_length_config.max_file_bytes,
+            self.policy_length_config.max_lines,
+        )
+    }
+
+    pub(crate) fn parse_rule_selector(
+        &self,
+        source: &Source,
+        selector: &str,
+    ) -> Result<Vec<String>> {
+        let mut parser = Parser::new_with_max_col(source, Some(self.policy_length_config.max_col))?;
+        parser.rego_v1 = self.rego_v1;
+        parser.future_keywords = self
+            .future_keywords
+            .iter()
+            .map(|keyword| (keyword.clone(), None))
+            .collect();
+        parser.parse_rule_selector(selector)
+    }
 }
 
 #[derive(Clone)]
@@ -50,11 +89,24 @@ pub struct Parser<'source> {
 }
 
 const FUTURE_KEYWORDS: [&str; 4] = ["contains", "every", "if", "in"];
-const DEFAULT_MAX_EXPR_DEPTH: usize = 32;
+const DEFAULT_MAX_EXPR_DEPTH: usize = Expr::MAX_DEPTH;
 
 impl<'source> Parser<'source> {
+    pub(crate) const MAX_PATH_COMPONENTS: usize = DEFAULT_MAX_EXPR_DEPTH;
+
     pub fn new(source: &'source Source) -> Result<Self> {
+        Self::new_with_max_col(source, None)
+    }
+
+    fn new_with_max_col(source: &'source Source, max_col: Option<NonZeroU32>) -> Result<Self> {
         let mut lexer = Lexer::new(source);
+        if let Some(max_col) = max_col {
+            lexer.set_max_col(max_col);
+        }
+        Self::from_lexer(source, lexer)
+    }
+
+    fn from_lexer(source: &'source Source, mut lexer: Lexer<'source>) -> Result<Self> {
         let tok = lexer.next_token()?;
         Ok(Self {
             source: source.clone(),
@@ -95,6 +147,17 @@ impl<'source> Parser<'source> {
         self.turn_on_rego_v1(&None)
     }
 
+    pub(crate) fn snapshot_context(
+        &self,
+        policy_length_config: PolicyLengthConfig,
+    ) -> ParserContext {
+        ParserContext {
+            rego_v1: self.rego_v1,
+            future_keywords: self.future_keywords.keys().cloned().collect(),
+            policy_length_config,
+        }
+    }
+
     fn turn_on_rego_v1(&mut self, span: &Option<Span>) -> Result<()> {
         self.rego_v1 = true;
         for kw in FUTURE_KEYWORDS {
@@ -118,13 +181,8 @@ impl<'source> Parser<'source> {
     }
 
     fn with_expr_depth<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        // Increment expression depth.
-        self.expr_depth = self.expr_depth.saturating_add(1);
-        let current_depth = self.expr_depth;
-
-        // Enforce recursion limit.
-        if self.expr_depth > self.max_expr_depth {
-            self.expr_depth = current_depth.saturating_sub(1);
+        let entry_depth = self.expr_depth;
+        if entry_depth >= self.max_expr_depth {
             self.expr_depth_overflow = true;
             bail!(self.tok.1.error(&format!(
                 "expression nesting too deep (>{})",
@@ -132,15 +190,29 @@ impl<'source> Parser<'source> {
             )));
         }
 
+        self.expr_depth = entry_depth.saturating_add(1);
         let res = f(self);
-
-        // Upon return, ensure that expression depth is still current_depth.
-        if self.expr_depth != current_depth {
+        let balanced = self.expr_depth == entry_depth.saturating_add(1);
+        self.expr_depth = entry_depth;
+        if !balanced {
             bail!("internal error: expression depth imbalance");
         }
-
-        self.expr_depth = current_depth.saturating_sub(1);
         res
+    }
+
+    fn check_expr_depth(&mut self, expr: &Expr) -> Result<()> {
+        let result = expr.check_depth();
+        if result.is_err() {
+            self.expr_depth_overflow = true;
+        }
+        result
+    }
+
+    fn is_terminal_parse_error(&self, error: &anyhow::Error) -> bool {
+        self.expr_depth_overflow
+            || error
+                .downcast_ref::<crate::utils::limits::LimitError>()
+                .is_some()
     }
 
     fn expect(&mut self, text: &str, context: &str) -> Result<()> {
@@ -194,29 +266,45 @@ impl<'source> Parser<'source> {
         }
     }
 
-    pub fn get_path_ref_components_into(refr: &Ref<Expr>, comps: &mut Vec<Span>) -> Result<()> {
-        match refr.as_ref() {
-            Expr::RefDot { refr, field, .. } => {
-                Self::get_path_ref_components_into(refr, comps)?;
-                comps.push(field.0.clone());
-            }
-            Expr::RefBrack { refr, index, .. } => {
-                Self::get_path_ref_components_into(refr, comps)?;
-                Self::get_path_ref_components_into(index, comps)?;
-            }
-            Expr::Var { span: v, .. } => comps.push(v.clone()),
-            Expr::String { span: s, .. } => comps.push(s.clone()),
-            Expr::Bool { span: s, .. } | Expr::Null { span: s, .. } => comps.push(s.clone()),
-            Expr::Number { span, value, .. } => {
-                // Ensure that the span will be the serialized representation.
-                if span.text() == value.to_json_str()? {
-                    comps.push(span.clone());
-                } else {
-                    bail!(refr.span().error("not a valid ref"));
-                }
-            }
+    pub fn set_max_col(&mut self, max_col: NonZeroU32) {
+        self.lexer.set_max_col(max_col);
+    }
 
-            _ => bail!(refr.span().error("not a valid ref")),
+    pub fn get_path_ref_components_into(refr: &Ref<Expr>, comps: &mut Vec<Span>) -> Result<()> {
+        enum ComponentAction<'a> {
+            Visit(&'a Expr),
+            Append(&'a Span),
+        }
+
+        let mut pending = alloc::vec![ComponentAction::Visit(refr.as_ref())];
+        while let Some(action) = pending.pop() {
+            match action {
+                ComponentAction::Visit(expression) => match expression {
+                    Expr::RefDot { refr, field, .. } => {
+                        pending.push(ComponentAction::Append(&field.0));
+                        pending.push(ComponentAction::Visit(refr.as_ref()));
+                    }
+                    Expr::RefBrack { refr, index, .. } => {
+                        pending.push(ComponentAction::Visit(index.as_ref()));
+                        pending.push(ComponentAction::Visit(refr.as_ref()));
+                    }
+                    Expr::Var { span, .. }
+                    | Expr::String { span, .. }
+                    | Expr::Bool { span, .. }
+                    | Expr::Null { span, .. } => comps.push(span.clone()),
+                    Expr::Number { span, value, .. } => {
+                        // Ensure that the span will be the serialized representation.
+                        if span.text() == value.to_json_str()? {
+                            comps.push(span.clone());
+                        } else {
+                            bail!(expression.span().error("not a valid ref"));
+                        }
+                    }
+                    _ => bail!(expression.span().error("not a valid ref")),
+                },
+                ComponentAction::Append(span) => comps.push(span.clone()),
+            }
+            check_memory_limit()?;
         }
         Ok(())
     }
@@ -225,6 +313,130 @@ impl<'source> Parser<'source> {
         let mut comps = vec![];
         Self::get_path_ref_components_into(refr, &mut comps)?;
         Ok(comps)
+    }
+
+    pub(crate) fn get_static_string_path_components(refr: &Expr) -> Result<Vec<String>> {
+        fn collect(refr: &Expr, components: &mut Vec<String>) -> Result<()> {
+            match refr {
+                Expr::Var { span, .. } => components.push(span.text().to_string()),
+                Expr::RefDot { refr, field, .. } => {
+                    collect(refr, components)?;
+                    components.push(field.0.text().to_string());
+                }
+                Expr::RefBrack { refr, index, .. } => {
+                    collect(refr, components)?;
+                    if let Expr::String { value, .. } = index.as_ref() {
+                        components.push(value.as_string()?.as_ref().to_string());
+                    } else {
+                        bail!(refr.span().error("not a static string path"));
+                    }
+                }
+                _ => bail!(refr.span().error("not a static string path")),
+            }
+            Ok(())
+        }
+
+        let mut components = Vec::new();
+        collect(refr, &mut components)?;
+        Ok(components)
+    }
+
+    pub(crate) fn parse_static_path_components(
+        path: &str,
+        max_components: usize,
+    ) -> Result<Vec<String>> {
+        let max_col = path
+            .len()
+            .checked_add(1)
+            .and_then(|max_col| u32::try_from(max_col).ok())
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| anyhow!("path exceeds maximum supported length"))?;
+        let source = Source::from_contents("entrypoint.rego".to_string(), path.to_string())?;
+        let mut parser = Parser::<'_>::new_with_max_col(&source, Some(max_col))?;
+        let mut components = Vec::new();
+
+        let root = parser.parse_var()?;
+        Self::push_static_path_component(&mut components, root.text().to_string(), max_components)?;
+
+        loop {
+            match parser.token_text() {
+                "." | "[" if parser.tok.1.start != parser.end => {
+                    bail!(
+                        "{}",
+                        parser.source.error(
+                            parser.tok.1.line,
+                            parser.tok.1.col.saturating_sub(1),
+                            format!("invalid whitespace before {}", parser.token_text()).as_str()
+                        )
+                    );
+                }
+                "." => {
+                    let separator = parser.tok.1.start;
+                    parser.next_token()?;
+                    let field = parser.parse_ref_field()?;
+                    if field.start != separator.saturating_add(1) {
+                        bail!(
+                            "{}",
+                            parser.source.error(
+                                field.line,
+                                field.col.saturating_sub(1),
+                                "invalid whitespace between . and identifier"
+                            )
+                        );
+                    }
+                    Self::push_static_path_component(
+                        &mut components,
+                        field.text().to_string(),
+                        max_components,
+                    )?;
+                }
+                "[" => {
+                    parser.next_token()?;
+                    if parser.tok.0 != TokenKind::String {
+                        bail!(parser.tok.1.error("expected string"));
+                    }
+                    let index = parser.parse_scalar_or_var()?;
+                    parser.expect("]", "while parsing bracketed reference")?;
+                    let Expr::String { ref value, .. } = index else {
+                        bail!("internal error: static path component is not a string");
+                    };
+                    Self::push_static_path_component(
+                        &mut components,
+                        value.as_string()?.as_ref().to_string(),
+                        max_components,
+                    )?;
+                }
+                _ => break,
+            }
+        }
+        if parser.tok.0 != TokenKind::Eof {
+            bail!(parser.tok.1.error("expecting EOF"));
+        }
+        Ok(components)
+    }
+
+    fn push_static_path_component(
+        components: &mut Vec<String>,
+        component: String,
+        max_components: usize,
+    ) -> Result<()> {
+        if components.len() >= max_components {
+            bail!("path exceeds maximum supported component count of {max_components}");
+        }
+        components.push(component);
+        check_memory_limit()?;
+        Ok(())
+    }
+
+    fn check_path_component_limit(&self, current_count: usize) -> Result<()> {
+        if current_count >= Self::MAX_PATH_COMPONENTS {
+            let message = alloc::format!(
+                "path exceeds maximum depth of {} components",
+                Self::MAX_PATH_COMPONENTS
+            );
+            bail!("{}", self.tok.1.error(&message));
+        }
+        Ok(())
     }
 
     fn handle_import_future_keywords(&mut self, comps: &[Span]) -> Result<bool> {
@@ -345,6 +557,33 @@ impl<'source> Parser<'source> {
         }
     }
 
+    /// Parse a field name after `.` in a ref expression.
+    ///
+    /// Unlike [`Self::parse_var`] and [`Self::parse_ident`], this method accepts **any**
+    /// `TokenKind::Ident` token, including reserved keywords (e.g. `as`, `default`, `else`,
+    /// `false`, `if`, `import`, `in`, `not`, `null`, `package`, `some`, `true`, `with`).
+    ///
+    /// The position immediately after `.` is unambiguously a field name, so there is no
+    /// syntactic ambiguity with statement-level keywords. This matches OPA's
+    /// `keywords_in_refs` capability, which is enabled by default in standard OPA builds.
+    ///
+    /// # Example
+    /// ```rego
+    /// allow if { input.v0.package.format == "npm" }  # `package` is a keyword but valid here
+    /// ```
+    fn parse_ref_field(&mut self) -> Result<Span> {
+        let span = self.tok.1.clone();
+        match self.tok.0 {
+            TokenKind::Ident => {
+                self.next_token()?;
+                Ok(span)
+            }
+            _ => Err(self
+                .source
+                .error(self.tok.1.line, self.tok.1.col, "expecting identifier")),
+        }
+    }
+
     fn read_number(&mut self, span: Span) -> Result<Expr> {
         match Number::from_str(span.text()) {
             Ok(v) => Ok(Expr::Number {
@@ -418,7 +657,113 @@ impl<'source> Parser<'source> {
         Ok(node)
     }
 
+    fn has_ref_separator(&self, separators: &[&str]) -> Result<bool> {
+        let mut lexer = self.lexer.clone();
+        let mut token = self.tok.clone();
+        let mut nesting = 0_usize;
+        let mut previous_end = token.1.start;
+        let mut operand = true;
+        let mut unary = false;
+        let mut field = false;
+        let mut suffix = true;
+        let mut possible_fcn = false;
+        loop {
+            check_memory_limit()?;
+            if token.0 == TokenKind::Eof {
+                return Ok(false);
+            }
+            let text = match token.0 {
+                TokenKind::String | TokenKind::RawString => "",
+                _ => token.1.text(),
+            };
+            if nesting != 0 {
+                match text {
+                    "[" | "{" | "(" | "set(" => nesting = nesting.saturating_add(1),
+                    "]" | "}" | ")" => nesting = nesting.saturating_sub(1),
+                    _ => {}
+                }
+            } else if field {
+                field = false;
+            } else if operand {
+                // Unary terms consume a complete in-expression, even across newlines.
+                if text == "-" {
+                    unary = true;
+                } else {
+                    operand = false;
+                    suffix = text != "(";
+                    possible_fcn = token.0 == TokenKind::Ident
+                        && !matches!(text, "null" | "true" | "false" | "set(");
+                    if matches!(text, "[" | "{" | "(" | "set(") {
+                        nesting = 1;
+                    }
+                }
+            } else if separators.contains(&text) && !(unary && text == "|") {
+                return Ok(true);
+            } else {
+                match text {
+                    "." if suffix && token.1.start == previous_end => field = true,
+                    "[" if suffix && token.1.start == previous_end => {
+                        // Only quoted-string indices (including parenthesized) can name functions.
+                        if possible_fcn {
+                            let mut probe = lexer.clone();
+                            let mut parens = 0_usize;
+                            loop {
+                                check_memory_limit()?;
+                                let next = probe.next_token()?;
+                                if !matches!(next.0, TokenKind::String | TokenKind::RawString)
+                                    && next.1.text() == "("
+                                {
+                                    parens = parens.saturating_add(1);
+                                } else {
+                                    possible_fcn = next.0 == TokenKind::String;
+                                    break;
+                                }
+                            }
+                            while possible_fcn && parens > 0 {
+                                check_memory_limit()?;
+                                let next = probe.next_token()?;
+                                possible_fcn =
+                                    !matches!(next.0, TokenKind::String | TokenKind::RawString)
+                                        && next.1.text() == ")";
+                                parens = parens.saturating_sub(1);
+                            }
+                            if possible_fcn {
+                                let next = probe.next_token()?;
+                                possible_fcn =
+                                    !matches!(next.0, TokenKind::String | TokenKind::RawString)
+                                        && next.1.text() == "]";
+                            }
+                        }
+                        nesting = 1;
+                    }
+                    "(" if suffix && possible_fcn => {
+                        nesting = 1;
+                        possible_fcn = false;
+                    }
+                    "*" | "/" | "%" | "+" | "-" | "&" | "|" | "<" | "<=" | "==" | ">=" | ">"
+                    | "!="
+                        if unary =>
+                    {
+                        operand = true
+                    }
+                    "in" if unary && self.future_keywords.contains_key("in") => operand = true,
+                    _ if unary && token.0 == TokenKind::Number && text.starts_with('-') => {
+                        possible_fcn = false;
+                        suffix = true;
+                    }
+                    _ => return Ok(false),
+                }
+            }
+            previous_end = token.1.end;
+            token = lexer.next_token()?;
+        }
+    }
+
     fn parse_compr(&mut self, delim: &str) -> Result<(Expr, Query)> {
+        // Avoid reparsing nested literals at each speculative comprehension level.
+        if !self.has_ref_separator(&["|"])? {
+            bail!("internal error: not a compr");
+        }
         // Save the state.
         let state = self.clone();
         let mut span = self.tok.1.clone();
@@ -426,6 +771,7 @@ impl<'source> Parser<'source> {
         // Parse the first expression as a ref.
         let term = match self.parse_ref() {
             Ok(e) if self.token_text() == "|" => e,
+            Err(err) if self.is_terminal_parse_error(&err) => return Err(err),
             _ => {
                 // Not a comprehension. Restore state.
                 *self = state;
@@ -442,8 +788,7 @@ impl<'source> Parser<'source> {
                 Ok((term, query))
             }
             Err(err) if self.end == pos => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
 
@@ -473,8 +818,7 @@ impl<'source> Parser<'source> {
                 })
             }
             Err(err) if self.end == pos => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
                 // No progress was made in parsing comprehension.
@@ -525,8 +869,7 @@ impl<'source> Parser<'source> {
                 });
             }
             Err(err) if self.end != pos => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
                 // Some progress was made parsing the set comprehension.
@@ -534,8 +877,7 @@ impl<'source> Parser<'source> {
                 return Err(err);
             }
             Err(err) => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
             }
@@ -598,8 +940,7 @@ impl<'source> Parser<'source> {
                 });
             }
             Err(err) if self.end != pos => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
                 // Some progress was made parsing the object comprehension.
@@ -607,8 +948,7 @@ impl<'source> Parser<'source> {
                 return Err(err);
             }
             Err(err) => {
-                // Propagate depth overflow error if any.
-                if self.expr_depth_overflow {
+                if self.is_terminal_parse_error(&err) {
                     return Err(err);
                 }
             }
@@ -625,15 +965,13 @@ impl<'source> Parser<'source> {
 
         while self.token_text() == "," {
             self.next_token()?;
-            let item_start = self.tok.1.start;
+            let mut item_span = self.tok.1.clone();
             let key = match self.token_text() {
                 "}" => break,
                 "" if self.tok.0 == TokenKind::Eof => break,
                 _ => self.parse_in_expr()?,
             };
 
-            let mut item_span = self.tok.1.clone();
-            span.start = item_start;
             self.expect(":", "while parsing object item")?;
             let value = self.parse_in_expr()?;
             item_span.end = self.end;
@@ -686,6 +1024,14 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_ref(&mut self) -> Result<Expr> {
+        self.with_expr_depth(|this| {
+            let expr = this.parse_ref_inner()?;
+            this.check_expr_depth(&expr)?;
+            Ok(expr)
+        })
+    }
+
+    fn parse_ref_inner(&mut self) -> Result<Expr> {
         let start = self.tok.1.start;
         let mut term = match self.token_text() {
             "[" if self.tok.0 == TokenKind::Symbol => self.parse_compr_or_array()?,
@@ -714,6 +1060,7 @@ impl<'source> Parser<'source> {
         matches!(&term, Expr::Var { .. });
 
         loop {
+            self.check_expr_depth(&term)?;
             let mut span = self.tok.1.clone();
             let sep_pos = span.start;
             span.start = start;
@@ -734,9 +1081,10 @@ impl<'source> Parser<'source> {
                     );
                 }
                 "." => {
-                    // Read identifier.
+                    // Read identifier. Keywords are allowed as field names in
+                    // dot-notation refs (e.g. `input.package.name`).
                     self.next_token()?;
-                    let field = self.parse_var()?;
+                    let field = self.parse_ref_field()?;
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
@@ -823,6 +1171,7 @@ impl<'source> Parser<'source> {
         let mut expr = self.parse_term()?;
 
         loop {
+            self.check_expr_depth(&expr)?;
             let mut span = self.tok.1.clone();
             span.start = start;
             let op = match self.token_text() {
@@ -849,6 +1198,7 @@ impl<'source> Parser<'source> {
         let mut expr = self.parse_mul_div_mod_expr()?;
 
         loop {
+            self.check_expr_depth(&expr)?;
             let mut span = self.tok.1.clone();
             span.start = start;
             let op = match self.token_text() {
@@ -897,6 +1247,7 @@ impl<'source> Parser<'source> {
                 rhs: Ref::new(right),
                 eidx: self.next_eidx(),
             };
+            self.check_expr_depth(&expr)?;
         }
         Ok(expr)
     }
@@ -918,6 +1269,7 @@ impl<'source> Parser<'source> {
                 rhs: Ref::new(right),
                 eidx: self.next_eidx(),
             };
+            self.check_expr_depth(&expr)?;
         }
         Ok(expr)
     }
@@ -947,6 +1299,7 @@ impl<'source> Parser<'source> {
                 rhs: Ref::new(right),
                 eidx: self.next_eidx(),
             };
+            self.check_expr_depth(&expr)?;
         }
         Ok(expr)
     }
@@ -974,6 +1327,7 @@ impl<'source> Parser<'source> {
                 collection: Ref::new(expr3),
                 eidx: self.next_eidx(),
             };
+            self.check_expr_depth(&expr1)?;
             expr2 = None;
 
             if self.token_text() != "in" {
@@ -996,17 +1350,15 @@ impl<'source> Parser<'source> {
     }
 
     pub fn parse_expr(&mut self) -> Result<Expr> {
-        self.with_expr_depth(|this| {
-            #[cfg(feature = "rego-extensions")]
-            {
-                this.parse_or_expr()
-            }
+        #[cfg(feature = "rego-extensions")]
+        {
+            self.parse_or_expr()
+        }
 
-            #[cfg(not(feature = "rego-extensions"))]
-            {
-                this.parse_membership_expr()
-            }
-        })
+        #[cfg(not(feature = "rego-extensions"))]
+        {
+            self.parse_membership_expr()
+        }
     }
 
     #[cfg(feature = "rego-extensions")]
@@ -1024,6 +1376,7 @@ impl<'source> Parser<'source> {
                 rhs: Ref::new(rhs),
                 eidx: self.next_eidx(),
             };
+            self.check_expr_depth(&expr)?;
         }
         Ok(expr)
     }
@@ -1046,6 +1399,10 @@ impl<'source> Parser<'source> {
     }
 
     pub fn parse_assign_expr(&mut self) -> Result<Expr> {
+        // Bare comprehension bodies must not be recursively parsed again on fallback.
+        if !self.has_ref_separator(&["=", ":="])? {
+            return self.parse_expr();
+        }
         let state = self.clone();
         let start = self.tok.1.start;
         let expr = self.parse_ref()?;
@@ -1075,13 +1432,15 @@ impl<'source> Parser<'source> {
         self.next_token()?;
         let right = self.parse_expr()?;
         span.end = self.end;
-        Ok(Expr::AssignExpr {
+        let expr = Expr::AssignExpr {
             span,
             op,
             lhs: Ref::new(expr),
             rhs: Ref::new(right),
             eidx: self.next_eidx(),
-        })
+        };
+        self.check_expr_depth(&expr)?;
+        Ok(expr)
     }
 
     fn parse_with_modifiers(&mut self) -> Result<Vec<WithModifier>> {
@@ -1272,7 +1631,19 @@ impl<'source> Parser<'source> {
         })
     }
 
-    fn parse_query(&mut self, mut span: Span, end_delim: &str) -> Result<Query> {
+    fn parse_query(&mut self, span: Span, end_delim: &str) -> Result<Query> {
+        self.with_expr_depth(|this| {
+            let query = this.parse_query_inner(span, end_delim)?;
+            let result = query.check_depth();
+            if result.is_err() {
+                this.expr_depth_overflow = true;
+            }
+            result?;
+            Ok(query)
+        })
+    }
+
+    fn parse_query_inner(&mut self, mut span: Span, end_delim: &str) -> Result<Query> {
         let state = self.clone();
         let is_definite_query = matches!(self.token_text(), "some" | "every");
 
@@ -1304,6 +1675,7 @@ impl<'source> Parser<'source> {
                 stmt
             }
             Ok(stmt) => stmt,
+            Err(e) if self.is_terminal_parse_error(&e) => return Err(e),
             Err(e) if is_definite_query => return Err(e),
             Err(e) if matches!(self.token_text(), "=" | ":=") => return Err(e),
             Err(_) => {
@@ -1386,6 +1758,7 @@ impl<'source> Parser<'source> {
     fn parse_path_ref(&mut self) -> Result<Expr> {
         let start = self.tok.1.start;
         let var = self.parse_var()?;
+        let mut component_count = 1;
 
         let (span, value) = Self::span_and_value(var);
         let mut refr = Expr::Var {
@@ -1409,9 +1782,12 @@ impl<'source> Parser<'source> {
                     );
                 }
                 "." => {
-                    // Read identifier.
+                    self.check_path_component_limit(component_count)?;
+                    component_count = component_count.saturating_add(1);
+                    // Read identifier. Keywords are allowed as field names in
+                    // dot-notation refs (e.g. `import data.my.package`).
                     self.next_token()?;
-                    let field = self.parse_ident()?;
+                    let field = self.parse_ref_field()?;
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
@@ -1433,16 +1809,11 @@ impl<'source> Parser<'source> {
                     };
                 }
                 "[" => {
+                    self.check_path_component_limit(component_count)?;
+                    component_count = component_count.saturating_add(1);
                     self.next_token()?;
                     let index = match &self.tok.0 {
-                        TokenKind::String => {
-                            let (span, value) = Self::span_and_value(self.tok.1.clone());
-                            Expr::String {
-                                span,
-                                value,
-                                eidx: self.next_eidx(),
-                            }
-                        }
+                        TokenKind::String => self.parse_scalar_or_var()?,
                         _ => {
                             return Err(self.source.error(
                                 self.tok.1.line,
@@ -1451,7 +1822,6 @@ impl<'source> Parser<'source> {
                             ));
                         }
                     };
-                    self.next_token()?;
                     self.expect("]", "while parsing bracketed reference")?;
                     span.end = self.end;
                     refr = Expr::RefBrack {
@@ -1469,6 +1839,10 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_rule_ref(&mut self) -> Result<Expr> {
+        self.parse_rule_ref_with_limit(true)
+    }
+
+    fn parse_rule_ref_with_limit(&mut self, limit_height: bool) -> Result<Expr> {
         let start = self.tok.1.start;
         let span = self.tok.1.clone();
 
@@ -1497,6 +1871,9 @@ impl<'source> Parser<'source> {
         };
 
         loop {
+            if limit_height {
+                self.check_expr_depth(&term)?;
+            }
             let mut span = self.tok.1.clone();
             span.start = start;
             match self.token_text() {
@@ -1514,7 +1891,8 @@ impl<'source> Parser<'source> {
                 "." => {
                     let sep_pos = self.tok.1.start;
                     self.next_token()?;
-                    let field = self.parse_var()?;
+                    // Keywords are allowed as field names in dot-notation refs.
+                    let field = self.parse_ref_field()?;
                     span.end = self.end;
 
                     // Disallow any whitespace between . and identifier.
@@ -1552,6 +1930,41 @@ impl<'source> Parser<'source> {
         }
 
         Ok(term)
+    }
+
+    fn parse_rule_selector(&mut self, selector: &str) -> Result<Vec<String>> {
+        let expression = self.parse_rule_ref_with_limit(false)?;
+        if self.tok.0 != TokenKind::Eof {
+            return Err(self.tok.1.error("expecting EOF"));
+        }
+
+        if !matches!(&expression, Expr::Var { .. } | Expr::RefDot { .. }) {
+            bail!("expected a rule-root selector");
+        }
+        let span = expression.span();
+        if span.start != 0 || span.text() != selector {
+            bail!("rule-root selector must match its complete input");
+        }
+
+        let mut components = Vec::new();
+        let mut expression = &expression;
+        loop {
+            match expression {
+                Expr::Var { span, .. } => {
+                    components.push(span.text().to_string());
+                    check_memory_limit()?;
+                    break;
+                }
+                Expr::RefDot { refr, field, .. } => {
+                    components.push(field.0.text().to_string());
+                    check_memory_limit()?;
+                    expression = refr.as_ref();
+                }
+                _ => bail!("expected a rule-root selector"),
+            }
+        }
+        components.reverse();
+        Ok(components)
     }
 
     pub fn parse_rule_head(&mut self) -> Result<RuleHead> {
@@ -1654,6 +2067,7 @@ impl<'source> Parser<'source> {
             let pos = self.end;
             match self.parse_query(span.clone(), "}") {
                 Ok(query) => return Ok(query),
+                Err(e) if self.is_terminal_parse_error(&e) => return Err(e),
                 Err(e) if pos != self.end => {
                     // Error encountered while parsing query.
                     return Err(e);
@@ -1666,11 +2080,13 @@ impl<'source> Parser<'source> {
         *self = state;
         let stmts = vec![self.parse_literal_stmt()?];
         span.end = self.end;
-        Ok(Query {
+        let query = Query {
             span,
             stmts,
             qidx: self.next_qidx(),
-        })
+        };
+        query.check_depth()?;
+        Ok(query)
     }
 
     pub fn parse_rule_bodies(&mut self) -> Result<Vec<RuleBody>> {
@@ -1686,6 +2102,7 @@ impl<'source> Parser<'source> {
                 bodies.push(RuleBody {
                     span,
                     assign,
+                    is_else: false,
                     query,
                 });
                 // Guard rule body accumulation against allocator limits.
@@ -1706,6 +2123,7 @@ impl<'source> Parser<'source> {
                 bodies.push(RuleBody {
                     span,
                     assign,
+                    is_else: false,
                     query,
                 });
                 // Guard rule body accumulation against allocator limits.
@@ -1733,6 +2151,7 @@ impl<'source> Parser<'source> {
             bodies.push(RuleBody {
                 span,
                 assign: None,
+                is_else: false,
                 query,
             });
             // Guard rule body accumulation against allocator limits.
@@ -1767,6 +2186,7 @@ impl<'source> Parser<'source> {
                     bodies.push(RuleBody {
                         span,
                         assign,
+                        is_else: true,
                         query,
                     });
                     // Guard rule body accumulation against allocator limits.
@@ -1782,6 +2202,7 @@ impl<'source> Parser<'source> {
                     bodies.push(RuleBody {
                         span,
                         assign,
+                        is_else: true,
                         query,
                     });
                     // Guard rule body accumulation against allocator limits.
@@ -1809,6 +2230,7 @@ impl<'source> Parser<'source> {
                     bodies.push(RuleBody {
                         span,
                         assign,
+                        is_else: true,
                         query,
                     });
                     // Guard rule body accumulation against allocator limits.
@@ -2141,5 +2563,415 @@ impl<'source> Parser<'source> {
     }
     pub fn num_queries(&self) -> u32 {
         self.qidx
+    }
+}
+
+#[cfg(test)]
+mod lookahead_tests {
+    #![allow(clippy::panic_in_result_fn)]
+
+    use super::*;
+    use core::sync::atomic::Ordering;
+
+    fn query_work(text: String) -> Result<usize> {
+        let source = Source::from_contents("work.rego".to_string(), text)?;
+        let mut parser = Parser::new(&source)?;
+        parser.enable_rego_v1()?;
+        let count = parser.lexer.token_count.clone();
+        parser.parse_query_or_literal_stmt()?;
+        assert_eq!(parser.tok.0, TokenKind::Eof);
+        assert_eq!(parser.expr_depth, 0);
+        Ok(count.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn nested_comprehension_work_is_not_exponential() -> Result<()> {
+        let mut bounded = true;
+        for open in ["[0 | ", "{0 | ", "{\"k\": 0 | "] {
+            let close = if open.starts_with('[') { "]" } else { "}" };
+            let mut previous = 0;
+            for depth in [10, 12, 14] {
+                let text = format!("{}true{}", open.repeat(depth), close.repeat(depth));
+                #[cfg(feature = "std")]
+                let start = std::time::Instant::now();
+                let work = query_work(text)?;
+                #[cfg(feature = "std")]
+                std::eprintln!(
+                    "head={open} depth={depth}: {work} lexer calls, {} us",
+                    start.elapsed().as_micros()
+                );
+                if previous != 0 {
+                    // Iterative lookahead may rescan enclosing tokens, but not reparse bodies.
+                    bounded &= work < previous * 2;
+                }
+                previous = work;
+            }
+        }
+        assert!(bounded, "adding two levels must not double parser work");
+        Ok(())
+    }
+
+    #[test]
+    fn shallow_statement_lookahead_work_is_linear() -> Result<()> {
+        for statement in ["\"ok\"\n", "`ok`\n", "[1]\n", "(true)\n"] {
+            let mut previous = 0;
+            for width in [1024, 2048, 4096, 8192] {
+                let text = format!("{{\n{}}}", statement.repeat(width));
+                let bytes = text.len();
+                let work = query_work(text)?;
+                assert!(
+                    work < bytes * 20,
+                    "{statement:?}: {work} calls for {bytes} bytes"
+                );
+                if previous != 0 {
+                    assert!(work <= previous * 2, "{statement:?}: {previous} -> {work}");
+                }
+                previous = work;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lookahead_preserves_tokens_and_reference_boundaries() -> Result<()> {
+        for (text, comprehension, assignment) in [
+            ("[[1], 2]", false, false),
+            ("[1 | true]", false, false),
+            ("[1] | true]", true, false),
+            ("{\"|\": 1} | true}", true, false),
+            ("`|` | true}", true, false),
+            ("set( # comment\n) | true}", true, false),
+            ("f(\n[1]\n)[0]\n:= 1", false, true),
+            ("x\n:= 1", false, true),
+            ("true\nx := 1", false, false),
+            ("\"a\"\n\"b\" = x", false, false),
+            ("`a`\n`b` = x", false, false),
+            ("[1]\n[2] = x", false, false),
+            ("(true)\n(true) = x", false, false),
+            ("f\n(1) = x", false, true),
+            ("f[\"x\"]\n(1) = x", false, true),
+            ("f[(\"x\")]\n(1) = x", false, true),
+            ("f[(\"x\")](1) | true]", true, false),
+            ("f[1]\n(1) = x", false, false),
+            ("f().g\n(1) = x", false, false),
+            ("-\n1 = -1", false, true),
+            ("- 1\n+\n2 = -3", false, true),
+            ("- 1 | 2 = -3", false, true),
+            ("- 1\nin [1] = false", false, true),
+            ("- 1\n-2 = -3", false, true),
+            ("- (1)\n[1] = x", false, false),
+        ] {
+            let source = Source::from_contents("probe.rego".to_string(), text.to_string())?;
+            let mut parser = Parser::new(&source)?;
+            parser.enable_rego_v1()?;
+            let position = (parser.tok.1.start, parser.line, parser.end, parser.eidx);
+            assert_eq!(parser.has_ref_separator(&["|"])?, comprehension, "{text}");
+            assert_eq!(
+                parser.has_ref_separator(&["=", ":="])?,
+                assignment,
+                "{text}"
+            );
+            assert_eq!(
+                (parser.tok.1.start, parser.line, parser.end, parser.eidx),
+                position
+            );
+            parser.parse_ref()?;
+            assert_eq!(
+                matches!(parser.token_text(), "=" | ":="),
+                assignment,
+                "{text}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn assignment_lookahead_matches_reference_parser() -> Result<()> {
+        for term in [
+            "x",
+            "f[\"x\"]",
+            "f[(\"x\")]",
+            "f[1]",
+            "(x)",
+            "[1]",
+            "{\"x\":1}",
+            "- x",
+            "- (x)",
+            "- [1]",
+            "set()",
+            "f().x",
+        ] {
+            for tail in [
+                " = 1",
+                "\n= 1",
+                "[1] = 1",
+                "\n[1] = 1",
+                "(1) = 1",
+                "\n(1) = 1",
+                ".x = 1",
+                "\n.x = 1",
+                " + 1 = 1",
+                "\n+1 = 1",
+                " | 1 = 1",
+                "\nin [1] = 1",
+                "\ntrue = 1",
+            ] {
+                let text = format!("{term}{tail}");
+                let source = Source::from_contents("boundaries.rego".to_string(), text.clone())?;
+                let mut parser = Parser::new(&source)?;
+                parser.enable_rego_v1()?;
+                let lookahead = parser.has_ref_separator(&["=", ":="])?;
+                if parser.parse_ref().is_ok() {
+                    assert_eq!(
+                        lookahead,
+                        matches!(parser.token_text(), "=" | ":="),
+                        "{text}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_unary_unification_remains_one_statement() -> Result<()> {
+        for text in [
+            "-\n1 = -1",
+            "- # operand on next line\n1 = -1",
+            "- 1\n+\n2 = -3",
+            "- 1 | 2 = -3",
+            "- 1\nin [1] = false",
+            "- 1\n-2 = -3",
+        ] {
+            let source = Source::from_contents("unary.rego".to_string(), text.to_string())?;
+            let mut parser = Parser::new(&source)?;
+            parser.enable_rego_v1()?;
+            let query = parser.parse_user_query()?;
+            assert_eq!(query.stmts.len(), 1, "{text}");
+            assert!(matches!(
+                &query.stmts[0].literal,
+                Literal::Expr { expr, .. }
+                    if matches!(expr.as_ref(), Expr::AssignExpr { op: AssignOp::Eq, .. })
+            ));
+            assert_eq!(parser.tok.0, TokenKind::Eof);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn depth_errors_survive_lookahead_and_fallback() -> Result<()> {
+        for text in [
+            "[[[1]]]",
+            "count(count(count(1)))",
+            "{1: {1: {1: 1}}}",
+            "{{{1}}}",
+            "input[input[input[1]]]",
+            "- - - 1",
+            "(((1)))",
+            "[[[1 | true] | true] | true]",
+        ] {
+            for entry in 0..3 {
+                let source = Source::from_contents("nesting.rego".to_string(), text.to_string())?;
+                let mut parser = Parser::new(&source)?;
+                parser.max_expr_depth = 3;
+                let result = match entry {
+                    0 => parser.parse_expr(),
+                    1 => parser.parse_in_expr(),
+                    _ => parser.parse_ref(),
+                };
+                let error = result.err().ok_or_else(|| anyhow!("accepted {text}"))?;
+                assert!(error
+                    .to_string()
+                    .contains("expression nesting too deep (>3)"));
+                assert_eq!(parser.expr_depth, 0);
+                assert!(parser.expr_depth_overflow);
+            }
+        }
+        for text in [
+            "every x in [1] { every y in [1] { every z in [1] { true } } }",
+            "[1 | [[[1]]]]",
+            "{1: [1 | [[[1]]]]}",
+        ] {
+            let source = Source::from_contents("body.rego".to_string(), text.to_string())?;
+            let mut parser = Parser::new(&source)?;
+            parser.enable_rego_v1()?;
+            parser.max_expr_depth = 3;
+            let error = parser
+                .parse_user_query()
+                .err()
+                .ok_or_else(|| anyhow!("accepted {text}"))?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("expression nesting too deep (>3)"),
+                "{error}"
+            );
+            assert_eq!(parser.expr_depth, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sibling_terms_and_failed_probes_do_not_consume_depth() -> Result<()> {
+        for text in [
+            "[[1], [2], [3], [4]]",
+            "{1: [1], 2: [2], 3: [3]}",
+            "{[1], [2], [3]}",
+            "f([1], [2], [3])",
+            "[1 + 2, 3 * 4]",
+            "[1 | true]",
+            "{1: 2 | true}",
+        ] {
+            let source = Source::from_contents("width.rego".to_string(), text.to_string())?;
+            let mut parser = Parser::new(&source)?;
+            parser.max_expr_depth = 3;
+            parser.parse_expr()?;
+            assert_eq!(parser.expr_depth, 0);
+            assert!(!parser.expr_depth_overflow);
+            assert_eq!(parser.tok.0, TokenKind::Eof);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nesting_scope_restores_depth_on_all_result_exits() -> Result<()> {
+        let source = Source::from_contents("scope.rego".to_string(), "1".to_string())?;
+        let mut parser = Parser::new(&source)?;
+        parser.expr_depth = 1;
+        parser.with_expr_depth(|_| Ok(()))?;
+        assert_eq!(parser.expr_depth, 1);
+
+        let failure: Result<()> = parser.with_expr_depth(|_| bail!("syntax error"));
+        assert!(failure.is_err());
+        assert_eq!(parser.expr_depth, 1);
+
+        let imbalance = parser.with_expr_depth(|this| {
+            this.expr_depth = 0;
+            Ok(())
+        });
+        assert!(imbalance.is_err());
+        assert_eq!(parser.expr_depth, 1);
+
+        parser.max_expr_depth = 1;
+        let overflow = parser.with_expr_depth(|_| Ok(()));
+        assert!(overflow.is_err());
+        assert_eq!(parser.expr_depth, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn nesting_budget_covers_rule_heads_bindings_and_modifiers() -> Result<()> {
+        for text in [
+            "package p\nr := [[[1]]]",
+            "package p\nf([[[x]]]) := 1",
+            "package p\ndefault f(x) := [[[1]]]",
+            "package p\nr[[[[1]]]] := 1",
+            "package p\nr if { [[[x]]] := input }",
+            "package p\nr if { some x in [[[1]]] }",
+            "package p\nr if { true with input as [[[1]]] }",
+            "package p\nr if { every x in [[[1]]] { true } }",
+        ] {
+            let source = Source::from_contents("contexts.rego".to_string(), text.to_string())?;
+            let mut parser = Parser::new(&source)?;
+            parser.enable_rego_v1()?;
+            parser.max_expr_depth = 3;
+            let error = parser
+                .parse()
+                .err()
+                .ok_or_else(|| anyhow!("accepted {text}"))?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("expression nesting too deep (>3)"),
+                "{text}: {error}"
+            );
+            assert_eq!(parser.expr_depth, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nesting_scope_preserves_typed_resource_errors() -> Result<()> {
+        let source = Source::from_contents("resource.rego".to_string(), "1".to_string())?;
+        let mut parser = Parser::new(&source)?;
+        let limit = crate::utils::limits::LimitError::MemoryLimitExceeded { usage: 2, limit: 1 };
+        let result: Result<()> = parser.with_expr_depth(|_| Err(anyhow!(limit)));
+        let error = result
+            .err()
+            .ok_or_else(|| anyhow!("resource failure was lost"))?;
+        assert_eq!(
+            error.downcast_ref::<crate::utils::limits::LimitError>(),
+            Some(&limit)
+        );
+        assert!(parser.is_terminal_parse_error(&error));
+        assert_eq!(parser.expr_depth, 0);
+        assert!(!parser.expr_depth_overflow);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod iterative_path_tests {
+    #![allow(clippy::panic_in_result_fn)]
+
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn path_components_preserve_bracket_order_and_numeric_validation() -> Result<()> {
+        let source =
+            Source::from_contents("path.rego".to_string(), "root[\"key\"][1]".to_string())?;
+        let mut parser = Parser::new(&source)?;
+        let reference = Ref::new(parser.parse_rule_ref()?);
+        let components = Parser::get_path_ref_components(&reference)?;
+        let component_text = components
+            .iter()
+            .map(|component| component.text())
+            .collect::<Vec<_>>();
+
+        assert_eq!(component_text, alloc::vec!["root", "key", "1"]);
+
+        let invalid_source =
+            Source::from_contents("invalid-number.rego".to_string(), "root01".to_string())?;
+        let root = Ref::new(Expr::Var {
+            span: Span {
+                source: invalid_source.clone(),
+                line: 1,
+                col: 1,
+                start: 0,
+                end: 4,
+            },
+            value: Value::from("root"),
+            eidx: 0,
+        });
+        let invalid_number = Ref::new(Expr::Number {
+            span: Span {
+                source: invalid_source.clone(),
+                line: 1,
+                col: 5,
+                start: 4,
+                end: 6,
+            },
+            value: Value::from(1_i64),
+            eidx: 0,
+        });
+        let invalid_reference = Ref::new(Expr::RefBrack {
+            span: Span {
+                source: invalid_source,
+                line: 1,
+                col: 1,
+                start: 0,
+                end: 6,
+            },
+            refr: root,
+            index: invalid_number,
+            eidx: 0,
+        });
+        let error = Parser::get_path_ref_components(&invalid_reference)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("non-canonical numeric references must fail"))?;
+        assert!(error.to_string().contains("not a valid ref"));
+
+        Ok(())
     }
 }

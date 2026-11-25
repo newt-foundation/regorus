@@ -6,22 +6,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::{String, ToString},
-};
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::{String, ToString};
 
 use anyhow::Result;
 
-use crate::{
-    ast::{
-        AssignOp,
-        Expr::{self, *},
-        ExprRef,
-    },
-    lexer::{SourceStr, Span},
-    value::Value,
-};
+use crate::ast::Expr::{self, *};
+use crate::ast::{AssignOp, ExprRef};
+use crate::lexer::{SourceStr, Span};
+use crate::value::Value;
 
 #[derive(Clone, Default, Debug)]
 pub struct Scope {

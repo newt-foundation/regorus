@@ -8,21 +8,17 @@
 )]
 
 use super::{Compiler, CompilerError, Result};
-use crate::{
-    interpreter::Interpreter,
-    rvm::{
-        program::{Program, RuleType, SpanInfo},
-        Instruction,
-    },
-    Rc, Value,
-};
-use alloc::{
-    collections::BTreeMap,
-    format,
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
+use crate::interpreter::Interpreter;
+use crate::lexer::Source;
+use crate::rvm::program::{Program, RuleType, SpanInfo};
+use crate::rvm::Instruction;
+use crate::Rc;
+use crate::Value;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 use anyhow::anyhow;
 
 impl<'a> Compiler<'a> {
@@ -104,6 +100,49 @@ impl<'a> Compiler<'a> {
             };
 
             rule_info.destructuring_blocks = destructuring_blocks;
+            rule_info.else_bodies = self
+                .rule_definition_else_bodies
+                .get(rule_index as usize)
+                .cloned()
+                .unwrap_or_else(|| {
+                    rule_info
+                        .definitions
+                        .iter()
+                        .map(|b| vec![false; b.len()])
+                        .collect()
+                });
+
+            // Compute early_exit_on_first_success: if every definition has
+            // the same static value, the VM can stop after the first success.
+            // Only relevant for Complete rules and function rules with ≥2 defs.
+            let static_values = self.rule_definition_static_values.get(rule_index as usize);
+            if let Some(svs) = static_values {
+                if svs.len() >= 2 {
+                    // Check that all definitions have a known static value and
+                    // that they are all equal.
+                    let mut all_same = true;
+                    let mut reference: Option<&Value> = None;
+                    for sv in svs {
+                        match sv {
+                            Some(v) => match reference {
+                                None => reference = Some(v),
+                                Some(r) => {
+                                    if r != v {
+                                        all_same = false;
+                                        break;
+                                    }
+                                }
+                            },
+                            None => {
+                                all_same = false;
+                                break;
+                            }
+                        }
+                    }
+                    rule_info.early_exit_on_first_success = all_same && reference.is_some();
+                }
+            }
+
             rule_infos_map.insert(rule_index as usize, rule_info);
         }
 
@@ -121,7 +160,7 @@ impl<'a> Compiler<'a> {
             .collect();
 
         for (rule_path, rule_index) in rule_paths_to_evaluate {
-            if let Some(default_literal_index) = self.evaluate_default_rule(&rule_path) {
+            if let Some(default_literal_index) = self.evaluate_default_rule(&rule_path)? {
                 if let Some(rule_info) = rule_infos_map.get_mut(&rule_index) {
                     rule_info.set_default_literal_index(default_literal_index);
                 }
@@ -130,10 +169,31 @@ impl<'a> Compiler<'a> {
 
         self.program.rule_infos = rule_infos_map.into_values().collect();
 
-        for module in self.policy.get_modules().iter() {
-            let source = &module.package.refr.span().source;
-            let source_path = source.get_path().to_string();
-            let source_content = source.get_contents().to_string();
+        // Spans refer to sources by the index assigned on first use, so the
+        // sources that spans refer to come first, in that order.
+        let mut referenced: Vec<(usize, &Source)> = self
+            .source_to_index
+            .iter()
+            .map(|(source, &index)| (index, source))
+            .collect();
+        referenced.sort_unstable_by_key(|&(index, _)| index);
+        let modules = self.policy.get_modules();
+        let unreferenced = modules
+            .iter()
+            .map(|module| &module.package.refr.span().source)
+            .filter(|source| !self.source_to_index.contains_key(*source));
+        let sources: Vec<(String, String)> = referenced
+            .into_iter()
+            .map(|(_, source)| source)
+            .chain(unreferenced)
+            .map(|source| {
+                (
+                    source.get_path().to_string(),
+                    source.get_contents().to_string(),
+                )
+            })
+            .collect();
+        for (source_path, source_content) in sources {
             self.program.add_source(source_path, source_content);
         }
 
@@ -153,9 +213,9 @@ impl<'a> Compiler<'a> {
         Ok(self.program)
     }
 
-    fn evaluate_default_rule(&mut self, rule_path: &str) -> Option<u16> {
+    fn evaluate_default_rule(&mut self, rule_path: &str) -> Result<Option<u16>> {
         if !self.policy.inner.default_rules.contains_key(rule_path) {
-            return None;
+            return Ok(None);
         }
 
         let mut interpreter = Interpreter::new_from_compiled_policy(self.policy.inner.clone());
@@ -164,13 +224,16 @@ impl<'a> Compiler<'a> {
             Ok(computed_value) => {
                 if computed_value != Value::Undefined {
                     let literal_index = self.add_literal(computed_value);
-                    return Some(literal_index);
+                    return Ok(Some(literal_index));
                 }
             }
-            Err(_e) => {}
+            Err(error) if crate::interpreter::is_evaluation_limit_error(&error) => {
+                return Err(CompilerError::from(error).into());
+            }
+            Err(_) => {}
         }
 
-        None
+        Ok(None)
     }
 
     fn extract_destructuring_blocks(&self, rule_index: u16) -> Vec<Option<u32>> {

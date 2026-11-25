@@ -2,10 +2,11 @@
 
 [package]
 name = "regorus-java"
-version = "0.9.0"
+version = "0.15.0"
 edition = "2021"
 repository = "https://github.com/microsoft/regorus/bindings/java"
 description = "Java bindings for Regorus - a fast, lightweight Rego interpreter written in Rust"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
 keywords = ["interpreter", "opa", "policy-as-code", "rego"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,12 +14,13 @@ keywords = ["interpreter", "opa", "policy-as-code", "rego"]
 crate-type = ["cdylib"]
 
 [features]
-default = ["ast", "coverage", "regorus/std", "regorus/full-opa"]
+default = ["ast", "cache", "coverage", "regorus/std", "regorus/full-opa", "regorus/allocator-memory-limits"]
 coverage = ["regorus/coverage"]
 ast = ["regorus/ast"]
+cache = ["regorus/cache"]
 
 [dependencies]
 anyhow = "1.0"
-serde_json = "1.0.112"
-jni = "0.21.1"
-regorus = { path  = "../..", default-features = false, features = ["arc"] }
+serde_json = "1.0.150"
+jni = "0.22.4"
+regorus = { path  = "../..", default-features = false, features = ["arc", "rvm"] }

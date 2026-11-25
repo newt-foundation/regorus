@@ -18,8 +18,13 @@ var w = new Stopwatch();
 
 w.Restart();
 
+// Configure the global pattern caches.
+Regorus.Engine.SetCacheConfig(new Regorus.CacheConfig(regex: 256, glob: 128));
+
 var engine = new Regorus.Engine();
 engine.SetRegoV0(true);
+// Raise the default col limit to 2000
+engine.SetPolicyLengthConfig(new Regorus.PolicyLengthConfig(maxCol: 2000, maxFileBytes: 1048576, maxLines: 20000));
 
 w.Stop();
 var newEngineTicks = w.ElapsedTicks;
@@ -42,7 +47,8 @@ w.Restart();
 
 // Set input and eval rule.
 engine.SetInputFromJsonFile("../../../tests/aci/input.json");
-var value = engine.EvalRule("data.framework.mount_overlay");
+var value = engine.EvalRule("data.framework.mount_overlay")
+    ?? throw new System.InvalidOperationException("Expected EvalRule to return a JSON value.");
 
 #if NET8_0_OR_GREATER
 var valueDoc = System.Text.Json.JsonDocument.Parse(value);

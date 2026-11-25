@@ -1,18 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use regorus::{
-    languages::rego::compiler::Compiler,
-    rvm::{tests::test_utils::test_round_trip_serialization, vm::RegoVM},
-    *,
-};
+use regorus::languages::rego::compiler::Compiler;
+use regorus::rvm::tests::test_utils::test_round_trip_serialization;
+use regorus::rvm::vm::RegoVM;
+use regorus::*;
 
 use regorus::Rc;
-use std::{
-    collections::BTreeMap,
-    io::{self, Write},
-    path::Path,
-    process::Command,
-};
+use std::collections::BTreeMap;
+use std::io::{self, Write};
+use std::path::Path;
+use std::process::Command;
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -29,7 +26,6 @@ const OPA_TODO_FOLDERS: &[&str] = &[
     "baseandvirtualdocs",
     "dataderef",
     "defaultkeyword",
-    "every",
     "fix1863",
     "functions",
     "partialdocconstants",
@@ -105,6 +101,20 @@ fn log_rvm_skip(case_note: &str, folder_name: Option<&str>) {
     }
 }
 
+/// Allows temporarily enabling RVM verification for folders otherwise listed in
+/// `OPA_TODO_FOLDERS`, without editing the source. Set `OPA_UNSKIP_FOLDERS` to a
+/// comma-separated list of folder names (e.g. `every,functions`) or `all`.
+/// Intended for auditing latent RVM bugs in currently-skipped constructs.
+fn folder_rvm_unskipped(folder: &str) -> bool {
+    match std::env::var("OPA_UNSKIP_FOLDERS") {
+        Ok(list) => {
+            let list = list.trim();
+            list.eq_ignore_ascii_case("all") || list.split(',').any(|f| f.trim() == folder)
+        }
+        Err(_) => false,
+    }
+}
+
 fn setup_engine_for_case(case: &TestCase, is_rego_v0_test: bool) -> Result<EngineSetup> {
     let mut engine = Engine::new();
 
@@ -158,7 +168,7 @@ fn eval_test_case(case: &TestCase, is_rego_v0_test: bool) -> Result<Value> {
             // Get test to pass for now.
             query_results = qr_full;
         } else {
-            println!("{}", serde_yaml::to_string(case)?);
+            println!("{}", yaml_serde::to_string(case)?);
         }
     }
 
@@ -278,6 +288,14 @@ fn is_with_keyword_unsupported_error(err: &anyhow::Error) -> bool {
     })
 }
 
+fn is_partial_object_unsupported_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let msg = cause.to_string();
+        msg.contains("partial object rules with constant keys are not yet supported")
+            || msg.contains("partial object rules with nested bracket keys are not yet supported")
+    })
+}
+
 fn maybe_verify_rvm_case(case: &TestCase, is_rego_v0_test: bool, actual: &Value) -> Result<()> {
     if case.note == "defaultkeyword/function with var arg, ref head query" {
         println!(
@@ -311,6 +329,14 @@ fn maybe_verify_rvm_case(case: &TestCase, is_rego_v0_test: bool, actual: &Value)
                 return Ok(());
             }
 
+            if is_partial_object_unsupported_error(&err) {
+                println!(
+                    "    skipping RVM check for '{}' (partial object pattern unsupported)",
+                    case.note
+                );
+                return Ok(());
+            }
+
             return Err(err);
         }
     };
@@ -321,8 +347,8 @@ fn maybe_verify_rvm_case(case: &TestCase, is_rego_v0_test: bool, actual: &Value)
     };
 
     if &rvm_binding != actual {
-        let interpreter_yaml = serde_yaml::to_string(actual)?;
-        let rvm_yaml = serde_yaml::to_string(&rvm_binding)?;
+        let interpreter_yaml = yaml_serde::to_string(actual)?;
+        let rvm_yaml = yaml_serde::to_string(&rvm_binding)?;
         bail!(
             "RVM mismatch for query '{}':\nINTERPRETER:\n{}\nRVM:\n{}",
             case.query,
@@ -367,11 +393,15 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
         }
         let path = Path::new(&path_str);
         let path_dir = path.strip_prefix(tests_path)?.parent().unwrap();
-        let path_dir_str = path_dir.to_string_lossy().to_string();
+        // Normalize to forward slashes so the folder filter at the
+        // `folders.iter().any(|f| &path_dir_str == f)` check below matches
+        // CLI arguments like `v0/aggregates` on Windows, where
+        // `to_string_lossy` yields backslash separators by default.
+        let path_dir_str = path_dir.to_string_lossy().replace('\\', "/");
         let folder_name = folder_name_from_path(path_dir);
         let skip_rvm_for_folder = folder_name
             .as_deref()
-            .map(|folder| OPA_TODO_FOLDERS.contains(&folder))
+            .map(|folder| OPA_TODO_FOLDERS.contains(&folder) && !folder_rvm_unskipped(folder))
             .unwrap_or(false);
 
         if path.is_dir() {
@@ -390,7 +420,7 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
         let entry = status.entry(path_dir_str).or_insert((0, 0, 0));
 
         let yaml_str = std::fs::read_to_string(&path_str)?;
-        let test: YamlTest = serde_yaml::from_str(&yaml_str)?;
+        let test: YamlTest = yaml_serde::from_str(&yaml_str)?;
 
         for mut case in test.cases {
             let is_json_schema_test = case.note.starts_with("json_verify_schema")
@@ -479,7 +509,7 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
                         maybe_verify_rvm_case(&case, is_rego_v0_test, &actual)
                     {
                         println!("\n{} failed.", case.note);
-                        println!("{}", serde_yaml::to_string(&case)?);
+                        println!("{}", yaml_serde::to_string(&case)?);
                         println!("{rvm_err}");
                         entry.1 += 1;
                         n += 1;
@@ -496,7 +526,7 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
                         maybe_verify_rvm_case(&case, is_rego_v0_test, &actual)
                     {
                         println!("\n{} failed.", case.note);
-                        println!("{}", serde_yaml::to_string(&case)?);
+                        println!("{}", yaml_serde::to_string(&case)?);
                         println!("{rvm_err}");
                         entry.1 += 1;
                         n += 1;
@@ -528,10 +558,10 @@ fn run_opa_tests(opa_tests_dir: String, folders: &[String]) -> Result<()> {
                 }
                 (r, _) => {
                     println!("\n{} failed.", case.note);
-                    println!("{}", serde_yaml::to_string(&case)?);
+                    println!("{}", yaml_serde::to_string(&case)?);
                     match &r {
                         Ok(actual) => {
-                            println!("GOT\n{}", serde_yaml::to_string(&actual)?);
+                            println!("GOT\n{}", yaml_serde::to_string(&actual)?);
                         }
                         Err(e) => println!("ERROR: {e}"),
                     }
@@ -655,6 +685,15 @@ fn main() -> Result<()> {
         Some(p) => p,
         None => {
             let branch_dir = format!("target/opa/branch/{OPA_BRANCH}");
+            if std::path::Path::exists(Path::new(&branch_dir))
+                && !std::path::Path::exists(Path::new(format!("{branch_dir}/.git").as_str()))
+            {
+                // A stale/partial checkout (e.g. left behind by a cancelled
+                // run or restored from a build cache) can exist without a
+                // `.git` directory. `git clone` refuses to clone into a
+                // non-empty directory, so remove any stale contents first.
+                std::fs::remove_dir_all(&branch_dir)?;
+            }
             std::fs::create_dir_all(&branch_dir)?;
             if !std::path::Path::exists(Path::new(format!("{branch_dir}/.git").as_str())) {
                 let output = match Command::new("git")

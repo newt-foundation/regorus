@@ -14,40 +14,218 @@
 
 use std::env;
 
-use crate::{
-    test_utils::{check_output, ValueOrVec},
-    utils::limits::{
-        acquire_limits_test_lock, fallback_execution_timer_config, ExecutionTimerConfig,
-    },
-    *,
+use crate::test_utils::{check_output, ValueOrVec};
+#[cfg(feature = "azure_policy")]
+use crate::utils::limits::PolicyLengthConfig;
+use crate::utils::limits::{
+    acquire_limits_test_lock, fallback_execution_timer_config, ExecutionTimerConfig,
 };
+use crate::*;
 
 use anyhow::{bail, Result};
-use core::{num::NonZeroU32, time::Duration};
+use core::num::NonZeroU32;
+use core::time::Duration;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use test_generator::test_resources;
 use timer_test_support::{
     apply_engine_timer, configure_time_source, reset_time_source, GlobalTimerGuard,
 };
 
+fn assert_conflict_diagnostic(message: &str, expected_line: &str) {
+    let conflict_line = message
+        .lines()
+        .find(|line| line.starts_with("error: rule conflicts"))
+        .unwrap();
+    assert_eq!(conflict_line, expected_line);
+    assert_eq!(message.matches("\n--> ").count(), 1);
+    assert_eq!(message.matches("| ^").count(), 1);
+    assert_eq!(message.matches("error: ").count(), 1);
+    assert!(!message.contains("defined here"));
+    assert!(!message.contains("p := 1"));
+}
+
+#[test]
+fn rule_conflict_reports_previous_rule_location_without_nested_diagnostic() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            r"C:\policy files\first.rego".to_string(),
+            "package test\np := 1\n".to_string(),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            r"C:\policy files\second.rego".to_string(),
+            "package test\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("--> C:\\policy files\\second.rego:2:1"));
+    assert!(message.contains("| p := 2"));
+    assert_conflict_diagnostic(
+        &message,
+        "error: rule conflicts with rule at C:\\policy files\\first.rego:2:1",
+    );
+    assert!(!message.contains("\n--> C:\\policy files\\first.rego:2:1"));
+    assert!(!message.contains('"'));
+}
+
+#[test]
+fn rule_conflict_reports_current_location_for_same_file_rules() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            r"C:\policy files\same.rego".to_string(),
+            "package test\np := 1\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("--> C:\\policy files\\same.rego:3:1"));
+    assert!(message.contains("| p := 2"));
+    assert!(message.contains("error: rule conflicts with rule at C:\\policy files\\same.rego:2:1"));
+    assert_eq!(message.matches("\n--> ").count(), 1);
+    assert_eq!(message.matches("| ^").count(), 1);
+    assert_eq!(message.matches("error: ").count(), 1);
+    assert!(!message.contains("p := 1"));
+    assert!(!message.contains('"'));
+}
+
+#[test]
+fn rule_conflict_reports_escaped_newline_in_previous_rule_file_label() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            "C:\\policy files\\first\nsplit.rego".to_string(),
+            "package test\np := 1\n".to_string(),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            r"C:\policy files\second.rego".to_string(),
+            "package test\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    let conflict_line = message
+        .lines()
+        .find(|line| line.starts_with("error: rule conflicts"))
+        .unwrap();
+    assert_conflict_diagnostic(
+        &message,
+        "error: rule conflicts with rule at C:\\policy files\\first%0Asplit.rego:2:1",
+    );
+    assert!(message.contains("--> C:\\policy files\\second.rego:2:1"));
+    assert!(message.contains("| p := 2"));
+    assert!(!conflict_line.contains('\r'));
+    assert!(!message.contains('"'));
+}
+
+#[test]
+fn rule_conflict_reports_escaped_carriage_return_in_previous_rule_file_label() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            "C:\\policy files\\first\rsplit.rego".to_string(),
+            "package test\np := 1\n".to_string(),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            r"C:\policy files\second.rego".to_string(),
+            "package test\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    let conflict_line = message
+        .lines()
+        .find(|line| line.starts_with("error: rule conflicts"))
+        .unwrap();
+    assert_conflict_diagnostic(
+        &message,
+        "error: rule conflicts with rule at C:\\policy files\\first%0Dsplit.rego:2:1",
+    );
+    assert!(message.contains("--> C:\\policy files\\second.rego:2:1"));
+    assert!(message.contains("| p := 2"));
+    assert!(!conflict_line.contains('\r'));
+    assert!(!message.contains('"'));
+}
+
+#[test]
+fn rule_conflict_preserves_literal_backslash_n_in_previous_file_label() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            r"C:\policy files\first\nsplit.rego".to_string(),
+            "package test\np := 1\n".to_string(),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            r"C:\policy files\second.rego".to_string(),
+            "package test\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    assert_conflict_diagnostic(
+        &message,
+        r"error: rule conflicts with rule at C:\policy files\first\nsplit.rego:2:1",
+    );
+    assert!(message.contains("--> C:\\policy files\\second.rego:2:1"));
+    assert!(message.contains("| p := 2"));
+}
+
+#[test]
+fn rule_conflict_percent_encodes_percent_sequences_in_previous_file_label() {
+    let mut engine = Engine::new();
+    engine
+        .add_policy(
+            "C:\\policy files\\first%0Asplit%0D.rego".to_string(),
+            "package test\np := 1\n".to_string(),
+        )
+        .unwrap();
+    engine
+        .add_policy(
+            r"C:\policy files\second.rego".to_string(),
+            "package test\np := 2\n".to_string(),
+        )
+        .unwrap();
+
+    let error = engine.eval_rule("data.test.p".to_string()).unwrap_err();
+    let message = error.to_string();
+    assert_conflict_diagnostic(
+        &message,
+        "error: rule conflicts with rule at C:\\policy files\\first%250Asplit%250D.rego:2:1",
+    );
+    assert!(message.contains("--> C:\\policy files\\second.rego:2:1"));
+    assert!(message.contains("| p := 2"));
+}
+
 mod timer_test_support {
     use super::{ExecutionTimerTestConfig, TimeSourceTestConfig};
     #[cfg(any(test, not(feature = "std")))]
     use crate::utils::limits::set_time_source;
-    use crate::{
-        utils::limits::{
-            fallback_execution_timer_config, set_fallback_execution_timer_config,
-            ExecutionTimerConfig, TimeSource,
-        },
-        Engine,
+    use crate::utils::limits::{
+        fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
+        TimeSource,
     };
+    use crate::Engine;
     use anyhow::{anyhow, Result};
-    use core::{num::NonZeroU32, time::Duration};
-    use std::{
-        collections::VecDeque,
-        sync::{Mutex, Once},
-        vec::Vec,
-    };
+    use core::num::NonZeroU32;
+    use core::time::Duration;
+    use std::collections::VecDeque;
+    use std::sync::{Mutex, Once};
+    use std::vec::Vec;
 
     pub struct GlobalTimerGuard {
         previous: Option<ExecutionTimerConfig>,
@@ -229,8 +407,10 @@ mod load_target_definitions {
     }
 
     fn load_target_definitions_impl() -> Result<()> {
-        use crate::{registry::targets, target::Target};
-        use std::{fs, path::Path};
+        use crate::registry::targets;
+        use crate::target::Target;
+        use std::fs;
+        use std::path::Path;
 
         let definitions_path = Path::new("tests/interpreter/cases/target/definitions");
 
@@ -317,6 +497,41 @@ mod load_target_definitions {
             assert_eq!(target.name.as_ref(), "target.tests.azure_compute");
             assert_eq!(target.version.as_ref(), "1.0.0");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn compile_for_target_accepts_a_long_first_package_component() -> Result<()> {
+        load()?;
+        assert!(crate::registry::targets::contains(
+            "target.tests.azure_policy"
+        ));
+
+        let package_component = "g".repeat(1300);
+        let mut engine = Engine::new();
+        engine.set_policy_length_config(PolicyLengthConfig {
+            max_col: NonZeroU32::new(2048).expect("non-zero column limit"),
+            ..PolicyLengthConfig::default()
+        });
+        engine.add_policy(
+            "long-target.rego".to_string(),
+            format!(
+                r#"package {package_component}
+import rego.v1
+__target__ := "target.tests.azure_policy"
+default allow := false
+allow if {{
+    input.type == "Microsoft.Storage/storageAccounts"
+}}"#
+            ),
+        )?;
+
+        let compiled = engine.compile_for_target()?;
+        let input = Value::from_json_str(
+            r#"{"type":"Microsoft.Storage/storageAccounts","name":"long-target","location":"East US"}"#,
+        )?;
+        assert_eq!(compiled.eval_with_input(input)?, Value::Bool(true));
 
         Ok(())
     }
@@ -579,7 +794,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
     let _limits_lock = acquire_limits_test_lock();
 
     let yaml_str = std::fs::read_to_string(file)?;
-    let test: YamlTest = serde_yaml::from_str(&yaml_str)?;
+    let test: YamlTest = yaml_serde::from_str(&yaml_str)?;
 
     #[cfg(feature = "azure_policy")]
     load_target_definitions::load().expect("Failed to load target definitions");
@@ -619,6 +834,19 @@ fn yaml_test_impl(file: &str) -> Result<()> {
         if file.contains("walk.yaml") {
             std::println!("skipped {file} without graph feature.");
             return Ok(());
+        }
+    }
+
+    #[cfg(miri)]
+    {
+        // Skip tests with large-exponent Number comparisons that hit a
+        // Float-vs-BigInt representation mismatch under Miri's soft-float.
+        let skip = ["units/parse.yaml", "units/parse_bytes.yaml"];
+        for s in skip {
+            if file.contains(s) {
+                std::println!("skipped {file} under miri.");
+                return Ok(());
+            }
         }
     }
 
@@ -735,6 +963,11 @@ fn yaml_test(file: &str) -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(not(feature = "jsonpatch"))]
+    if file.contains("json.patch.yaml") {
+        return Ok(());
+    }
+
     // Targets are supported only with azure_policy feature.
     #[cfg(not(feature = "azure_policy"))]
     if file.contains("target") {
@@ -804,6 +1037,449 @@ fn test_get_data() -> Result<()> {
 
     // There must NOT be any value of `a`.
     assert_eq!(data["a"], Value::Undefined);
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_deep_merge() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Nested objects under a shared top-level key are deep-merged, not replaced.
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "x" : 1 } }"#)?)?;
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "y" : 2 } }"#)?)?;
+
+    assert_eq!(
+        engine.get_data(),
+        Value::from_json_str(r#"{ "a" : { "x" : 1, "y" : 2 } }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_deep_merge_multi_level() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Merging recurses through multiple levels of nesting.
+    engine.add_data(Value::from_json_str(
+        r#"{ "a" : { "b" : { "x" : 1 } }, "top" : 0 }"#,
+    )?)?;
+    engine.add_data(Value::from_json_str(
+        r#"{ "a" : { "b" : { "y" : 2 }, "c" : 3 } }"#,
+    )?)?;
+
+    assert_eq!(
+        engine.get_data(),
+        Value::from_json_str(r#"{ "a" : { "b" : { "x" : 1, "y" : 2 }, "c" : 3 }, "top" : 0 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_leaf_conflict_errors() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // A genuine leaf conflict (same nested path, different value) is an error.
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "x" : 1 } }"#)?)?;
+    assert!(engine
+        .add_data(Value::from_json_str(r#"{ "a" : { "x" : 2 } }"#)?)
+        .is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_object_vs_scalar_conflict_errors() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // An object cannot be merged with a scalar at the same path.
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "x" : 1 } }"#)?)?;
+    assert!(engine
+        .add_data(Value::from_json_str(r#"{ "a" : 5 }"#)?)
+        .is_err());
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_equal_leaf_is_noop() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Re-adding identical data (including equal nested leaves) is tolerated as a no-op.
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "x" : 1 } }"#)?)?;
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "x" : 1 }, "b" : 2 }"#)?)?;
+
+    assert_eq!(
+        engine.get_data(),
+        Value::from_json_str(r#"{ "a" : { "x" : 1 }, "b" : 2 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_set_union() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Sets under a shared key are unioned rather than conflicting (consistent with the
+    // rule-evaluation merge, where partial set rules accumulate elements). JSON cannot express
+    // sets, so the data documents are built via the `Value` API.
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+    )])))?;
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([Value::from(2_u64), Value::from(3_u64)])),
+    )])))?;
+
+    let expected = Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([
+            Value::from(1_u64),
+            Value::from(2_u64),
+            Value::from(3_u64),
+        ])),
+    )]));
+    assert_eq!(engine.get_data(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_nested_set_union() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // A set nested under an object key exercises the recursive merge: the outer objects are
+    // deep-merged and the inner sets are then unioned.
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("a"),
+        Value::from(BTreeMap::from([(
+            Value::from("s"),
+            Value::from(BTreeSet::from([Value::from(1_u64)])),
+        )])),
+    )])))?;
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("a"),
+        Value::from(BTreeMap::from([(
+            Value::from("s"),
+            Value::from(BTreeSet::from([Value::from(2_u64)])),
+        )])),
+    )])))?;
+
+    let expected = Value::from(BTreeMap::from([(
+        Value::from("a"),
+        Value::from(BTreeMap::from([(
+            Value::from("s"),
+            Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+        )])),
+    )]));
+    assert_eq!(engine.get_data(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_equal_set_is_noop() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Re-adding an identical set is tolerated as a no-op (not a conflict).
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+    )])))?;
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+    )])))?;
+
+    let expected = Value::from(BTreeMap::from([(
+        Value::from("s"),
+        Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+    )]));
+    assert_eq!(engine.get_data(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_failed_merge_is_atomic() -> Result<()> {
+    let mut engine = Engine::new();
+
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "z" : 1 } }"#)?)?;
+
+    // Mixes a new key `m` with a conflicting leaf `z` (1 vs 3). Because `m` sorts
+    // before `z`, a naive in-place merge would insert `m` and only then hit the `z`
+    // conflict. add_data must be all-or-nothing: the whole call fails AND leaves the
+    // existing data untouched — `m` must not leak in.
+    assert!(engine
+        .add_data(Value::from_json_str(r#"{ "a" : { "m" : 2, "z" : 3 } }"#)?)
+        .is_err());
+
+    assert_eq!(
+        engine.get_data(),
+        Value::from_json_str(r#"{ "a" : { "z" : 1 } }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_failed_set_merge_is_atomic() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Existing data: a set `s` alongside a scalar `z` under `a`.
+    engine.add_data(Value::from(BTreeMap::from([(
+        Value::from("a"),
+        Value::from(BTreeMap::from([
+            (
+                Value::from("s"),
+                Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+            ),
+            (Value::from("z"), Value::from(1_u64)),
+        ])),
+    )])))?;
+
+    // This add would union `s` with {3} but conflicts on `z` (1 vs 2). Since `s`
+    // sorts before `z`, a naive in-place merge would union the set *before* failing
+    // on `z`, leaking {3} into `s`. The atomic add must reject the whole call and
+    // leave `s` as {1, 2}.
+    assert!(engine
+        .add_data(Value::from(BTreeMap::from([(
+            Value::from("a"),
+            Value::from(BTreeMap::from([
+                (
+                    Value::from("s"),
+                    Value::from(BTreeSet::from([Value::from(3_u64)])),
+                ),
+                (Value::from("z"), Value::from(2_u64)),
+            ])),
+        )])))
+        .is_err());
+
+    // `s` must be unchanged ({1, 2}, not {1, 2, 3}) and `z` must still be 1.
+    let expected = Value::from(BTreeMap::from([(
+        Value::from("a"),
+        Value::from(BTreeMap::from([
+            (
+                Value::from("s"),
+                Value::from(BTreeSet::from([Value::from(1_u64), Value::from(2_u64)])),
+            ),
+            (Value::from("z"), Value::from(1_u64)),
+        ])),
+    )]));
+    assert_eq!(engine.get_data(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_add_data_failed_array_merge_is_atomic() -> Result<()> {
+    let mut engine = Engine::new();
+
+    engine.add_data(Value::from_json_str(r#"{ "a" : { "arr" : [1, 2] } }"#)?)?;
+
+    // Arrays are atomic leaves (never element-merged), so a differing array at the
+    // same path is a conflict. The new key `aa` sorts before `arr`, so a naive
+    // in-place merge would insert `aa` and only then hit the `arr` conflict. add_data
+    // must reject the whole call and leave the data untouched — `aa` must not leak in.
+    assert!(engine
+        .add_data(Value::from_json_str(
+            r#"{ "a" : { "aa" : 5, "arr" : [3] } }"#
+        )?)
+        .is_err());
+
+    assert_eq!(
+        engine.get_data(),
+        Value::from_json_str(r#"{ "a" : { "arr" : [1, 2] } }"#)?
+    );
+
+    Ok(())
+}
+
+// The `Value::merge` used by `add_data` is shared with the rule-evaluation path
+// (`Interpreter::merge_rule_value`, reached via `with data.* as ...` and rule-value
+// materialization). The tests below pin down that making `merge` recursive changed only the
+// data-document semantics and left rule evaluation — in particular the `with data.* as ...`
+// modifier — behaving exactly as before (an override, never a deep merge).
+
+#[test]
+fn test_with_data_modifier_replaces_nested_object() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Base data provides a nested object with two keys.
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "a" : 1, "b" : 2 } } }"#,
+    )?)?;
+
+    engine.add_policy(
+        "policy.rego".to_string(),
+        r#"
+package test
+
+result := x if {
+    x := data.base.foo with data.base.foo as {"a": 99}
+}
+"#
+        .to_string(),
+    )?;
+
+    // `with data.base.foo as {"a": 99}` REPLACES the whole subtree for the duration of the
+    // rule; it must NOT deep-merge with the base `{ "a": 1, "b": 2 }`. So `b` is gone.
+    assert_eq!(
+        engine
+            .eval_query("data.test.result".to_string(), false)?
+            .result[0]
+            .expressions[0]
+            .value
+            .clone(),
+        Value::from_json_str(r#"{ "a" : 99 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_with_data_modifier_replaces_whole_subtree() -> Result<()> {
+    let mut engine = Engine::new();
+
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : 1, "bar" : 2 } }"#,
+    )?)?;
+
+    engine.add_policy(
+        "policy.rego".to_string(),
+        r#"
+package test
+
+result := x if {
+    x := data.base with data.base as {"only": 3}
+}
+"#
+        .to_string(),
+    )?;
+
+    // `with data.base as {...}` replaces the entire `data.base` object; the original
+    // `foo`/`bar` keys are not merged in.
+    assert_eq!(
+        engine
+            .eval_query("data.test.result".to_string(), false)?
+            .result[0]
+            .expressions[0]
+            .value
+            .clone(),
+        Value::from_json_str(r#"{ "only" : 3 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_with_data_modifier_nested_replace_preserves_siblings() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // `data.base` has a nested `foo` object AND a sibling `bar`.
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "a" : 1, "b" : 2 }, "bar" : 7 } }"#,
+    )?)?;
+
+    engine.add_policy(
+        "policy.rego".to_string(),
+        r#"
+package test
+
+# `with` targets the nested `data.base.foo`, but the rule observes the PARENT `data.base`.
+result := x if {
+    x := data.base with data.base.foo as {"a": 99}
+}
+"#
+        .to_string(),
+    )?;
+
+    // The nested `foo` is deep-replaced (its `b` is gone — `with` never merges), while the
+    // sibling `bar` under the same parent is preserved.
+    assert_eq!(
+        engine
+            .eval_query("data.test.result".to_string(), false)?
+            .result[0]
+            .expressions[0]
+            .value
+            .clone(),
+        Value::from_json_str(r#"{ "foo" : { "a" : 99 }, "bar" : 7 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_rule_reads_deep_merged_base_data() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Two add_data calls deep-merge into a single nested object...
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "a" : 1 } } }"#,
+    )?)?;
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "b" : 2 } } }"#,
+    )?)?;
+
+    engine.add_policy(
+        "policy.rego".to_string(),
+        r#"
+package test
+
+a := data.base.foo.a
+b := data.base.foo.b
+"#
+        .to_string(),
+    )?;
+
+    // ...and both merged leaves are visible to rule evaluation.
+    assert_eq!(
+        engine.eval_query("data.test".to_string(), false)?.result[0].expressions[0]
+            .value
+            .clone(),
+        Value::from_json_str(r#"{ "a" : 1, "b" : 2 }"#)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_rule_values_coexist_with_merged_base_data() -> Result<()> {
+    let mut engine = Engine::new();
+
+    // Deep-merged base data under `base`...
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "a" : 1 } } }"#,
+    )?)?;
+    engine.add_data(Value::from_json_str(
+        r#"{ "base" : { "foo" : { "b" : 2 } } }"#,
+    )?)?;
+
+    engine.add_policy(
+        "policy.rego".to_string(),
+        r#"
+package test
+
+computed := data.base.foo.a + data.base.foo.b
+"#
+        .to_string(),
+    )?;
+
+    let data = engine.eval_query("data".to_string(), false)?.result[0].expressions[0]
+        .value
+        .clone();
+
+    // Base data is preserved and deep-merged...
+    assert_eq!(
+        data["base"],
+        Value::from_json_str(r#"{ "foo" : { "a" : 1, "b" : 2 } }"#)?
+    );
+    // ...and the rule-computed value materializes alongside it without disturbing the merge.
+    assert_eq!(data["test"]["computed"], Value::from(3_u64));
 
     Ok(())
 }

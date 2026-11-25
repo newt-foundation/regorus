@@ -17,10 +17,10 @@ namespace Regorus.Internal
     /// </summary>
     internal static class Utf8Marshaller
     {
-    // Mirrors BCL patterns (e.g., System.Text.Json encoding helpers) by stackalloc'ing
-    // up to 512 bytes to cover common short strings while keeping the stack usage well
-    // below typical per-frame limits; larger payloads fall back to pooled buffers.
-    private const int StackAllocThreshold = 512;
+        // Mirrors BCL patterns (e.g., System.Text.Json encoding helpers) by stackalloc'ing
+        // up to 512 bytes to cover common short strings while keeping the stack usage well
+        // below typical per-frame limits; larger payloads fall back to pooled buffers.
+        private const int StackAllocThreshold = 512;
 
         /// <summary>
         /// Represents a pooled and pinned UTF-8 buffer suitable for scenarios where
@@ -149,6 +149,21 @@ namespace Regorus.Internal
         internal static PinnedUtf8 Pin(string value)
         {
             return new PinnedUtf8(value);
+        }
+
+        /// <summary>
+        /// Throws if <paramref name="value"/> contains an embedded NUL ('\0'),
+        /// which would silently truncate the string when passed to native code
+        /// as a null-terminated C string. A null value is left to the caller.
+        /// </summary>
+        internal static void ThrowIfContainsNul(string value, string paramName)
+        {
+            if (value != null && value.IndexOf('\0') >= 0)
+            {
+                throw new ArgumentException(
+                    "Value must not contain an embedded NUL ('\\0'); it would be silently truncated when passed to native code.",
+                    paramName);
+            }
         }
 
         internal static unsafe string? FromUtf8(byte* pointer)

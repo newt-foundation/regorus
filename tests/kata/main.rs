@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 use regorus::*;
 
-use std::{path::Path, time::Instant};
+use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{bail, Result};
 use clap::Parser;

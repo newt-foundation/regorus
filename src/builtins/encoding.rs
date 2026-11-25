@@ -2,19 +2,17 @@
 // Licensed under the MIT License.
 #![allow(clippy::unused_trait_names, clippy::pattern_type_mismatch)]
 
+use crate::ast::{Expr, Ref};
+use crate::builtins;
 #[cfg(feature = "urlquery")]
 use crate::builtins::utils::enforce_limit;
 #[allow(unused)]
 use crate::builtins::utils::{
     ensure_args_count, ensure_object, ensure_string, ensure_string_collection,
 };
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    lexer::Span,
-    value::Value,
-    *,
-};
+use crate::lexer::Span;
+use crate::value::Value;
+use crate::*;
 
 #[allow(unused)]
 use anyhow::{anyhow, bail, Context, Result};
@@ -220,21 +218,10 @@ fn urlquery_decode(
     ensure_args_count(span, name, params, args, 1)?;
 
     let string = ensure_string(name, &params[0], &args[0])?;
-    let url_string = "https://non-existent?".to_owned() + string.as_ref();
-    let url = match url::Url::parse(&url_string) {
-        Ok(v) => v,
-        Err(_) => bail!(params[0].span().error("not a valid url query")),
-    };
-
-    let mut query_str = "".to_owned();
-    for (k, v) in url.query_pairs() {
-        query_str += &k;
-        if !v.is_empty() {
-            query_str += "=";
-            query_str += &v;
-        }
-    }
-    Ok(Value::String(query_str.into()))
+    let component = string.replace('+', " ");
+    let decoded = percent_encoding::percent_decode_str(&component).decode_utf8_lossy();
+    enforce_limit()?;
+    Ok(Value::from(decoded.as_ref()))
 }
 
 #[cfg(feature = "urlquery")]
@@ -310,7 +297,7 @@ fn urlquery_encode_object(
 
     {
         let mut pairs = url.query_pairs_mut();
-        for (key, value) in obj.iter() {
+        for (key, value) in obj.iter_sorted() {
             let key = ensure_string(name, &params[0], key)?;
             match value {
                 Value::String(v) => {
@@ -344,7 +331,10 @@ fn yaml_is_valid(
     ensure_args_count(span, name, params, args, 1)?;
 
     let yaml_str = ensure_string(name, &params[0], &args[0])?;
-    Ok(Value::Bool(Value::from_yaml_str(&yaml_str).is_ok()))
+    match Value::from_yaml_str(&yaml_str) {
+        Err(error) if crate::interpreter::is_evaluation_limit_error(&error) => Err(error),
+        result => Ok(Value::Bool(result.is_ok())),
+    }
 }
 
 #[cfg(feature = "yaml")]
@@ -352,8 +342,12 @@ fn yaml_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool
     let name = "yaml.marshal";
     ensure_args_count(span, name, params, args, 1)?;
 
-    let serialized = serde_yaml::to_string(&args[0])
-        .map_err(|err| span.error(&format!("could not serialize to yaml: {err}")))?;
+    let serialized =
+        crate::value::serialize_with_limits(&args[0], |value| yaml_serde::to_string(value))
+            .map_err(|error| {
+                let context = span.error(&format!("could not serialize to yaml: {error}"));
+                error.context(context)
+            })?;
 
     Ok(Value::String(serialized.into()))
 }
@@ -381,15 +375,24 @@ fn json_is_valid(
     ensure_args_count(span, name, params, args, 1)?;
 
     let json_str = ensure_string(name, &params[0], &args[0])?;
-    Ok(Value::Bool(Value::from_json_str(&json_str).is_ok()))
+    match Value::from_json_str(&json_str) {
+        Err(error) if crate::interpreter::is_evaluation_limit_error(&error) => Err(error),
+        result => Ok(Value::Bool(result.is_ok())),
+    }
 }
 
 fn json_marshal(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {
     let name = "json.marshal";
     ensure_args_count(span, name, params, args, 1)?;
-    Ok(Value::from(serde_json::to_string(&args[0]).map_err(
-        |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
-    )?))
+    Ok(Value::from(
+        crate::value::serialize_with_limits(&args[0], |value| serde_json::to_string(value))
+            .map_err(|error| json_serialization_error(span, error))?,
+    ))
+}
+
+fn json_serialization_error(span: &Span, error: anyhow::Error) -> anyhow::Error {
+    let context = span.error(&format!("could not serialize to json\nCaused by\n{error}"));
+    error.context(context)
 }
 
 fn json_marshal_with_options(
@@ -414,19 +417,15 @@ fn json_marshal_with_options(
             Value::String(s) if s.as_ref() == "prefix" && option_value.as_string().is_ok() => {
                 prefix = Some(option_value.as_string()?.as_ref().to_string());
             }
-            Value::String(s) if s.as_ref() == "prefix" => {
-                bail!(params[1]
-                    .span()
-                    .error("marshaling option `pretty` must be string"))
-            }
+            Value::String(s) if s.as_ref() == "prefix" => bail!(params[1]
+                .span()
+                .error("marshaling option `pretty` must be string")),
             Value::String(s) if s.as_ref() == "indent" && option_value.as_string().is_ok() => {
                 indent = Some(option_value.as_string()?.as_ref().to_string());
             }
-            Value::String(s) if s.as_ref() == "indent" => {
-                bail!(params[1]
-                    .span()
-                    .error("marshaling option `pretty` must be string"))
-            }
+            Value::String(s) if s.as_ref() == "indent" => bail!(params[1]
+                .span()
+                .error("marshaling option `pretty` must be string")),
             _ => bail!(params[1]
                 .span()
                 .error("marshaling option must be one of `indent`, `prefix` or `pretty`")),
@@ -434,30 +433,32 @@ fn json_marshal_with_options(
     }
 
     if !pretty || options.is_empty() {
-        return Ok(Value::from(serde_json::to_string(&args[0]).map_err(
-            |e| span.error(&format!("could not serialize to json\nCaused by\n{e}")),
-        )?));
+        return Ok(Value::from(
+            crate::value::serialize_with_limits(&args[0], |value| serde_json::to_string(value))
+                .map_err(|error| json_serialization_error(span, error))?,
+        ));
     }
 
-    let lines: Vec<String> = serde_json::to_string_pretty(&args[0])
-        .map_err(|e| span.error(&format!("could not serialize to json\nCaused by\n{e}")))?
-        .split('\n')
-        .map(|line| {
-            let mut line = line.to_string();
+    let lines: Vec<String> =
+        crate::value::serialize_with_limits(&args[0], |value| serde_json::to_string_pretty(value))
+            .map_err(|error| json_serialization_error(span, error))?
+            .split('\n')
+            .map(|line| {
+                let mut line = line.to_string();
 
-            if let Some(indent) = &indent {
-                let start_trimmed = line.trim_start();
-                let leading_spaces = line.len() - start_trimmed.len();
-                let indentation_level = leading_spaces / 2;
-                line = indent.repeat(indentation_level) + start_trimmed;
-            }
+                if let Some(indent) = &indent {
+                    let start_trimmed = line.trim_start();
+                    let leading_spaces = line.len() - start_trimmed.len();
+                    let indentation_level = leading_spaces / 2;
+                    line = indent.repeat(indentation_level) + start_trimmed;
+                }
 
-            if let Some(prefix) = &prefix {
-                line = prefix.to_owned() + &line;
-            }
-            line
-        })
-        .collect();
+                if let Some(prefix) = &prefix {
+                    line = prefix.to_owned() + &line;
+                }
+                line
+            })
+            .collect();
 
     Ok(Value::from(lines.join("\n")))
 }
