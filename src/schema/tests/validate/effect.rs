@@ -369,9 +369,7 @@ fn test_validate_modify_effect_invalid_operation() {
                                         ValidationError::NotInEnum { .. } => {
                                             // Expected deeply nested error structure
                                         }
-                                        other => {
-                                            panic!("Expected NotInEnum error in operation validation, got: {:?}", other)
-                                        }
+                                        other => panic!("Expected NotInEnum error in operation validation, got: {:?}", other),
                                     }
                                 }
                                 other => panic!(

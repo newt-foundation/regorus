@@ -16,6 +16,8 @@
 
 mod aggregates;
 mod arrays;
+#[cfg(feature = "azure_policy")]
+pub mod azure_policy;
 mod bitwise;
 pub mod comparison;
 mod conversions;
@@ -30,6 +32,8 @@ mod http;
 #[cfg(feature = "net")]
 mod net;
 
+#[cfg(feature = "jsonpatch")]
+mod json_patch;
 pub mod numbers;
 mod objects;
 #[cfg(feature = "opa-runtime")]
@@ -52,11 +56,9 @@ mod uuid;
 #[cfg(feature = "opa-testutil")]
 mod test;
 
-use crate::{
-    ast::{Expr, Ref},
-    lexer::Span,
-    value::Value,
-};
+use crate::ast::{Expr, Ref};
+use crate::lexer::Span;
+use crate::value::Value;
 
 use crate::Map as BuiltinsMap;
 
@@ -106,6 +108,8 @@ lazy_static! {
 	#[cfg(feature = "semver")]
 	semver::register(&mut m);
 	//rego::register(&mut m);
+	#[cfg(feature = "azure_policy")]
+	azure_policy::register(&mut m);
 	#[cfg(feature = "opa-runtime")]
 	opa::register(&mut m);
 	tracing::register(&mut m);

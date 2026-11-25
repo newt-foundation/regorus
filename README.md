@@ -129,7 +129,7 @@ It is straight-forward to build these bindings yourself.
 
 ## Getting Started
 
-[examples/regorus](https://github.com/microsoft/regorus/blob/main/examples/regorus.rs) is an example program that
+[examples/regorus](https://github.com/microsoft/regorus/blob/main/examples/regorus/main.rs) is an example program that
 shows how to integrate Regorus into your project and evaluate Rego policies.
 
 To build and install it, do
@@ -248,6 +248,52 @@ $ diff <(regorus eval -b tests/aci -d tests/aci/data.json -i tests/aci/input.jso
 ```
 
 
+## Azure Policy (Preview)
+
+Regorus can evaluate [Azure Policy](https://learn.microsoft.com/en-us/azure/governance/policy/overview)
+definitions natively. A dedicated compiler translates Azure Policy JSON
+directly into RVM (Regorus Virtual Machine) bytecode — the same VM that
+powers Rego evaluation — so you don't have to rewrite policies in Rego.
+Enable it with the `azure_policy` cargo feature.
+
+Most of the policy language is supported: conditions with `field`, `count`,
+and `value`; logical connectives (`allOf`, `anyOf`, `not`); comparison
+operators; template expressions like `parameters()`, `concat()`,
+`dateTimeAdd()`, and `utcNow()`; and effects including Deny, Audit, Modify,
+Append, AuditIfNotExists, and DeployIfNotExists. An alias registry handles
+the translation from fully-qualified alias names to the flattened ARM resource
+shape expected by the engine.
+
+### Quick start
+
+```bash
+cargo install --example regorus --features azure_policy --path .
+
+# Evaluate a policy against a non-compliant storage account (→ Deny)
+regorus azure-policy-eval \
+    --policy-definition examples/regorus/azure_policy_data/require_https_storage.json \
+    --resource examples/regorus/azure_policy_data/non_compliant_storage.json \
+    --aliases tests/azure_policy/aliases/test_aliases.json
+
+# Same policy against a compliant resource (→ undefined, no effect)
+regorus azure-policy-eval \
+    --policy-definition examples/regorus/azure_policy_data/require_https_storage.json \
+    --resource examples/regorus/azure_policy_data/compliant_storage.json \
+    --aliases tests/azure_policy/aliases/test_aliases.json
+
+# List aliases for a resource type
+regorus azure-policy-aliases \
+    --aliases tests/azure_policy/aliases/test_aliases.json \
+    --resource-type Microsoft.Storage
+```
+
+The test suite covers conditions, effects, template functions, alias
+resolution, and end-to-end scenarios across YAML-driven test files:
+
+```bash
+cargo test --features azure_policy -- azure_policy
+```
+
 ## Performance
 
 To check how fast Regorus runs on your system, first install a tool like [hyperfine](https://github.com/sharkdp/hyperfine).
@@ -275,12 +321,62 @@ Benchmark 1: opa eval -b tests/aci -d tests/aci/data.json -i tests/aci/input.jso
 
 ```
 
+### Cedar benchmark comparison
+
+**Regorus RVM achieved 1.35-2.15x faster median authorization than Cedar**
+on adapted GDrive, GitHub, and TinyTodo benchmarks from
+[Cutler et al., *Cedar: A New Language for Expressive, Fast, Safe, and
+Analyzable Authorization* (2024)](https://arxiv.org/abs/2403.04651).
+These results use the Regorus Virtual Machine, not the interpreter.
+
+**5-50 entities per type**
+
+![Cedar and Regorus RVM median and p99 authorization latency for 5-50 entities per type](docs/benchmarks/cedar-vs-rvm-5-50.png)
+
+**100-500 entities per type**
+
+![Cedar and Regorus RVM median and p99 authorization latency for 100-500 entities per type](docs/benchmarks/cedar-vs-rvm-100-500.png)
+
+| Entities per type | GDrive speedup | GitHub speedup | TinyTodo speedup |
+|---|---:|---:|---:|
+| 5-50 | 2.15x | 2.02x | 1.86x |
+| 100-500 | 1.97x | 1.65x | 1.35x |
+
+Speedup is the arithmetic average of Cedar's per-size medians divided by the
+arithmetic average of RVM's per-size medians, not the largest per-size or p99
+gap. Each point measures 200 datastores with 500 requests each; all **3.6 million
+paired decisions matched**, with zero evaluation errors across the two runs.
+**Setup costs are excluded**: policies and data are prepared before timing,
+including RVM compilation, loading, and warm-up.
+
+Compared with the paper's benchmark configuration, we updated engine versions,
+corrected GDrive permission-generation and translation defects, and optimized
+Rego policies to prepare reusable permissions and graph closures before timed
+evaluation. The harness uses symmetric one-request warm-up, rotating engine
+order, and exact empirical quantiles. The paper's main Rego comparison instead
+computes graph reachability during authorization. These are optimized
+steady-state measurements on different hardware, not an exact reproduction of
+the paper or a direct RVM-versus-OPA comparison.
+
+Measurements used Regorus revision
+[`1423851`](https://github.com/microsoft/regorus/commit/1423851f608e2ca809727fa32c54a8d46c297c08)
+and Cedar revision
+[`062c8fe`](https://github.com/cedar-policy/cedar/commit/062c8fe71016723883b3ae31298720363a1e14c8)
+on a virtualized AMD Ryzen 9 8945HX Linux system. They are pinned-revision
+results, not measurements of the latest `main`; workloads and machine
+conditions affect timings. See the
+[reproduction repository](https://github.com/anakrish/cedar-examples/tree/6c68e3ff06d3bfffeecdae3e092f86a1a8bfc520),
+[reproduction instructions](https://github.com/anakrish/cedar-examples/blob/6c68e3ff06d3bfffeecdae3e092f86a1a8bfc520/README.md#reproduce),
+and [detailed methodology](https://github.com/anakrish/cedar-examples/blob/6c68e3ff06d3bfffeecdae3e092f86a1a8bfc520/oopsla2024-benchmarks/README.md)
+for source changes, raw CSV results, setup summaries, and source provenance.
+
 ## Contributor Workflow
 
 Regorus uses a small companion CLI under the `xtask` package to keep CI and local development in sync.
 The commands mirror our GitHub Actions jobs, making it easy to dry-run CI steps before sending a pull request.
 
 - Run the full release pipeline with `cargo xtask ci-release` and the debug checks with `cargo xtask ci-debug`.
+- `cargo xtask test-ffi` runs ordinary FFI tests in parallel and four shared-state-sensitive tests in separate processes. These cover process-wide memory limits and poison-gate concurrency; all tests still run without changing their limits or assertions. Keep the isolation list in `xtask/src/tasks/bindings/ffi.rs` current when adding or renaming shared-state tests.
 - Exercise language bindings through focused helpers such as `cargo xtask test-java --release --frozen` or `cargo xtask test-go`.
 - Use `cargo xtask test-musl --release --frozen` for the cross-compilation matrix and `cargo xtask test-no-std` for embedded targets.
 - Formatting (`cargo xtask fmt`) and linting (`cargo xtask clippy --sarif`) wrap the usual Cargo tooling while matching CI defaults.
@@ -305,7 +401,6 @@ The following test suites don't pass fully due to missing builtins:
 - `globsmatch`
 - `graphql`
 - `invalidkeyerror`
-- `jsonpatch`
 - `jwtbuiltins`
 - `jwtdecodeverify`
 - `jwtencodesign`

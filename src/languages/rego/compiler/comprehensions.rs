@@ -3,14 +3,10 @@
 #![allow(clippy::as_conversions)]
 
 use super::{CompilationContext, Compiler, ComprehensionType, ContextType, Register, Result};
-use crate::{
-    ast::{ExprRef, Query},
-    lexer::Span,
-    rvm::{
-        instructions::{ComprehensionBeginParams, ComprehensionMode},
-        Instruction,
-    },
-};
+use crate::ast::{ExprRef, Query};
+use crate::lexer::Span;
+use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode};
+use crate::rvm::Instruction;
 
 impl<'a> Compiler<'a> {
     fn compile_comprehension(
@@ -22,9 +18,9 @@ impl<'a> Compiler<'a> {
         query: &Query,
         span: &Span,
     ) -> Result<Register> {
-        let result_reg = self.alloc_register();
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
+        let result_reg = self.alloc_register()?;
+        let key_reg = self.alloc_register()?;
+        let value_reg = self.alloc_register()?;
 
         let params_index = self
             .program

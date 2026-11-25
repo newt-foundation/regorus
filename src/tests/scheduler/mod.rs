@@ -7,7 +7,8 @@
     clippy::as_conversions
 )] // scheduler tests assert and index directly for clarity
 
-use crate::{scheduler::*, *};
+use crate::scheduler::*;
+use crate::*;
 use anyhow::{bail, Result};
 
 mod analyzer;

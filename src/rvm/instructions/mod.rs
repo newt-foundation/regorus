@@ -10,12 +10,13 @@ pub use params::{
     FunctionCallParams, InstructionData, LoopStartParams, ObjectCreateParams, SetCreateParams,
     VirtualDataDocumentLookupParams,
 };
-pub use types::{ComprehensionMode, LiteralOrRegister, LoopMode};
+pub use types::{
+    ComprehensionMode, GuardMode, LiteralOrRegister, LogicalBlockMode, LoopMode, PolicyOp,
+};
 
 use serde::{Deserialize, Serialize};
 
 /// RVM Instructions - simplified enum-based design
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Instruction {
     /// Load literal value from literal table into register
@@ -52,6 +53,16 @@ pub enum Instruction {
 
     /// Load global input object into register
     LoadInput {
+        dest: u8,
+    },
+
+    /// Load host-supplied context value into register
+    LoadContext {
+        dest: u8,
+    },
+
+    /// Load program metadata value into register
+    LoadMetadata {
         dest: u8,
     },
 
@@ -207,6 +218,16 @@ pub enum Instruction {
         value: u8,
     },
 
+    /// Push element to array, but skip if the value is undefined.
+    ///
+    /// Used by Azure Policy's `field('alias[*].property')` wildcard collection
+    /// so that absent nested properties are excluded from the collected array
+    /// rather than producing undefined entries.
+    ArrayPushDefined {
+        arr: u8,
+        value: u8,
+    },
+
     /// Create array from registers - returns undefined if any element is undefined
     ArrayCreate {
         /// Index into program's instruction_data.array_create_params table
@@ -243,13 +264,34 @@ pub enum Instruction {
         collection: u8,
     },
 
-    /// Assert condition - if register contains false or undefined, return undefined immediately
-    AssertCondition {
+    /// Assert that two registers are equal - if either is undefined or they differ, fail the condition
+    AssertEq {
+        left: u8,
+        right: u8,
+    },
+
+    /// Consolidated guard instruction — replaces AssertNot, AssertCondition, AssertNotUndefined.
+    Guard {
+        register: u8,
+        mode: GuardMode,
+    },
+
+    /// Return undefined immediately when the condition register is not exactly
+    /// `Bool(true)`.  Any other value — including `false`, `Undefined`, `Null`,
+    /// numbers, strings, etc. — causes an immediate return of `Undefined`.
+    ///
+    /// This is used by Azure Policy compilation to model "condition does not match"
+    /// without treating it as a VM assertion failure.
+    ReturnUndefinedIfNotTrue {
         condition: u8,
     },
 
-    /// Assert not undefined - if register contains undefined, return undefined immediately
-    AssertNotUndefined {
+    /// Replace Undefined with Null in a register.
+    ///
+    /// Azure Policy treats missing fields as null rather than undefined.
+    /// This instruction prevents the RVM's undefined-propagation from
+    /// short-circuiting subsequent builtin calls.
+    CoalesceUndefinedToNull {
         register: u8,
     },
 
@@ -305,7 +347,8 @@ pub enum Instruction {
         params_index: u16,
     },
 
-    /// Yield a value to the current comprehension result
+    /// Yield a value to the current comprehension result, skipping undefined
+    /// values or object keys without failing the enclosing iteration.
     ComprehensionYield {
         /// Register containing the value to yield to the comprehension
         value_reg: u8,
@@ -315,6 +358,65 @@ pub enum Instruction {
 
     /// End a comprehension block
     ComprehensionEnd {},
+
+    // ── Azure Policy condition operators (consolidated) ────────────────
+    /// Consolidated Azure Policy condition instruction.
+    ///
+    /// Replaces 21 separate Policy* variants.  The `op` discriminant selects
+    /// the specific Azure Policy condition semantics.
+    ///
+    /// For most ops: `dest = op(left, right)`.
+    /// For `PolicyOp::Not`: `dest = !is_true(left)`, `right` is unused (0).
+    /// For `PolicyOp::ValueConditionGuard`: `left` = value register,
+    ///   `right` = condition register.
+    PolicyCondition {
+        dest: u8,
+        left: u8,
+        right: u8,
+        op: PolicyOp,
+    },
+
+    // ── AllOf / AnyOf structured short-circuit instructions ───────────
+    /// Initialize allOf/anyOf: set result register to false.
+    LogicalBlockStart {
+        mode: LogicalBlockMode,
+        /// Register that accumulates the result.
+        result: u8,
+        /// PC of the corresponding End instruction.
+        end_pc: u16,
+    },
+
+    /// Check one allOf child: if not true, short-circuit (result stays false),
+    /// jump to end_pc.
+    AllOfNext {
+        /// Register holding the child condition result.
+        check: u8,
+        /// Register that accumulates the allOf result.
+        result: u8,
+        /// PC of the AllOfEnd instruction (jump target on short-circuit).
+        end_pc: u16,
+    },
+
+    /// Check one anyOf child: if true, short-circuit (set result to true),
+    /// jump to end_pc.
+    AnyOfNext {
+        /// Register holding the child condition result.
+        check: u8,
+        /// Register that accumulates the anyOf result.
+        result: u8,
+        /// PC of the AnyOfEnd instruction.
+        end_pc: u16,
+    },
+
+    /// Finalize allOf/anyOf block.
+    ///
+    /// For AllOf: all children passed → set result to true.
+    /// For AnyOf: no child matched → result stays false (no-op).
+    LogicalBlockEnd {
+        mode: LogicalBlockMode,
+        /// Register that accumulates the result.
+        result: u8,
+    },
 }
 
 impl Instruction {
@@ -377,5 +479,28 @@ impl Instruction {
     /// Create a new ComprehensionEnd instruction
     pub const fn comprehension_end() -> Self {
         Self::ComprehensionEnd {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::size_of;
+
+    #[test]
+    fn instruction_size() {
+        // Lock the instruction size to detect unintended growth.
+        // Without repr(C), Rust picks a 1-byte discriminant (< 256 variants)
+        // plus 4 bytes for the largest payload variant + 1 byte alignment
+        // padding for u16 fields = 6 bytes total.
+        //
+        // TODO: Reduce to 4 bytes by making LoopNext zero-payload (both fields
+        // are redundant with LoopStart params) and moving IndexLiteral to a
+        // params table.
+        let size = size_of::<Instruction>();
+        assert_eq!(
+            size, 6,
+            "Instruction size changed from 6 to {size} — review new variants for bloat"
+        );
     }
 }

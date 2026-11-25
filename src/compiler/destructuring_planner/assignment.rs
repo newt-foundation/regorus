@@ -11,28 +11,24 @@
 
 //! Assignment-specific planning utilities.
 
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-use crate::{
-    ast::{AssignOp, Expr, ExprRef},
-    compiler::destructuring_planner::{
-        create_destructuring_plan,
-        destructuring::create_destructuring_plan_with_tracking,
-        utils::{
-            collect_plan_var_spans, ensure_literal_match, ensure_structural_compatibility,
-            extract_literal_key, format_literal_key_for_error, plan_only_if_binds,
-        },
-        AssignmentPlan, BindingPlan, BindingPlannerError, DestructuringPlan, Result, ScopingMode,
-        VariableBindingContext, WildcardSide,
-    },
-    lexer::Span,
-    query::traversal::collect_expr_dependencies,
-    value::Value,
+use crate::ast::{AssignOp, Expr, ExprRef};
+use crate::compiler::destructuring_planner::create_destructuring_plan;
+use crate::compiler::destructuring_planner::destructuring::create_destructuring_plan_with_tracking;
+use crate::compiler::destructuring_planner::utils::{
+    collect_plan_var_spans, ensure_literal_match, ensure_structural_compatibility,
+    extract_literal_key, format_literal_key_for_error, plan_only_if_binds,
 };
+use crate::compiler::destructuring_planner::{
+    AssignmentPlan, BindingPlan, BindingPlannerError, DestructuringPlan, Result, ScopingMode,
+    VariableBindingContext, WildcardSide,
+};
+use crate::lexer::Span;
+use crate::query::traversal::collect_expr_dependencies;
+use crate::value::Value;
 
 /// Convenience function for assignment expressions with specific := and = rules.
 pub fn create_assignment_binding_plan<T: VariableBindingContext>(
@@ -318,7 +314,7 @@ fn order_element_pairs<T: VariableBindingContext>(
 
             if ready {
                 let (value_expr, plan, _deps, binds) = remaining.remove(idx);
-                scheduled.extend(binds.into_iter());
+                scheduled.extend(binds);
                 ordered.push((value_expr, plan));
                 progress = true;
                 break;

@@ -4,15 +4,15 @@
 
 //! Planner helpers for function parameters and loop indices.
 
-use alloc::{collections::BTreeSet, string::ToString};
+use alloc::collections::BTreeSet;
+use alloc::string::ToString;
 
-use crate::{
-    ast::ExprRef,
-    compiler::destructuring_planner::{
-        create_destructuring_plan, destructuring::create_destructuring_plan_with_tracking,
-        utils::validate_pattern_bindings, BindingPlan, BindingPlannerError, Result, ScopingMode,
-        VariableBindingContext,
-    },
+use crate::ast::ExprRef;
+use crate::compiler::destructuring_planner::create_destructuring_plan;
+use crate::compiler::destructuring_planner::destructuring::create_destructuring_plan_with_tracking;
+use crate::compiler::destructuring_planner::utils::validate_pattern_bindings;
+use crate::compiler::destructuring_planner::{
+    BindingPlan, BindingPlannerError, Result, ScopingMode, VariableBindingContext,
 };
 
 /// Convenience function for loop index expressions (respects parent scope).

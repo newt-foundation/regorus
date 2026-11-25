@@ -1,0 +1,29 @@
+name: miri
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run at 6:30 AM UTC every Wednesday
+    - cron: "30 6 * * 3"
+
+jobs:
+  miri-test:
+    name: miri (nightly)
+    runs-on: ubuntu-latest
+    env:
+      MIRIFLAGS: "-Zmiri-disable-isolation"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/toolchains/rust
+        with:
+          toolchain: nightly
+          components: miri rust-src
+      - name: Set up Miri
+        run: cargo miri setup
+      - name: Run Miri tests
+        run: cargo miri test -p regorus
+      - name: Run Miri ACI tests
+        run: cargo miri test -p regorus --test aci
+      - name: Run Miri kata tests
+        run: cargo miri test -p regorus --test kata

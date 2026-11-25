@@ -3,15 +3,13 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric},
-    lexer::Span,
-    number::Number,
-    value::Value,
-    *,
-};
+use crate::ast::{Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric};
+use crate::lexer::Span;
+use crate::number::Number;
+use crate::value::Value;
+use crate::*;
 
 use anyhow::{bail, Result};
 

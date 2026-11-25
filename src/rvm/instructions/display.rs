@@ -1,8 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
+use super::types::{GuardMode, LogicalBlockMode, PolicyOp};
 use super::{Instruction, InstructionData, LiteralOrRegister};
 
 impl Instruction {
@@ -63,32 +66,25 @@ impl Instruction {
                         )
                     },
                 ),
-            Instruction::ObjectCreate { params_index } => {
-                instruction_data
-                    .get_object_create_params(params_index)
-                    .map_or_else(
-                        || format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index),
-                        |params| {
-                            let mut field_parts = Vec::new();
-
-                            // Add literal key fields
-                            for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
-                                field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
-                            }
-
-                            // Add non-literal key fields
-                            for &(key_reg, value_reg) in params.field_pairs() {
-                                field_parts.push(format!("R({}):R({})", key_reg, value_reg));
-                            }
-
-                            let fields_str = field_parts.join(" ");
-                            format!(
-                                "OBJECT_CREATE R({}) L({}) [{}]",
-                                params.dest, params.template_literal_idx, fields_str
-                            )
-                        },
-                    )
-            }
+            Instruction::ObjectCreate { params_index } => instruction_data
+                .get_object_create_params(params_index)
+                .map_or_else(
+                    || format!("OBJECT_CREATE P({}) [INVALID INDEX]", params_index),
+                    |params| {
+                        let mut field_parts = Vec::new();
+                        for &(literal_idx, value_reg) in params.literal_key_field_pairs() {
+                            field_parts.push(format!("L({}):R({})", literal_idx, value_reg));
+                        }
+                        for &(key_reg, value_reg) in params.field_pairs() {
+                            field_parts.push(format!("R({}):R({})", key_reg, value_reg));
+                        }
+                        let fields_str = field_parts.join(" ");
+                        format!(
+                            "OBJECT_CREATE R({}) L({}) [{}]",
+                            params.dest, params.template_literal_idx, fields_str
+                        )
+                    },
+                ),
             Instruction::VirtualDataDocumentLookup { params_index } => instruction_data
                 .get_virtual_data_document_lookup_params(params_index)
                 .map_or_else(
@@ -147,6 +143,8 @@ impl core::fmt::Display for Instruction {
             Instruction::LoadBool { dest, value } => format!("LOAD_BOOL R({}) {}", dest, value),
             Instruction::LoadData { dest } => format!("LOAD_DATA R({})", dest),
             Instruction::LoadInput { dest } => format!("LOAD_INPUT R({})", dest),
+            Instruction::LoadContext { dest } => format!("LOAD_CONTEXT R({})", dest),
+            Instruction::LoadMetadata { dest } => format!("LOAD_METADATA R({})", dest),
             Instruction::Move { dest, src } => format!("MOVE R({}) R({})", dest, src),
             Instruction::Add { dest, left, right } => {
                 format!("ADD R({}) R({}) R({})", dest, left, right)
@@ -224,6 +222,9 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::ArrayNew { dest } => format!("ARRAY_NEW R({})", dest),
             Instruction::ArrayPush { arr, value } => format!("ARRAY_PUSH R({}) R({})", arr, value),
+            Instruction::ArrayPushDefined { arr, value } => {
+                format!("ARRAY_PUSH_DEFINED R({}) R({})", arr, value)
+            }
             Instruction::ArrayCreate { params_index } => {
                 format!("ARRAY_CREATE P({})", params_index)
             }
@@ -240,11 +241,22 @@ impl core::fmt::Display for Instruction {
             Instruction::Count { dest, collection } => {
                 format!("COUNT R({}) R({})", dest, collection)
             }
-            Instruction::AssertCondition { condition } => {
-                format!("ASSERT_CONDITION R({})", condition)
+            Instruction::AssertEq { left, right } => {
+                format!("ASSERT_EQ R({}) R({})", left, right)
             }
-            Instruction::AssertNotUndefined { register } => {
-                format!("ASSERT_NOT_UNDEFINED R({})", register)
+            Instruction::Guard { register, mode } => {
+                let name = match mode {
+                    GuardMode::Not => "ASSERT_NOT",
+                    GuardMode::Condition => "ASSERT_CONDITION",
+                    GuardMode::NotUndefined => "ASSERT_NOT_UNDEFINED",
+                };
+                format!("{} R({})", name, register)
+            }
+            Instruction::ReturnUndefinedIfNotTrue { condition } => {
+                format!("RETURN_UNDEFINED_IF_NOT_TRUE R({})", condition)
+            }
+            Instruction::CoalesceUndefinedToNull { register } => {
+                format!("COALESCE_UNDEF_TO_NULL R({})", register)
             }
             Instruction::LoopStart { params_index } => {
                 format!("LOOP_START P({})", params_index)
@@ -279,6 +291,51 @@ impl core::fmt::Display for Instruction {
                 |k| format!("COMPREHENSION_YIELD R({}) R({})", k, value_reg),
             ),
             Instruction::ComprehensionEnd {} => String::from("COMPREHENSION_END"),
+
+            // Azure Policy consolidated instruction
+            Instruction::PolicyCondition {
+                dest,
+                left,
+                right,
+                op,
+            } => match op {
+                PolicyOp::Not => format!("{} R({}) R({})", op.display_name(), dest, left),
+                _ => format!("{} R({}) R({}) R({})", op.display_name(), dest, left, right),
+            },
+
+            // AllOf / AnyOf structured instructions
+            Instruction::LogicalBlockStart {
+                mode,
+                result,
+                end_pc,
+            } => {
+                let name = match mode {
+                    LogicalBlockMode::AllOf => "ALL_OF_START",
+                    LogicalBlockMode::AnyOf => "ANY_OF_START",
+                };
+                format!("{} R({}) {}", name, result, end_pc)
+            }
+            Instruction::AllOfNext {
+                check,
+                result,
+                end_pc,
+            } => {
+                format!("ALL_OF_NEXT R({}) R({}) {}", check, result, end_pc)
+            }
+            Instruction::AnyOfNext {
+                check,
+                result,
+                end_pc,
+            } => {
+                format!("ANY_OF_NEXT R({}) R({}) {}", check, result, end_pc)
+            }
+            Instruction::LogicalBlockEnd { mode, result } => {
+                let name = match mode {
+                    LogicalBlockMode::AllOf => "ALL_OF_END",
+                    LogicalBlockMode::AnyOf => "ANY_OF_END",
+                };
+                format!("{} R({})", name, result)
+            }
         };
         write!(f, "{}", text)
     }

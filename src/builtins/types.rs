@@ -2,13 +2,11 @@
 // Licensed under the MIT License.
 #![allow(clippy::indexing_slicing, clippy::pattern_type_mismatch)]
 
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    builtins::utils::ensure_args_count,
-    lexer::Span,
-    value::Value,
-};
+use crate::ast::{Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::ensure_args_count;
+use crate::lexer::Span;
+use crate::value::Value;
 
 use anyhow::Result;
 

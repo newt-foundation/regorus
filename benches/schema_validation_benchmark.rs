@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use regorus::{Schema, SchemaValidator, Value};
+use regorus::Value;
+use regorus::{Schema, SchemaValidator};
 use serde_json::json;
 
 // Observed: validate_string - 3.19 ns/iter

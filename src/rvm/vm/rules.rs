@@ -1,24 +1,57 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::{
-    rvm::{
-        instructions::FunctionCallParams,
-        program::{RuleInfo, RuleType},
-    },
-    value::Value,
-};
-use alloc::{format, vec::Vec};
-use core::{convert::TryFrom as _, mem};
+use crate::rvm::instructions::FunctionCallParams;
+use crate::rvm::program::{RuleInfo, RuleType};
+use crate::value::Value;
+use alloc::format;
+use alloc::vec::Vec;
+use core::convert::TryFrom as _;
+use core::mem;
 
-use super::{
-    context::CallRuleContext,
-    errors::{Result, VmError},
-    execution_model::{ExecutionFrame, ExecutionMode, FrameKind, RuleFrameData, RuleFramePhase},
-    machine::RegoVM,
+use super::context::CallRuleContext;
+use super::errors::{Result, VmError};
+use super::execution_model::{
+    ExecutionFrame, ExecutionMode, FrameKind, RuleFrameData, RuleFramePhase,
 };
+use super::machine::RegoVM;
 
 impl RegoVM {
+    /// Returns true if the error represents a resource-limit violation that
+    /// must never be silently absorbed by rule evaluation.
+    pub(super) const fn is_fatal_vm_error(&self, err: &VmError) -> bool {
+        self.builtin_limit_exceeded
+            || matches!(
+                err,
+                VmError::TimeLimitExceeded { .. }
+                    | VmError::RuleCallDepthExceeded { .. }
+                    | VmError::MemoryLimitExceeded { .. }
+                    | VmError::MemoryBudgetExceeded { .. }
+                    | VmError::RegexSizeLimitExceeded { .. }
+                    | VmError::SerializationDepthExceeded { .. }
+                    | VmError::InstructionLimitExceeded { .. }
+                    | VmError::NumericOverflow { .. }
+            )
+    }
+
+    /// Restore VM state that was swapped out for rule execution.
+    /// Must be called before returning an error from `execute_rule_definitions_common`
+    /// to avoid leaving the VM in an inconsistent state.
+    fn restore_rule_state(
+        &mut self,
+        previous_loop_stack: &mut Vec<super::context::LoopContext>,
+        previous_comprehension_stack: &mut Vec<super::context::ComprehensionContext>,
+    ) {
+        if let Some(restored_registers) = self.register_stack.pop() {
+            let mut current_register_window = Vec::default();
+            mem::swap(&mut current_register_window, &mut self.registers);
+            self.return_register_window(current_register_window);
+            self.registers = restored_registers;
+        }
+        mem::swap(&mut self.loop_stack, previous_loop_stack);
+        mem::swap(&mut self.comprehension_stack, previous_comprehension_stack);
+    }
+
     pub(super) fn execute_rule_definitions_common(
         &mut self,
         rule_definitions: &[Vec<u32>],
@@ -81,6 +114,13 @@ impl RegoVM {
                 {
                     match self.jump_to(destructuring_entry_point) {
                         Ok(_result) => {}
+                        Err(e) if self.is_fatal_vm_error(&e) => {
+                            self.restore_rule_state(
+                                &mut previous_loop_stack,
+                                &mut previous_comprehension_stack,
+                            );
+                            return Err(e);
+                        }
                         Err(_e) => {
                             continue 'outer;
                         }
@@ -100,13 +140,42 @@ impl RegoVM {
                                     }
                                 } else {
                                     first_successful_result = Some(current_result.clone());
+                                    // All definitions produce the same static value;
+                                    // no need to verify consistency with the rest.
+                                    if rule_info.early_exit_on_first_success {
+                                        break 'outer;
+                                    }
                                 }
                             }
                         }
 
-                        // Once a body in this definition succeeds, remaining bodies
-                        // are treated as else-branches and must not be evaluated.
-                        break;
+                        // Independent bodies of partial rules accumulate their
+                        // contributions. `else` bodies (and all complete/function
+                        // rules) preserve first-success semantics.
+                        let next_is_else = rule_info
+                            .else_bodies
+                            .get(def_idx)
+                            .and_then(|bodies| {
+                                body_entry_point_idx
+                                    .checked_add(1)
+                                    .and_then(|next_idx| bodies.get(next_idx))
+                            })
+                            .copied()
+                            .unwrap_or(false);
+                        if !matches!(
+                            rule_info.rule_type,
+                            RuleType::PartialSet | RuleType::PartialObject
+                        ) || next_is_else
+                        {
+                            break;
+                        }
+                    }
+                    Err(e) if self.is_fatal_vm_error(&e) => {
+                        self.restore_rule_state(
+                            &mut previous_loop_stack,
+                            &mut previous_comprehension_stack,
+                        );
+                        return Err(e);
                     }
                     Err(_e) => {}
                 }
@@ -188,7 +257,13 @@ impl RegoVM {
         let rule_definitions = rule_info.definitions.clone();
 
         if rule_definitions.is_empty() {
-            let result = Value::Undefined;
+            // No compiled definitions — check for a default value before returning Undefined.
+            // Default-only rules (e.g., `default deny := true`) have no body definitions
+            // but their default value was evaluated at compile time and stored as a literal.
+            let result = rule_info
+                .default_literal_index
+                .and_then(|idx| self.program.literals.get(usize::from(idx)).cloned())
+                .unwrap_or(Value::Undefined);
             if !is_function_rule {
                 let available = self.rule_cache.len();
                 let entry =
@@ -205,6 +280,20 @@ impl RegoVM {
             return Ok(());
         }
 
+        // Explicit suspendable frames do not retain native dispatch frames.
+        const MAX_SUPPORTED_NATIVE_RULE_DEPTH: usize = 17;
+        if self.max_native_rule_call_depth > MAX_SUPPORTED_NATIVE_RULE_DEPTH {
+            return Err(VmError::RuleCallDepthExceeded {
+                limit: MAX_SUPPORTED_NATIVE_RULE_DEPTH,
+                pc: self.pc,
+            });
+        }
+        if self.register_stack.len() >= self.max_native_rule_call_depth {
+            return Err(VmError::RuleCallDepthExceeded {
+                limit: self.max_native_rule_call_depth,
+                pc: self.pc,
+            });
+        }
         self.call_rule_stack.push(CallRuleContext {
             return_pc: self.pc,
             dest_reg: dest,
@@ -215,16 +304,31 @@ impl RegoVM {
             current_body_index: 0,
         });
 
-        let (final_result, rule_failed_due_to_inconsistency) = self
-            .execute_rule_definitions_common(&rule_definitions, &rule_info, function_call_params)?;
+        let execution_result = self.execute_rule_definitions_common(
+            &rule_definitions,
+            &rule_info,
+            function_call_params,
+        );
 
-        self.set_register(dest, Value::Undefined)?;
-
-        let call_context = self
-            .call_rule_stack
-            .pop()
-            .ok_or(VmError::CallRuleStackUnderflow { pc: self.pc })?;
+        let call_context = self.call_rule_stack.pop();
+        // A cleanup diagnostic must not replace a fatal execution error.
+        let (final_result, rule_failed_due_to_inconsistency) = execution_result?;
+        let call_context = call_context.ok_or(VmError::CallRuleStackUnderflow { pc: self.pc })?;
+        // Stack discipline: the context we just popped must belong to the
+        // rule we are finalizing. A mismatch indicates a missing push or an
+        // extra pop somewhere in this rule's execution and would otherwise
+        // silently restore the wrong return_pc / rule_type. Surface as a
+        // typed VmError so the contract holds the same in debug and release
+        // builds (avoiding FFI poisoning via a debug-only panic).
+        if rule_index != call_context.rule_index {
+            return Err(VmError::CallRuleStackMismatch {
+                expected: rule_index,
+                actual: call_context.rule_index,
+                pc: self.pc,
+            });
+        }
         self.pc = call_context.return_pc;
+        self.set_register(dest, Value::Undefined)?;
 
         let result_from_rule = if !rule_failed_due_to_inconsistency {
             final_result
@@ -333,7 +437,11 @@ impl RegoVM {
         }
 
         if rule_info.definitions.is_empty() {
-            let result = Value::Undefined;
+            // No compiled definitions — check for a default value before returning Undefined.
+            let result = rule_info
+                .default_literal_index
+                .and_then(|idx| self.program.literals.get(usize::from(idx)).cloned())
+                .unwrap_or(Value::Undefined);
             if !is_function_rule {
                 let available = self.rule_cache.len();
                 let entry =
@@ -609,6 +717,13 @@ impl RegoVM {
                     }
                 } else {
                     frame_data.accumulated_result = Some(current_result);
+                    // All definitions produce the same static value;
+                    // skip remaining definitions.
+                    if rule_info.early_exit_on_first_success {
+                        frame_data.current_definition_index = frame_data.total_definitions;
+                        frame_data.phase = RuleFramePhase::Finalizing;
+                        return Ok(None);
+                    }
                 }
             }
         }
@@ -767,6 +882,9 @@ impl RegoVM {
 
         self.registers = parent_registers;
 
+        // Underflow here means malformed/poisoned program state; surface as a
+        // typed error rather than a debug-only panic so the public load_program
+        // contract holds the same in debug and release.
         if self.call_rule_stack.pop().is_none() {
             return Err(VmError::CallRuleStackUnderflow { pc: self.pc });
         }

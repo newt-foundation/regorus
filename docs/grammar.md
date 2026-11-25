@@ -1,4 +1,30 @@
-Regorus uses the following grammar that has been derived from the official [OPA grammar](https://www.openpolicyagent.org/docs/latest/policy-reference/#grammar) as well as observed OPA behavior. 
+Regorus uses the following grammar that has been derived from the official [OPA grammar](https://www.openpolicyagent.org/docs/latest/policy-reference/#grammar) as well as observed OPA behavior.
+
+## Parsing nested expressions
+
+The parser limits recursive terms and query bodies to a shared depth of 32 and
+also checks the depth of the resulting expressions and queries. Plain terms such
+as `[[1]]` use three levels. A comprehension such as `[0 | true]` also opens a
+query body, so nested comprehensions reach the limit sooner than nested arrays.
+The query-body guard also bounds nested `every` bodies without charging a second
+slot for the same statement. Sibling terms close their slot before the next
+starts, so wide shallow arrays and queries do not add to the nesting depth.
+Excessive nesting returns an `expression nesting too deep` error, not
+`Undefined`. A rejected policy is not added to the engine, which remains usable.
+
+Before trying a comprehension or assignment, an iterative lookahead checks for
+`|`, `=`, or `:=` after the first reference. It skips nested delimiters and does
+not treat string contents as separators. For example, `[0 | [0 | true]]` must not
+parse each inner query again while checking whether the outer expression is an
+assignment. The scan stops at the reference boundary rather than reading all
+later statements, keeping long sequences of shallow statements inexpensive.
+
+This lookahead does not change the grammar or depth limits. In particular,
+parenthesized string indices in calls (`f[("k")](1)`) and multiline unary
+unification (`-` followed on the next line by `1 = -1`) remain supported.
+Depth errors and typed resource-limit errors are preserved across parsing
+fallbacks. These limits are separate from host `Value` limits and RVM rule-call
+limits; they are not a guarantee for arbitrary native stack sizes.
 
 ```ebnf
 
@@ -154,6 +180,42 @@ referenced by:
 ```
 path-ref ::= IDENT ( NO_WS ( '.' NO_WS IDENT | '[' STRING ']' ) )*
 ```
+
+String components in brackets retain their literal identity, including dots.
+For example, `graph["a.b"]` is distinct from `graph.a.b`. When a package path
+is returned by the Engine API or used as a rule entry point, non-identifier
+string components use JSON-escaped bracket notation.
+
+Policy-source path references are limited to 32 components, counting the
+initial identifier as one. Every dotted identifier or bracketed string adds
+one component; dots inside a bracketed string do not. A 33rd component is
+rejected by the general policy parser.
+
+The Rego frontend also limits expression/query nesting and constructed AST
+height to 32. Scalars have height one; each expression or query adds one to
+the largest child height. Statement lists do not add height per sibling.
+This includes general references and operator chains, not just parentheses.
+Parenthesized grammar nesting is checked separately, before speculative
+parsing. Unsupported structures return parser errors.
+
+The interpreter has a separate private budget of 64 simultaneously active
+evaluation entries, shared by expressions, rules/functions, destructuring and
+native loop continuations. Exhaustion is an evaluation error, including in non-strict mode;
+it is not false, undefined, or a request to select a default. Ordinary statement
+iteration does not consume an entry per statement. These structural and native
+budgets are not limits on the depth of input/data Values.
+
+The RVM compiler also enforces its existing rule-tree path limit. A policy may
+parse successfully yet fail RVM compilation when its combined registered path
+exceeds that limit; direct entry-point lookup does not bypass this check.
+
+Static public entry-point lookup uses a separate iterative parser rather than
+building the recursively nested policy AST. It accepts dotted and bracketed
+string spellings up to the longest registered rule path, so equivalent
+spellings remain consistent even when that path exceeds the policy parser's
+32-component limit. Paths that exceed the registered depth or do not identify
+a rule remain invalid; `Engine::eval_rule` reports `not a valid rule path`,
+while parser and compiler APIs return an error.
 
 referenced by:
 

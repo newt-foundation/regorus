@@ -8,20 +8,19 @@
     clippy::pattern_type_mismatch
 )]
 
-use crate::{
-    ast::{ArithOp, Expr, Ref},
-    builtins,
-    builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric},
-    lexer::Span,
-    number::Number,
-    value::Value,
-    *,
-};
+use crate::ast::{ArithOp, Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::{enforce_limit, ensure_args_count, ensure_numeric};
+use crate::lexer::Span;
+use crate::number::Number;
+use crate::value::Value;
+use crate::*;
 
 use anyhow::{bail, Result};
+use num_traits::FromPrimitive as _;
 
 #[cfg(feature = "std")]
-use rand::Rng;
+use rand::RngExt;
 
 pub fn register(m: &mut builtins::BuiltinsMap<&'static str, builtins::BuiltinFcn>) {
     m.insert("abs", (abs, 1));
@@ -102,15 +101,26 @@ fn range(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -> Res
         _ => (),
     }
 
-    let (incr, num_elements) = match v2.sub(&v1)?.as_i64() {
-        Some(v) if v >= 0 => (1i64, v as usize + 1),
-        Some(v) => (-1i64, (-v + 1) as usize),
-        _ => bail!(span.error("could not determine number of elements")),
-    };
+    let distance = v2.sub(&v1)?.as_i64();
+    let num_elements = distance
+        .and_then(|distance| distance.unsigned_abs().checked_add(1))
+        .and_then(|count| usize::try_from(count).ok());
 
-    let mut values = Vec::with_capacity(num_elements);
+    #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+    crate::utils::limits::check_memory_allocation(
+        num_elements
+            .unwrap_or(usize::MAX)
+            .saturating_mul(core::mem::size_of::<Value>()),
+    )?;
+    let distance = distance.ok_or_else(|| span.error("could not determine number of elements"))?;
+    let num_elements =
+        num_elements.ok_or_else(|| span.error("could not determine number of elements"))?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(num_elements)
+        .map_err(|err| span.error(&format!("could not allocate range: {err}")))?;
     let mut v = v1;
-    let incr = Number::from(incr);
+    let incr = Number::from(if distance < 0 { -1i64 } else { 1i64 });
     while v != v2 {
         values.push(Value::from(v.clone()));
         v.add_assign(&incr)?;
@@ -142,24 +152,39 @@ fn range_step(span: &Span, params: &[Ref<Expr>], args: &[Value], strict: bool) -
         _ => (),
     }
 
-    if strict && (!incr.is_integer() || incr <= Number::from(0u64)) {
-        bail!(params[2].span().error("step must be a positive integer"))
+    if !incr.is_integer() || incr <= Number::from(0u64) {
+        if strict {
+            bail!(params[2].span().error("step must be a positive integer"))
+        }
+        return Ok(Value::Undefined);
     }
 
-    let (incr, num_elements) = match (v2.sub(&v1)?.as_i64(), incr.as_i64()) {
-        (Some(v), Some(incr)) if v >= 0 => (incr, v / incr + 1),
-        (Some(v), Some(incr)) => (-incr, -v / incr + 1),
-        _ => bail!(span.error("could not determine number of elements")),
+    // Integral floats must step exactly even when adding one is below their f64 precision.
+    let exact_integer = |number: Number| -> Result<Number> {
+        match number {
+            Number::Float(value) => num_bigint::BigInt::from_f64(value)
+                .map(Number::from)
+                .ok_or_else(|| anyhow::anyhow!(span.error("could not convert integer operand"))),
+            number => Ok(number),
+        }
+    };
+    let v1 = exact_integer(v1)?;
+    let v2 = exact_integer(v2)?;
+    let incr = exact_integer(incr)?;
+
+    let step = if v1 <= v2 {
+        incr
+    } else {
+        Number::from(0u64).sub(&incr)?
     };
 
-    let mut values = Vec::with_capacity(num_elements as usize);
-    let incr = Number::from(incr);
+    let mut values = Vec::new();
     let mut v = v1;
-    while (v <= v2 && incr.is_positive()) || (v >= v2 && !incr.is_positive()) {
+    while (v <= v2 && step.is_positive()) || (v >= v2 && !step.is_positive()) {
         values.push(Value::from(v.clone()));
-        v.add_assign(&incr)?;
         // Guard vector growth as the stepped range accumulates.
         enforce_limit()?;
+        v.add_assign(&step)?;
     }
 
     Ok(Value::from_array(values))

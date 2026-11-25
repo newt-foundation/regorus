@@ -7,11 +7,12 @@
 )]
 
 use super::{Compiler, CompilerError, ComprehensionType, ContextType, Result};
-use crate::{
-    ast::{self, LiteralStmt, Query},
-    rvm::{program::RuleType, Instruction},
-};
-use alloc::{format, vec::Vec};
+use crate::ast::{self, LiteralStmt, Query};
+use crate::rvm::instructions::GuardMode;
+use crate::rvm::program::RuleType;
+use crate::rvm::Instruction;
+use alloc::format;
+use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn compile_query(&mut self, query: &Query) -> Result<()> {
@@ -69,12 +70,31 @@ impl<'a> Compiler<'a> {
                     ..
                 } = &stmt.literal
                 {
-                    self.compile_some_in_loop_with_remaining_statements(
+                    let some_result_reg = self.compile_some_in_loop_with_remaining_statements(
                         key,
                         value,
                         collection,
                         &stmts[idx..],
                     )?;
+                    // Inside an `every` body a `some ... in` acts as a condition
+                    // on the current iteration: if it matches nothing the
+                    // iteration must fail. Unlike a top-level rule body (where
+                    // per-iteration context yields produce the results), the
+                    // `every` body has no yield, so the loop result register is
+                    // otherwise discarded. Guard on it so a `some` that matches
+                    // nothing fails the enclosing `every` iteration.
+                    if matches!(
+                        self.context_stack.last().map(|c| &c.context_type),
+                        Some(ContextType::Every)
+                    ) {
+                        self.emit_instruction(
+                            Instruction::Guard {
+                                register: some_result_reg,
+                                mode: GuardMode::Condition,
+                            },
+                            &stmt.span,
+                        );
+                    }
                     return Ok(());
                 }
             }
@@ -132,7 +152,7 @@ impl<'a> Compiler<'a> {
             let value_register = match context.value_expr {
                 Some(expr) => self.compile_rego_expr(&expr)?,
                 None => {
-                    let value_reg = self.alloc_register();
+                    let value_reg = self.alloc_register()?;
                     self.emit_instruction(
                         Instruction::LoadBool {
                             dest: value_reg,
@@ -148,6 +168,25 @@ impl<'a> Compiler<'a> {
                 .key_expr
                 .map(|key_expr| self.compile_rego_expr(&key_expr))
                 .unwrap_or(Ok(value_register))?;
+
+            if matches!(context.context_type, ContextType::Rule(_)) {
+                self.emit_instruction(
+                    Instruction::Guard {
+                        register: value_register,
+                        mode: GuardMode::NotUndefined,
+                    },
+                    span,
+                );
+                if key_register != value_register {
+                    self.emit_instruction(
+                        Instruction::Guard {
+                            register: key_register,
+                            mode: GuardMode::NotUndefined,
+                        },
+                        span,
+                    );
+                }
+            }
 
             match context.context_type {
                 ContextType::Comprehension(ComprehensionType::Array) => {
@@ -242,7 +281,7 @@ impl<'a> Compiler<'a> {
                     compiler.compile_rego_expr_with_span(expr, expr.span(), false)
                 })?;
 
-                let negated_reg = self.alloc_register();
+                let negated_reg = self.alloc_register()?;
                 self.emit_instruction(
                     Instruction::Not {
                         dest: negated_reg,
@@ -252,8 +291,9 @@ impl<'a> Compiler<'a> {
                 );
 
                 self.emit_instruction(
-                    Instruction::AssertCondition {
-                        condition: negated_reg,
+                    Instruction::Guard {
+                        register: negated_reg,
+                        mode: GuardMode::Condition,
                     },
                     &stmt.span,
                 );

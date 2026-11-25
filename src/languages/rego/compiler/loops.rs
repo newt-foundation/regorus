@@ -9,20 +9,16 @@
 )]
 
 use super::{CompilationContext, Compiler, CompilerError, ContextType, Register, Result};
-use crate::{
-    ast::{self, ExprRef, LiteralStmt, Query},
-    compiler::{
-        destructuring_planner::plans::BindingPlan,
-        hoist::{HoistedLoop, LoopType},
-    },
-    lexer::Span,
-    rvm::{
-        instructions::{LoopMode, LoopStartParams},
-        Instruction,
-    },
-    Value,
-};
-use alloc::{format, string::ToString, vec::Vec};
+use crate::ast::{self, ExprRef, LiteralStmt, Query};
+use crate::compiler::destructuring_planner::plans::BindingPlan;
+use crate::compiler::hoist::{HoistedLoop, LoopType};
+use crate::lexer::Span;
+use crate::rvm::instructions::{GuardMode, LoopMode, LoopStartParams};
+use crate::rvm::Instruction;
+use crate::Value;
+use alloc::format;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 impl<'a> Compiler<'a> {
     pub(super) fn get_statement_loops(&self, stmt: &LiteralStmt) -> Result<Vec<HoistedLoop>> {
@@ -86,7 +82,7 @@ impl<'a> Compiler<'a> {
                 self.compile_single_statement(stmts[0])?;
                 return self.hoist_loops_and_compile_statements(&stmts[1..]);
             } else {
-                self.hoist_loops_and_emit_context_yield()?;
+                return self.hoist_loops_and_emit_context_yield();
             }
         }
 
@@ -122,9 +118,9 @@ impl<'a> Compiler<'a> {
     ) -> Result<()> {
         let collection_reg = self.compile_rego_expr(domain)?;
 
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
-        let result_reg = self.alloc_register();
+        let key_reg = self.alloc_register()?;
+        let value_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
 
         let value_var_name = value.text().to_string();
         let key_var_name = key.as_ref().map(|k| k.text().to_string());
@@ -201,6 +197,19 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
+        // The loop writes its overall pass/fail into `result_reg`
+        // (`success_count == total_iterations` for `Every`). The enclosing query
+        // must fail (evaluate to undefined) when the quantifier does not hold, so
+        // guard on `result_reg` here. Without this the `every` result is computed
+        // but discarded, leaving the surrounding rule to always succeed.
+        self.emit_instruction(
+            Instruction::Guard {
+                register: result_reg,
+                mode: GuardMode::Condition,
+            },
+            span,
+        );
+
         Ok(())
     }
 
@@ -215,9 +224,9 @@ impl<'a> Compiler<'a> {
     ) -> Result<()> {
         let collection_reg = self.compile_rego_expr(collection)?;
 
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
-        let result_reg = self.alloc_register();
+        let key_reg = self.alloc_register()?;
+        let value_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
 
         if let Some(loop_expr) = loop_expr {
             self.loop_expr_register_map
@@ -316,6 +325,25 @@ impl<'a> Compiler<'a> {
             *end = loop_end;
         }
 
+        // A hoisted index-iteration loop inside an `every` body acts as a
+        // condition on the current iteration: if the indexed reference matches
+        // nothing the iteration must fail. The `every` body emits no context
+        // yield, so the loop result register is otherwise discarded (same
+        // situation as `some ... in`). Guard on it so a non-matching indexed
+        // reference fails the enclosing `every` iteration.
+        if matches!(
+            self.context_stack.last().map(|c| &c.context_type),
+            Some(ContextType::Every)
+        ) {
+            self.emit_instruction(
+                Instruction::Guard {
+                    register: result_reg,
+                    mode: GuardMode::Condition,
+                },
+                collection.span(),
+            );
+        }
+
         Ok(())
     }
 
@@ -339,9 +367,9 @@ impl<'a> Compiler<'a> {
     ) -> Result<Register> {
         let collection_reg = self.compile_rego_expr(collection)?;
 
-        let key_reg = self.alloc_register();
-        let value_reg = self.alloc_register();
-        let result_reg = self.alloc_register();
+        let key_reg = self.alloc_register()?;
+        let value_reg = self.alloc_register()?;
+        let result_reg = self.alloc_register()?;
 
         let loop_params_index = self.program.add_loop_params(LoopStartParams {
             mode: LoopMode::ForEach,
@@ -372,9 +400,10 @@ impl<'a> Compiler<'a> {
                 self.apply_some_in_binding_plan(
                     key_plan.as_ref(),
                     key_register,
+                    key.as_ref().map(|key| key.span()),
                     value_plan,
                     value_reg,
-                    collection.span(),
+                    value.span(),
                 )
                 .map_err(|e| CompilerError::from(e).at(collection.span()))?;
             } else {

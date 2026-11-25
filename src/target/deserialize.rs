@@ -3,16 +3,11 @@
 
 #![allow(clippy::unused_trait_names)]
 
-use crate::{
-    format,
-    registry::instances::{EFFECT_SCHEMA_REGISTRY, RESOURCE_SCHEMA_REGISTRY},
-    Rc, Schema, Vec,
-};
+use crate::registry::instances::{EFFECT_SCHEMA_REGISTRY, RESOURCE_SCHEMA_REGISTRY};
+use crate::{format, Rc, Schema, Vec};
 use alloc::collections::BTreeMap;
-use serde::{
-    de::{Deserializer, Error},
-    Deserialize,
-};
+use serde::de::{Deserializer, Error};
+use serde::Deserialize;
 type String = Rc<str>;
 
 /// Deserialize resource schemas from either an array of schemas or schema names.

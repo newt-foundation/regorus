@@ -6,8 +6,19 @@ void example()
     // Create engine
     regorus::Engine engine;
 
+    // Configure the global pattern caches.
+    RegorusCacheConfig cache_config = { 256, 128 };
+    regorus::set_cache_config(cache_config);
+
     engine.set_rego_v0(true);
     engine.set_enable_coverage(true);
+
+    RegorusPolicyLengthConfig len_config;
+    // Raise the default col limit to 2000
+    len_config.max_col = 2000;
+    len_config.max_file_bytes = 1048576;
+    len_config.max_lines = 20000;
+    engine.set_policy_length_config(len_config);
     
     // Add policies.
     engine.add_policy("objects.rego",R"(package objects

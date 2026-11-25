@@ -1,0 +1,1646 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+#![allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::as_conversions,
+    clippy::arithmetic_side_effects,
+    clippy::unseparated_literal_suffix,
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::pattern_type_mismatch
+)]
+
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
+#[cfg(feature = "std")]
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use super::{Object, Set};
+use crate::value::Value;
+
+#[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+#[test]
+fn resume_deserialization_limit_error_capture_is_nested_thread_local_and_unwind_safe() {
+    use super::{
+        record_resume_deserialization_limit_error, ResumeDeserializationLimitErrorCapture,
+    };
+    use crate::utils::limits::LimitError;
+
+    let outer_error = LimitError::MemoryLimitExceeded {
+        usage: 256,
+        limit: 128,
+    };
+    let nested_error = LimitError::MemoryLimitExceeded {
+        usage: 512,
+        limit: 256,
+    };
+    let thread_error = LimitError::MemoryLimitExceeded {
+        usage: 1024,
+        limit: 512,
+    };
+    let outer_capture = ResumeDeserializationLimitErrorCapture::new();
+    record_resume_deserialization_limit_error(outer_error);
+
+    {
+        let nested_capture = ResumeDeserializationLimitErrorCapture::new();
+        assert_eq!(
+            ResumeDeserializationLimitErrorCapture::take(&nested_capture),
+            None
+        );
+        record_resume_deserialization_limit_error(nested_error);
+        assert_eq!(
+            ResumeDeserializationLimitErrorCapture::take(&nested_capture),
+            Some(nested_error)
+        );
+    }
+
+    let thread_result = std::thread::spawn(move || {
+        let thread_capture = ResumeDeserializationLimitErrorCapture::new();
+        assert_eq!(
+            ResumeDeserializationLimitErrorCapture::take(&thread_capture),
+            None
+        );
+        record_resume_deserialization_limit_error(thread_error);
+        ResumeDeserializationLimitErrorCapture::take(&thread_capture)
+    })
+    .join()
+    .expect("thread-local capture test thread should complete");
+    assert_eq!(thread_result, Some(thread_error));
+
+    let unwind_result = std::panic::catch_unwind(|| {
+        let _unwinding_capture = ResumeDeserializationLimitErrorCapture::new();
+        record_resume_deserialization_limit_error(nested_error);
+        panic!("exercise RAII restoration during unwind");
+    });
+    assert!(unwind_result.is_err());
+    assert_eq!(
+        ResumeDeserializationLimitErrorCapture::take(&outer_capture),
+        Some(outer_error)
+    );
+
+    drop(outer_capture);
+    let subsequent_capture = ResumeDeserializationLimitErrorCapture::new();
+    assert_eq!(
+        ResumeDeserializationLimitErrorCapture::take(&subsequent_capture),
+        None
+    );
+}
+
+fn val(i: u64) -> Value {
+    Value::from(i)
+}
+
+fn make_pairs(n: u64) -> Vec<(Value, Value)> {
+    (0..n).map(|i| (val(i), val(i.saturating_mul(2)))).collect()
+}
+
+const SIZES: &[u64] = &[0, 1, 2, 4, 8, 64, 256, 1024];
+
+#[cfg(feature = "std")]
+#[path = "../../tests/native_depth_support/mod.rs"]
+#[allow(clippy::std_instead_of_core)]
+pub mod native_depth_support;
+
+#[cfg(feature = "std")]
+fn nested_value(depth: usize, mut value: Value, kind: usize) -> Value {
+    for _ in 0..depth {
+        value = match kind {
+            0 => Value::from(vec![value]),
+            1 => Value::from(BTreeSet::from([value])),
+            2 => Value::from(BTreeMap::from([(Value::from("k"), value)])),
+            _ => Value::from(BTreeMap::from([(value, Value::Null)])),
+        };
+    }
+    value
+}
+
+#[test]
+fn value_output_and_ordering_compatibility() {
+    let value = Value::from(BTreeMap::from([
+        (Value::from("escaped\n\""), Value::Undefined),
+        (
+            Value::from(vec![Value::from(2)]),
+            Value::from(BTreeSet::from([Value::Bool(false), Value::Null])),
+        ),
+    ]));
+    assert_eq!(format!("{value}"), serde_json::to_string(&value).unwrap());
+    assert_eq!(
+        value.to_json_str().unwrap(),
+        serde_json::to_string_pretty(&value).unwrap()
+    );
+    assert_eq!(
+        format!("{value:?}"),
+        "Object({String(\"escaped\\n\\\"\"): Undefined, Array([Number(2)]): Set({Null, Bool(false)})})"
+    );
+    assert_eq!(
+        format!("{:#?}", Value::from(vec![Value::Bool(true)])),
+        "Array(\n    [\n        Bool(\n            true,\n        ),\n    ],\n)"
+    );
+    let values = [
+        Value::Null,
+        Value::Bool(false),
+        Value::from(1),
+        Value::from("a"),
+        Value::new_array(),
+        Value::new_set(),
+        Value::new_object(),
+        Value::Undefined,
+    ];
+    for pair in values.windows(2) {
+        assert!(pair[0] < pair[1]);
+    }
+    assert!(Value::from(vec![Value::from(0), Value::Null]) < Value::from(vec![Value::from(1)]));
+    assert!(Value::from(vec![Value::Null]) < Value::from(vec![Value::Null, Value::Null]));
+
+    // Object keys retain the same JSON-within-a-string encoding.
+    let key = Value::from(BTreeMap::from([(Value::from(1), value)]));
+    let outer = Value::from(BTreeMap::from([(key, Value::Bool(true))]));
+    assert_eq!(format!("{outer}"), serde_json::to_string(&outer).unwrap());
+    assert_eq!(
+        outer.to_json_str().unwrap(),
+        serde_json::to_string_pretty(&outer).unwrap()
+    );
+}
+
+#[cfg(feature = "std")]
+#[test]
+#[cfg_attr(miri, ignore = "requires native-stack subprocess isolation")]
+fn value_traversal_lifecycle_1500000_byte_stack() {
+    if std::env::var_os("REGORUS_NATIVE_DEPTH_CHILD").is_none() {
+        native_depth_support::run_in_subprocess(
+            "value::tests::value_traversal_lifecycle_1500000_byte_stack",
+        );
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(1_500_000)
+        .spawn(|| {
+            for kind in 0..4 {
+                let sentinel: crate::Rc<str> = crate::Rc::from("leaf");
+                let a = nested_value(2048, Value::String(sentinel.clone()), kind);
+                let b = nested_value(2048, Value::String(sentinel.clone()), kind);
+                let c = nested_value(2048, Value::from("next"), kind);
+                assert_eq!(a, b);
+                assert_eq!(a.cmp(&b), core::cmp::Ordering::Equal);
+                assert!(a < c);
+                assert!(c > b);
+
+                let mut shared = a.clone();
+                match &mut shared {
+                    Value::Array(a) => crate::Rc::make_mut(a).clear(),
+                    Value::Set(s) => crate::Rc::make_mut(s).clear(),
+                    Value::Object(o) => crate::Rc::make_mut(o).clear(),
+                    _ => panic!("expected container"),
+                }
+                assert_eq!(a, b);
+                drop((shared, a, b, c));
+                assert_eq!(crate::Rc::strong_count(&sentinel), 1);
+
+                let mut owned = super::Array::from(vec![
+                    Value::Null,
+                    nested_value(2048, Value::String(sentinel.clone()), kind),
+                ])
+                .into_iter();
+                assert_eq!(owned.next(), Some(Value::Null));
+                drop(owned);
+                assert_eq!(crate::Rc::strong_count(&sentinel), 1);
+            }
+
+            let a = nested_value(2048, Value::Null, 0);
+            let compact = format!("{a}");
+            assert_eq!(
+                compact,
+                format!("{}null{}", "[".repeat(2048), "]".repeat(2048))
+            );
+            assert_eq!(
+                format!("{a:?}"),
+                format!("{}Null{}", "Array([".repeat(2048), "])".repeat(2048))
+            );
+            let pretty = a.to_json_str().unwrap();
+            assert_eq!(pretty.replace([' ', '\n'], ""), compact);
+            for kind in [1, 2] {
+                let value = nested_value(512, Value::Null, kind);
+                let compact = format!("{value}");
+                let (prefix, suffix) = if kind == 1 {
+                    ("[", "]")
+                } else {
+                    ("{\"k\":", "}")
+                };
+                assert_eq!(
+                    compact,
+                    format!("{}null{}", prefix.repeat(512), suffix.repeat(512))
+                );
+                assert_eq!(
+                    value.to_json_str().unwrap().replace([' ', '\n'], ""),
+                    compact
+                );
+                assert!(!format!("{value:?}").is_empty());
+            }
+            let keyed = Value::from(BTreeMap::from([(a.clone(), Value::Bool(true))]));
+            // Direct collection serde uses the iterative key encoder.
+            let expected = format!("{{{}:true}}", serde_json::to_string(&compact).unwrap());
+            assert_eq!(serde_json::to_string(&keyed).unwrap(), expected);
+            assert_eq!(format!("{keyed}"), expected);
+            let mut array = super::Array::from(vec![a.clone(), a.clone()]);
+            drop(array.into_iter().next());
+            array = super::Array::from(vec![a.clone()]);
+            array.get_mut(0).unwrap().clone_from(&Value::Null);
+            drop(array);
+            let mut map = Object::new();
+            map.insert(a.clone(), a.clone());
+            assert_eq!(map.remove(&a), Some(a.clone()));
+            let mut set = Set::from(BTreeSet::from([a.clone()]));
+            assert!(set.remove(&a));
+            let owned = Object::from(BTreeMap::from([
+                (Value::from("a"), a.clone()),
+                (Value::from("b"), a.clone()),
+            ]));
+            drop(owned.into_iter().next());
+            drop(Set::from(BTreeSet::from([a.clone()])).into_iter());
+
+            let mut merged = Value::new_object();
+            merged
+                .deep_merge(Value::from(BTreeMap::from([(Value::from("k"), a.clone())])))
+                .unwrap();
+            assert_eq!(merged["k"], a);
+            let equal = Value::from(BTreeMap::from([(
+                Value::from("k"),
+                nested_value(2048, Value::Null, 0),
+            )]));
+            merged.deep_merge(equal).unwrap();
+            let unequal = nested_value(512, Value::Bool(true), 0);
+            let conflict = Value::from(BTreeMap::from([(Value::from("k"), unequal)]));
+            let expected = format!(
+                "value for key `\"k\"` generated multiple times: `{}` and `{}`",
+                a.to_json_str().unwrap(),
+                conflict["k"].to_json_str().unwrap()
+            );
+            #[cfg(not(feature = "allocator-memory-limits"))]
+            assert_eq!(
+                merged.check_mergeable(&conflict).unwrap_err().to_string(),
+                expected
+            );
+            assert_eq!(
+                merged.deep_merge(conflict).unwrap_err().to_string(),
+                expected
+            );
+            assert_eq!(merged["k"], a);
+
+            let mut engine = crate::Engine::new();
+            engine.set_input(a.clone());
+            assert!(engine
+                .eval_bool_query("input == input".into(), false)
+                .unwrap());
+            engine.set_strict_builtin_errors(true);
+            let error = engine
+                .eval_query("upper(input)".into(), false)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("expects string argument. Got `Array(len=1)` instead"));
+            engine.set_input(Value::Null);
+
+            #[cfg(feature = "rvm")]
+            {
+                use crate::rvm::{Instruction, Program, RegoVM};
+                let mut program = Program::new();
+                program.add_instruction(Instruction::LoadInput { dest: 0 }, None);
+                program.add_instruction(Instruction::LoadTrue { dest: 1 }, None);
+                program.add_instruction(
+                    Instruction::Lt {
+                        dest: 0,
+                        left: 0,
+                        right: 1,
+                    },
+                    None,
+                );
+                program.add_instruction(Instruction::Return { value: 0 }, None);
+                let mut vm = RegoVM::new();
+                vm.load_program(alloc::sync::Arc::new(program));
+                vm.set_input(a.clone());
+                assert_eq!(vm.execute().unwrap(), Value::Bool(false));
+                vm.set_strict_builtin_errors(true);
+                let error = vm.execute().unwrap_err().to_string();
+                assert!(error.contains(
+                    "cannot compare values of different types (left=Array(len=1), right=Bool)"
+                ));
+                vm.set_input(Value::Null);
+            }
+            drop(a);
+
+            #[cfg(feature = "arc")]
+            {
+                let sentinel: crate::Rc<str> = crate::Rc::from("shared");
+                let shared = nested_value(2048, Value::String(sentinel.clone()), 2);
+                let left = Value::from(vec![shared.clone()]);
+                let right = Value::from(vec![shared]);
+                let barrier = alloc::sync::Arc::new(std::sync::Barrier::new(2));
+                let other_barrier = barrier.clone();
+                let other = std::thread::Builder::new()
+                    .stack_size(1_500_000)
+                    .spawn(move || {
+                        other_barrier.wait();
+                        drop(left);
+                    })
+                    .unwrap();
+                barrier.wait();
+                drop(right);
+                other.join().unwrap();
+                assert_eq!(crate::Rc::strong_count(&sentinel), 1);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn resource_identity_requires_observed_budget_exhaustion_not_error_text() {
+    use super::{serialize_with_limits, MAX_SERIALIZATION_CONTAINERS};
+
+    let value =
+        (0..=MAX_SERIALIZATION_CONTAINERS).fold(Value::Null, |value, _| Value::from(vec![value]));
+    let error = serialize_with_limits(&value, |value| serde_json::to_string(value)).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<crate::LimitError>(),
+        Some(&crate::LimitError::SerializationDepthExceeded {
+            limit: MAX_SERIALIZATION_CONTAINERS,
+        })
+    );
+
+    // Even with an over-budget input, an earlier unrelated serializer error
+    // must not be reclassified just because it has the same message.
+    let error = serialize_with_limits(&value, |_| {
+        Err::<(), _>(<serde_json::Error as serde::ser::Error>::custom(
+            crate::LimitError::SerializationDepthExceeded {
+                limit: MAX_SERIALIZATION_CONTAINERS,
+            },
+        ))
+    })
+    .unwrap_err();
+    assert!(error.downcast_ref::<crate::LimitError>().is_none());
+    assert!(error.downcast_ref::<serde_json::Error>().is_some());
+
+    let error = serialize_with_limits(&value, |value| {
+        let _ = serde_json::to_string(value);
+        Ok::<_, serde_json::Error>("fallback")
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<crate::LimitError>(),
+        Some(crate::LimitError::SerializationDepthExceeded { .. })
+    ));
+
+    assert_eq!(
+        serialize_with_limits(&Value::Null, |value| serde_json::to_string(value)).unwrap(),
+        "null"
+    );
+}
+
+#[cfg(feature = "std")]
+fn check_serialization<T: serde::Serialize>(
+    value: &T,
+    expected: Option<(&str, &str, &str, &[u8])>,
+) {
+    let json = serde_json::to_string(value);
+    let pretty = serde_json::to_string_pretty(value);
+    let yaml = yaml_serde::to_string(value);
+    let json_dom = serde_json::to_value(value);
+    let yaml_dom = yaml_serde::to_value(value);
+    #[cfg(feature = "rvm")]
+    let binary = postcard::to_allocvec(value);
+    if let Some((compact, indented, yaml_text, binary_bytes)) = expected {
+        assert_eq!(json.unwrap(), compact);
+        assert_eq!(pretty.unwrap(), indented);
+        assert_eq!(yaml.unwrap(), yaml_text);
+        assert_eq!(serde_json::to_string(&json_dom.unwrap()).unwrap(), compact);
+        assert_eq!(
+            yaml_serde::to_string(&yaml_dom.unwrap()).unwrap(),
+            yaml_text
+        );
+        #[cfg(feature = "rvm")]
+        assert_eq!(binary.unwrap(), binary_bytes);
+        #[cfg(not(feature = "rvm"))]
+        let _ = binary_bytes;
+    } else {
+        let message = format!(
+            "value serialization exceeds {} nested containers",
+            super::MAX_SERIALIZATION_CONTAINERS
+        );
+        assert!(json.unwrap_err().to_string().contains(&message));
+        assert!(pretty.unwrap_err().to_string().contains(&message));
+        assert!(yaml.unwrap_err().to_string().contains(&message));
+        assert!(json_dom.unwrap_err().to_string().contains(&message));
+        assert!(yaml_dom.unwrap_err().to_string().contains(&message));
+        #[cfg(feature = "rvm")]
+        assert_eq!(binary.unwrap_err(), postcard::Error::SerdeSerCustom);
+    }
+}
+
+#[cfg(feature = "std")]
+#[test]
+#[cfg_attr(miri, ignore = "requires native-stack subprocess isolation")]
+fn value_serialization_budget_1500000_byte_stack() {
+    if std::env::var_os("REGORUS_NATIVE_DEPTH_CHILD").is_none() {
+        native_depth_support::run_in_subprocess(
+            "value::tests::value_serialization_budget_1500000_byte_stack",
+        );
+        return;
+    }
+    std::thread::Builder::new()
+        .stack_size(1_500_000)
+        .spawn(|| {
+            let limit = super::MAX_SERIALIZATION_CONTAINERS;
+            for mode in 0..4 {
+                for depth in [limit, limit + 1] {
+                    let sentinel: crate::Rc<str> = crate::Rc::from("leaf");
+                    let mut value = Value::String(sentinel.clone());
+                    let mut yaml = yaml_serde::Value::String("leaf".into());
+                    for level in 0..depth {
+                        let kind = if mode == 3 { level % 3 } else { mode };
+                        value = nested_value(1, value, kind);
+                        yaml = if kind == 2 {
+                            let mut map = yaml_serde::Mapping::new();
+                            map.insert(yaml_serde::Value::String("k".into()), yaml);
+                            yaml_serde::Value::Mapping(map)
+                        } else {
+                            yaml_serde::Value::Sequence(vec![yaml])
+                        };
+                    }
+                    let mut binary = Vec::new();
+                    for level in (0..depth).rev() {
+                        let kind = if mode == 3 { level % 3 } else { mode };
+                        binary.push(1);
+                        if kind == 2 {
+                            binary.extend_from_slice(&[1, b'k']);
+                        }
+                    }
+                    binary.extend_from_slice(b"\x04leaf");
+                    let compact = format!("{value}");
+                    let pretty = value.to_json_str().unwrap();
+                    let yaml_text = yaml_serde::to_string(&yaml).unwrap();
+                    let expected = (depth == limit).then_some((
+                        compact.as_str(),
+                        pretty.as_str(),
+                        yaml_text.as_str(),
+                        binary.as_slice(),
+                    ));
+                    check_serialization(&value, expected);
+                    match &value {
+                        Value::Array(a) => check_serialization(a.as_ref(), expected),
+                        Value::Set(s) => check_serialization(s.as_ref(), expected),
+                        Value::Object(o) => check_serialization(o.as_ref(), expected),
+                        _ => panic!("expected container"),
+                    }
+                    assert_eq!(crate::Rc::strong_count(&sentinel), 2);
+                    drop(value);
+                    assert_eq!(crate::Rc::strong_count(&sentinel), 1);
+                }
+            }
+
+            // Each sibling receives the parent's remaining budget independently.
+            let branch = nested_value(limit - 1, Value::Bool(true), 0);
+            let siblings = Value::from(vec![branch.clone(), branch]);
+            assert_eq!(
+                serde_json::to_string(&siblings).unwrap(),
+                format!("{siblings}")
+            );
+            for empty in [Value::new_array(), Value::new_set(), Value::new_object()] {
+                let at_boundary = nested_value(limit - 1, empty, 0);
+                assert_eq!(
+                    serde_json::to_string(&at_boundary).unwrap(),
+                    format!("{at_boundary}")
+                );
+                let beyond = Value::from(vec![at_boundary]);
+                check_serialization(&beyond, None);
+            }
+
+            // A structured key is encoded iteratively, independently of value callbacks.
+            let key = nested_value(256, Value::Null, 0)
+                .json_string(false)
+                .unwrap();
+            let child = nested_value(limit - 1, Value::String(crate::Rc::from("leaf")), 0);
+            let keyed = Value::from(BTreeMap::from([(nested_value(256, Value::Null, 0), child)]));
+            let yaml_child = (0..limit - 1)
+                .fold(yaml_serde::Value::String("leaf".into()), |child, _| {
+                    yaml_serde::Value::Sequence(vec![child])
+                });
+            let mut yaml = yaml_serde::Mapping::new();
+            yaml.insert(yaml_serde::Value::String(key.clone()), yaml_child);
+            let yaml_text = yaml_serde::to_string(&yaml).unwrap();
+            let mut binary = vec![1];
+            #[cfg(feature = "rvm")]
+            binary.extend_from_slice(&postcard::to_allocvec(&key).unwrap());
+            binary.extend(core::iter::repeat_n(1, limit - 1));
+            binary.extend_from_slice(b"\x04leaf");
+            let compact = format!("{keyed}");
+            let pretty = keyed.to_json_str().unwrap();
+            let expected = Some((
+                compact.as_str(),
+                pretty.as_str(),
+                yaml_text.as_str(),
+                binary.as_slice(),
+            ));
+            check_serialization(&keyed, expected);
+            match &keyed {
+                Value::Object(o) => check_serialization(o.as_ref(), expected),
+                _ => panic!("expected object"),
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// `iter_sorted` must yield entries in the same order as a `BTreeMap` oracle.
+#[test]
+fn object_iter_sorted_matches_btreemap_oracle() {
+    for &n in SIZES {
+        let pairs = make_pairs(n);
+        let oracle: BTreeMap<Value, Value> = pairs.iter().cloned().collect();
+        let obj: Object = pairs.into_iter().collect();
+        let actual: Vec<(&Value, &Value)> = obj.iter_sorted().collect();
+        let expected: Vec<(&Value, &Value)> = oracle.iter().collect();
+        assert_eq!(actual, expected, "size {n}");
+    }
+}
+
+/// `iter` may be in any order, but as a multiset must equal the oracle's entries.
+#[test]
+fn object_iter_multiset_equality_with_oracle() {
+    for &n in SIZES {
+        let pairs = make_pairs(n);
+        let oracle: BTreeMap<Value, Value> = pairs.iter().cloned().collect();
+        let obj: Object = pairs.into_iter().collect();
+        assert_eq!(obj.len(), oracle.len(), "size {n}");
+        let mut a: Vec<(Value, Value)> = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut b: Vec<(Value, Value)> =
+            oracle.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+    }
+}
+
+/// Serialize-then-deserialize must round-trip through JSON without loss.
+#[test]
+fn object_serde_roundtrip() {
+    for &n in &[0_u64, 1, 8, 64] {
+        let pairs: Vec<(Value, Value)> = (0..n)
+            .map(|i| (Value::String(format!("k{i}").into()), val(i)))
+            .collect();
+        let obj: Object = pairs.into_iter().collect();
+        let json = serde_json::to_string(&obj).expect("ser");
+        let back: Object = serde_json::from_str(&json).expect("de");
+        assert_eq!(obj, back, "size {n}");
+    }
+}
+
+/// Equality depends only on contents, not the order keys were inserted.
+#[test]
+fn object_eq_invariant_to_insertion_order() {
+    let mut a = Object::new();
+    let mut b = Object::new();
+    for i in 0..32_u64 {
+        a.insert(val(i), val(i.saturating_add(1)));
+    }
+    for i in (0..32_u64).rev() {
+        b.insert(val(i), val(i.saturating_add(1)));
+    }
+    assert_eq!(a, b);
+}
+
+/// `remove` returns the prior value (or `None`) and `retain` keeps only matching entries.
+#[test]
+fn object_remove_and_retain() {
+    let mut obj: Object = make_pairs(16).into_iter().collect();
+    assert_eq!(obj.remove(&val(0)), Some(val(0)));
+    assert!(obj.remove(&val(100)).is_none());
+    obj.retain(|_, v| {
+        if let Value::Number(ref n) = *v {
+            n.as_u64().is_some_and(|x| x % 4 == 0)
+        } else {
+            false
+        }
+    });
+    for (_, v) in obj.iter_sorted() {
+        if let Value::Number(ref n) = *v {
+            assert_eq!(n.as_u64().expect("u64") % 4, 0);
+        }
+    }
+}
+
+/// `IntoIterator` for `Object` (by value) yields every entry exactly once.
+#[test]
+fn object_into_iterator_owned() {
+    let obj: Object = make_pairs(8).into_iter().collect();
+    let collected: Vec<(Value, Value)> = obj.into_iter().collect();
+    assert_eq!(collected.len(), 8);
+}
+
+// ---- Duplicate-key semantics --------------------------------------------
+
+/// `FromIterator` keeps the last value when the same key appears multiple times.
+#[test]
+fn object_from_iter_last_wins_on_duplicate_keys() {
+    let obj = Object::from_iter([(val(0), val(1)), (val(0), val(2))]);
+    assert_eq!(obj.get(&val(0)), Some(&val(2)));
+    assert_eq!(obj.len(), 1);
+}
+
+/// `From<BTreeMap>` adopts `BTreeMap`'s own last-write-wins semantics for duplicates.
+#[test]
+fn object_from_btreemap_last_wins_on_duplicate_keys() {
+    let mut bm: BTreeMap<Value, Value> = BTreeMap::new();
+    bm.insert(val(0), val(1));
+    bm.insert(val(0), val(2));
+    let obj: Object = bm.into();
+    assert_eq!(obj.get(&val(0)), Some(&val(2)));
+    assert_eq!(obj.len(), 1);
+}
+
+// ---- get_or_insert_with --------------------------------------------------
+
+/// `get_or_insert_with` inserts the default when the key is absent and returns a mutable ref to it.
+#[test]
+fn object_get_or_insert_with_inserts_when_absent() {
+    let mut obj = Object::new();
+    let v = obj.get_or_insert_with(val(7), || val(42));
+    assert_eq!(*v, val(42));
+    *v = val(43);
+    assert_eq!(obj.get(&val(7)), Some(&val(43)));
+}
+
+/// `get_or_insert_with` returns the existing value and never invokes the default closure.
+#[test]
+fn object_get_or_insert_with_returns_existing_when_present() {
+    let mut obj = Object::new();
+    obj.insert(val(7), val(1));
+    let mut closure_called = false;
+    let v = obj.get_or_insert_with(val(7), || {
+        closure_called = true;
+        val(999)
+    });
+    assert_eq!(*v, val(1));
+    assert!(!closure_called, "default closure must not run when present");
+}
+
+// ---- Accessor coverage ---------------------------------------------------
+
+/// Smoke-test every accessor: `contains_key`/`get`/`get_mut`/`keys`/`values`/`iter`/`iter_mut`/`append`/`clear`.
+#[test]
+fn object_accessor_coverage() {
+    let mut obj: Object = make_pairs(4).into_iter().collect();
+
+    assert!(obj.contains_key(&val(0)));
+    assert!(!obj.contains_key(&val(100)));
+
+    assert_eq!(obj.get(&val(2)), Some(&val(4)));
+
+    if let Some(v) = obj.get_mut(&val(1)) {
+        *v = val(999);
+    }
+    assert_eq!(obj.get(&val(1)), Some(&val(999)));
+
+    let keys: Vec<&Value> = obj.keys().collect();
+    assert_eq!(keys.len(), 4);
+    let values: Vec<&Value> = obj.values().collect();
+    assert_eq!(values.len(), 4);
+
+    for (_, v) in obj.iter_mut() {
+        *v = val(0);
+    }
+    for (_, v) in obj.iter() {
+        assert_eq!(*v, val(0));
+    }
+
+    let mut other = Object::new();
+    other.insert(val(100), val(200));
+    obj.append(&mut other);
+    assert!(other.is_empty());
+    assert!(obj.contains_key(&val(100)));
+
+    obj.clear();
+    assert!(obj.is_empty());
+}
+
+// ---- IntoIterator for references -----------------------------------------
+
+/// `IntoIterator` for `&Object` yields shared refs to every entry.
+#[test]
+fn object_into_iterator_ref() {
+    let obj: Object = make_pairs(4).into_iter().collect();
+    let mut count = 0;
+    for (_k, _v) in &obj {
+        count += 1;
+    }
+    assert_eq!(count, 4);
+}
+
+/// `IntoIterator` for `&mut Object` exposes mutable refs to values; mutations persist.
+#[test]
+fn object_into_iterator_ref_mut() {
+    let mut obj: Object = make_pairs(4).into_iter().collect();
+    for (_k, v) in &mut obj {
+        *v = val(0);
+    }
+    for (_, v) in obj.iter() {
+        assert_eq!(*v, val(0));
+    }
+}
+
+// ---- Cursor tests --------------------------------------------------------
+
+/// Driving `cursor`+`next` to completion visits each entry exactly once.
+#[test]
+fn object_cursor_yields_every_entry_once() {
+    for &n in SIZES {
+        let pairs = make_pairs(n);
+        let obj: Object = pairs.clone().into_iter().collect();
+        let mut cursor = obj.cursor();
+        let mut collected: Vec<(Value, Value)> = Vec::new();
+        while let Some((k, v)) = obj.next(&mut cursor) {
+            collected.push((k.clone(), v.clone()));
+        }
+        let mut a = collected;
+        a.sort();
+        let mut b = pairs;
+        b.sort();
+        assert_eq!(a, b, "size {n}");
+    }
+}
+
+/// A freshly-constructed cursor restarts from the beginning, independent of any prior cursor's state.
+#[test]
+fn object_cursor_resumable_fresh_cursor_restarts() {
+    let obj: Object = make_pairs(8).into_iter().collect();
+    let mut c1 = obj.cursor();
+    let _ = obj.next(&mut c1);
+    let _ = obj.next(&mut c1);
+    let mut c2 = obj.cursor();
+    let first_again = obj.next(&mut c2);
+    let first_original = obj.iter().next();
+    assert_eq!(
+        first_again.map(|(k, v)| (k.clone(), v.clone())),
+        first_original.map(|(k, v)| (k.clone(), v.clone()))
+    );
+}
+
+/// When `Object` is shared via `Rc`, `Rc::make_mut` clones — leaving an in-flight cursor on the original snapshot unaffected.
+#[test]
+fn object_cursor_snapshot_independence_via_rc() {
+    use crate::Rc;
+    let mut obj = Object::new();
+    obj.insert(Value::from("a"), Value::from(1));
+    obj.insert(Value::from("b"), Value::from(2));
+    obj.insert(Value::from("c"), Value::from(3));
+    let rc_obj = Rc::new(obj);
+
+    let alias = Rc::clone(&rc_obj);
+    let mut cursor = rc_obj.cursor();
+    let _ = rc_obj.next(&mut cursor);
+
+    let mut alias_for_mut = alias;
+    Rc::make_mut(&mut alias_for_mut).insert(Value::from("d"), Value::from(4));
+    Rc::make_mut(&mut alias_for_mut).remove(&Value::from("a"));
+
+    assert_eq!(rc_obj.len(), 3);
+    let mut remaining = 0;
+    while rc_obj.next(&mut cursor).is_some() {
+        remaining += 1;
+    }
+    assert_eq!(remaining, 2);
+}
+
+/// A cursor over an empty `Object` returns `None` on the first call.
+#[test]
+fn object_cursor_empty_returns_none_immediately() {
+    let obj = Object::new();
+    let mut cursor = obj.cursor();
+    assert!(obj.next(&mut cursor).is_none());
+}
+
+/// Mutating an `Object` between `next()` calls is well-defined: the cursor
+/// must not panic and must terminate. The visit order, and whether
+/// inserted/removed keys appear, is intentionally unspecified — this test
+/// only pins the safety + termination guarantees that callers (e.g. a
+/// future RVM iteration frame) may rely on. It must NOT assert any
+/// particular order or count, or future backend swaps will be forced to
+/// honor an accidental contract.
+#[test]
+fn object_cursor_mutation_between_steps_is_safe_and_terminates() {
+    let mut obj: Object = make_pairs(16).into_iter().collect();
+    let mut cursor = obj.cursor();
+
+    // Yield a few entries before mutating.
+    for _ in 0..3 {
+        let _ = obj.next(&mut cursor);
+    }
+
+    // Interleave mutations and steps. Each yielded entry must, at the
+    // moment of yield, be a real entry in the map.
+    obj.insert(val(100), val(100));
+    if let Some((k, v)) = obj.next(&mut cursor) {
+        assert_eq!(obj.get(k), Some(v));
+    }
+    obj.remove(&val(2));
+    if let Some((k, v)) = obj.next(&mut cursor) {
+        assert_eq!(obj.get(k), Some(v));
+    }
+    obj.clear();
+    // After clear(), draining the cursor must terminate (not panic, not
+    // loop) within a bounded number of calls.
+    let mut terminated = false;
+    for _ in 0..32 {
+        if obj.next(&mut cursor).is_none() {
+            terminated = true;
+            break;
+        }
+    }
+    assert!(terminated, "cursor failed to terminate after clear()");
+}
+
+// ---- Hand-written Ord consistency ---------------------------------------
+
+/// `Ord` (built atop `iter_sorted`) is invariant to insertion order.
+#[test]
+fn object_ord_invariant_to_insertion_order() {
+    let mut a = Object::new();
+    let mut b = Object::new();
+    for i in 0..16_u64 {
+        a.insert(val(i), val(i.saturating_add(1)));
+    }
+    for i in (0..16_u64).rev() {
+        b.insert(val(i), val(i.saturating_add(1)));
+    }
+    use core::cmp::Ordering;
+    assert_eq!(a.cmp(&b), Ordering::Equal);
+}
+
+/// `Ord` agrees with lexicographic comparison of the sorted-entries view.
+#[test]
+fn object_ord_lexicographic_on_sorted_entries() {
+    let a: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    let b: Object = [(val(0), val(0)), (val(2), val(2))].into_iter().collect();
+    assert!(a < b);
+}
+
+/// `empty < non_empty` and a shorter prefix compares less than its extension.
+#[test]
+fn object_ord_empty_and_prefix() {
+    use core::cmp::Ordering;
+    let empty = Object::new();
+    let one: Object = [(val(0), val(0))].into_iter().collect();
+    let two: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    assert_eq!(empty.cmp(&one), Ordering::Less);
+    assert_eq!(one.cmp(&two), Ordering::Less);
+    assert_eq!(two.cmp(&empty), Ordering::Greater);
+}
+
+/// When keys match, `Ord` falls through to comparing values.
+#[test]
+fn object_ord_breaks_ties_on_values() {
+    use core::cmp::Ordering;
+    let a: Object = [(val(0), val(1))].into_iter().collect();
+    let b: Object = [(val(0), val(2))].into_iter().collect();
+    assert_eq!(a.cmp(&b), Ordering::Less);
+}
+
+/// `PartialOrd` must agree with `Ord` for every input pair.
+#[test]
+fn object_partial_cmp_matches_cmp() {
+    let a: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    let b: Object = [(val(0), val(0)), (val(2), val(2))].into_iter().collect();
+    assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+    assert_eq!(b.partial_cmp(&a), Some(b.cmp(&a)));
+    assert_eq!(a.partial_cmp(&a), Some(core::cmp::Ordering::Equal));
+}
+
+// ---- Debug / keys_sorted determinism ------------------------------------
+
+/// `Debug` output is byte-identical for equal Objects regardless of insertion order.
+#[test]
+fn object_debug_invariant_to_insertion_order() {
+    let mut a = Object::new();
+    let mut b = Object::new();
+    for i in 0..8_u64 {
+        a.insert(val(i), val(i));
+    }
+    for i in (0..8_u64).rev() {
+        b.insert(val(i), val(i));
+    }
+    assert_eq!(format!("{a:?}"), format!("{b:?}"));
+}
+
+/// `keys_sorted` yields exactly `iter_sorted().map(|(k,_)| k)`.
+#[test]
+fn object_keys_sorted_matches_iter_sorted_keys() {
+    let obj: Object = make_pairs(16).into_iter().collect();
+    let from_keys: Vec<&Value> = obj.keys_sorted().collect();
+    let from_iter: Vec<&Value> = obj.iter_sorted().map(|(k, _)| k).collect();
+    assert_eq!(from_keys, from_iter);
+}
+
+// ---- Serde: non-string keys & determinism --------------------------------
+
+/// `Serialize` stringifies non-string keys, and equal Objects produce identical JSON
+/// regardless of insertion order.
+#[test]
+fn object_serialize_non_string_keys_and_deterministic() {
+    let pairs = [
+        (Value::from("alpha"), val(1)),
+        (Value::Bool(true), val(2)),
+        (val(7), val(3)),
+    ];
+    let a: Object = pairs.iter().cloned().collect();
+    let mut b = Object::new();
+    for (k, v) in pairs.iter().rev().cloned() {
+        b.insert(k, v);
+    }
+    let ja = serde_json::to_string(&a).expect("ser a");
+    let jb = serde_json::to_string(&b).expect("ser b");
+    assert_eq!(ja, jb, "serialization must be deterministic");
+
+    // Non-string keys appear as quoted strings in the resulting JSON.
+    let v: serde_json::Value = serde_json::from_str(&ja).expect("parse");
+    let obj = v.as_object().expect("json object");
+    assert!(
+        obj.contains_key("true"),
+        "bool key was not stringified: {ja}"
+    );
+    assert!(
+        obj.contains_key("7"),
+        "number key was not stringified: {ja}"
+    );
+    assert!(obj.contains_key("alpha"));
+}
+
+// ---- Extend / append duplicate-key semantics -----------------------------
+
+/// `extend` overwrites existing entries (last-write-wins) and preserves length when
+/// only existing keys are touched.
+#[test]
+fn object_extend_last_wins_and_empty_noop() {
+    let mut obj: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    obj.extend([(val(0), val(99))]);
+    assert_eq!(obj.get(&val(0)), Some(&val(99)));
+    assert_eq!(obj.len(), 2);
+
+    let before = obj.len();
+    obj.extend(core::iter::empty::<(Value, Value)>());
+    assert_eq!(obj.len(), before, "empty extend is a no-op");
+}
+
+/// `append` drains `other` into `self`, overwriting on overlapping keys.
+#[test]
+fn object_append_overlapping_keys_drain_and_overwrite() {
+    let mut a: Object = [(val(0), val(0)), (val(1), val(1))].into_iter().collect();
+    let mut b: Object = [(val(1), val(99)), (val(2), val(2))].into_iter().collect();
+    a.append(&mut b);
+    assert!(b.is_empty(), "append must drain `other`");
+    assert_eq!(a.len(), 3);
+    assert_eq!(a.get(&val(1)), Some(&val(99)));
+    assert_eq!(a.get(&val(2)), Some(&val(2)));
+}
+
+// ---- Iterator trait surface ---------------------------------------------
+
+/// `DoubleEndedIterator`/`ExactSizeIterator`/`FusedIterator` and `size_hint` all
+/// behave correctly across partial consumption from both ends.
+#[test]
+fn object_iter_sorted_double_ended_and_exact_size() {
+    let obj: Object = make_pairs(4).into_iter().collect();
+    let mut it = obj.iter_sorted();
+    assert_eq!(it.len(), 4);
+    assert_eq!(it.size_hint(), (4, Some(4)));
+
+    let first = it.next().expect("front");
+    let last = it.next_back().expect("back");
+    assert_eq!(it.len(), 2);
+    assert_eq!(it.size_hint(), (2, Some(2)));
+    assert_ne!(first.0, last.0, "front and back must differ for n=4");
+
+    // Drain remaining.
+    while it.next().is_some() {}
+    assert_eq!(it.len(), 0);
+    // FusedIterator: stays None after exhaustion.
+    assert!(it.next().is_none());
+    assert!(it.next().is_none());
+    assert!(it.next_back().is_none());
+}
+
+/// `IntoIter` also honors `DoubleEndedIterator` and `ExactSizeIterator`.
+#[test]
+fn object_into_iter_double_ended_and_exact_size() {
+    let obj: Object = make_pairs(4).into_iter().collect();
+    let mut it = obj.into_iter();
+    assert_eq!(it.len(), 4);
+    let _ = it.next().expect("front");
+    let _ = it.next_back().expect("back");
+    assert_eq!(it.len(), 2);
+    let collected: Vec<_> = it.collect();
+    assert_eq!(collected.len(), 2);
+}
+
+/// `IterMut` decrements its `len()` after consuming from the front.
+#[test]
+fn object_iter_mut_exact_size() {
+    let mut obj: Object = make_pairs(3).into_iter().collect();
+    let mut it = obj.iter_mut();
+    assert_eq!(it.len(), 3);
+    let _ = it.next().expect("front");
+    assert_eq!(it.len(), 2);
+}
+
+/// `Iter` is `Clone`; the clone iterates independently from the same point.
+#[test]
+fn object_iter_sorted_clone_is_independent() {
+    let obj: Object = make_pairs(4).into_iter().collect();
+    let mut a = obj.iter_sorted();
+    let _ = a.next();
+    let b = a.clone();
+    let rest_a: Vec<_> = a.collect();
+    let rest_b: Vec<_> = b.collect();
+    assert_eq!(rest_a, rest_b);
+}
+
+// ---- default / insert ---------------------------------------------------
+
+/// `Object::default()` and `Object::new()` produce equal, empty Objects.
+#[test]
+fn object_default_equals_new_and_is_empty() {
+    let a = Object::default();
+    let b = Object::new();
+    assert_eq!(a, b);
+    assert!(a.is_empty());
+    assert_eq!(a.len(), 0);
+}
+
+/// `insert` returns `None` for a fresh key and `Some(old)` when overwriting.
+#[test]
+fn object_insert_returns_previous_value() {
+    let mut obj = Object::new();
+    assert_eq!(obj.insert(val(0), val(1)), None);
+    assert_eq!(obj.insert(val(0), val(2)), Some(val(1)));
+    assert_eq!(obj.get(&val(0)), Some(&val(2)));
+}
+
+// =========================================================================
+// Set tests
+// =========================================================================
+
+const SET_SIZES: &[u64] = &[0, 1, 2, 4, 8, 64, 256, 1024];
+
+#[test]
+fn set_iter_sorted_matches_btreeset_oracle() {
+    for &n in SET_SIZES {
+        let values: Vec<Value> = (0..n).map(val).collect();
+        let oracle: BTreeSet<Value> = values.iter().cloned().collect();
+        let s: Set = values.into_iter().collect();
+        let actual: Vec<&Value> = s.iter_sorted().collect();
+        let expected: Vec<&Value> = oracle.iter().collect();
+        assert_eq!(actual, expected, "size {n}");
+    }
+}
+
+#[test]
+fn set_iter_multiset_equality_with_oracle() {
+    for &n in SET_SIZES {
+        let values: Vec<Value> = (0..n).map(val).collect();
+        let oracle: BTreeSet<Value> = values.iter().cloned().collect();
+        let s: Set = values.into_iter().collect();
+        let mut a: Vec<Value> = s.iter().cloned().collect();
+        let mut b: Vec<Value> = oracle.iter().cloned().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn set_algebra_matches_btreeset() {
+    let a_vals: Vec<Value> = (0..32_u64).map(val).collect();
+    let b_vals: Vec<Value> = (16..48_u64).map(val).collect();
+    let a_btree: BTreeSet<Value> = a_vals.iter().cloned().collect();
+    let b_btree: BTreeSet<Value> = b_vals.iter().cloned().collect();
+    let a: Set = a_vals.into_iter().collect();
+    let b: Set = b_vals.into_iter().collect();
+
+    fn sorted<'a, I: Iterator<Item = &'a Value>>(it: I) -> Vec<&'a Value> {
+        let mut v: Vec<&Value> = it.collect();
+        v.sort();
+        v
+    }
+
+    let inter_set = a.intersection(&b);
+    assert_eq!(
+        sorted(inter_set.iter_sorted()),
+        sorted(a_btree.intersection(&b_btree))
+    );
+
+    let union_set = a.union(&b);
+    assert_eq!(
+        sorted(union_set.iter_sorted()),
+        sorted(a_btree.union(&b_btree))
+    );
+
+    let diff_set = a.difference(&b);
+    assert_eq!(
+        sorted(diff_set.iter_sorted()),
+        sorted(a_btree.difference(&b_btree))
+    );
+
+    // Subset: trivial + non-trivial cases.
+    let proper_subset: Set = (0..16_u64).map(val).collect();
+    let non_subset: Set = (30..50_u64).map(val).collect();
+    assert!(a.is_subset(&a));
+    assert!(proper_subset.is_subset(&a));
+    assert!(!non_subset.is_subset(&a));
+}
+
+#[test]
+fn set_first_last() {
+    let s: Set = (0..16_u64).map(val).collect();
+    assert_eq!(s.first(), Some(&val(0)));
+    assert_eq!(s.last(), Some(&val(15)));
+    assert!(Set::new().first().is_none());
+}
+
+#[test]
+fn set_serde_roundtrip() {
+    for &n in &[0_u64, 1, 8, 64] {
+        let s: Set = (0..n).map(val).collect();
+        let json = serde_json::to_string(&s).expect("ser");
+        let back: Set = serde_json::from_str(&json).expect("de");
+        assert_eq!(s, back, "size {n}");
+    }
+}
+
+#[test]
+fn set_append_drains_other() {
+    let mut a: Set = (0..4_u64).map(val).collect();
+    let mut b: Set = (4..8_u64).map(val).collect();
+    a.append(&mut b);
+    assert_eq!(a.len(), 8);
+    assert!(b.is_empty());
+}
+
+#[test]
+fn set_value_cow_make_mut_isolates_clones() {
+    let a = Value::new_set();
+    let b = a.clone();
+    let mut b_owned = b;
+    b_owned.as_set_mut().expect("set").insert(Value::from("x"));
+    assert_eq!(a.as_set().expect("set").len(), 0);
+    assert_eq!(b_owned.as_set().expect("set").len(), 1);
+}
+
+#[test]
+fn set_from_iter_dedups_duplicates() {
+    let s: Set = [val(1), val(1), val(2), val(2), val(2)]
+        .into_iter()
+        .collect();
+    assert_eq!(s.len(), 2);
+    assert!(s.contains(&val(1)));
+    assert!(s.contains(&val(2)));
+}
+
+#[test]
+fn set_accessor_coverage() {
+    let mut s: Set = (0..4_u64).map(val).collect();
+
+    assert!(s.contains(&val(2)));
+    assert!(!s.contains(&val(100)));
+
+    assert_eq!(s.get(&val(2)), Some(&val(2)));
+    assert!(s.get(&val(100)).is_none());
+
+    assert!(s.remove(&val(2)));
+    assert!(!s.remove(&val(2)));
+    assert_eq!(s.len(), 3);
+
+    s.retain(|v| v != &val(0));
+    assert!(!s.contains(&val(0)));
+    assert_eq!(s.len(), 2);
+
+    s.clear();
+    assert!(s.is_empty());
+    assert!(!s.contains(&val(1)));
+}
+
+#[test]
+fn set_into_iterator_ref() {
+    let s: Set = (0..4_u64).map(val).collect();
+    let mut count = 0;
+    for _v in &s {
+        count += 1;
+    }
+    assert_eq!(count, 4);
+}
+
+#[test]
+fn set_cursor_yields_every_element_once() {
+    for &n in SET_SIZES {
+        let vals: Vec<Value> = (0..n).map(val).collect();
+        let s: Set = vals.clone().into_iter().collect();
+        let mut cursor = s.cursor();
+        let mut collected: Vec<Value> = Vec::new();
+        while let Some(v) = s.next(&mut cursor) {
+            collected.push(v.clone());
+        }
+        let mut a = collected;
+        a.sort();
+        let mut b = vals;
+        b.sort();
+        assert_eq!(a, b, "size {n}");
+    }
+}
+
+#[test]
+fn set_cursor_empty_returns_none_immediately() {
+    let s = Set::new();
+    let mut c = s.cursor();
+    assert!(s.next(&mut c).is_none());
+}
+
+#[test]
+fn set_ord_invariant_to_insertion_order() {
+    let mut a = Set::new();
+    let mut b = Set::new();
+    for i in 0..16_u64 {
+        a.insert(val(i));
+    }
+    for i in (0..16_u64).rev() {
+        b.insert(val(i));
+    }
+    assert_eq!(a.cmp(&b), core::cmp::Ordering::Equal);
+}
+
+fn top_object_rc(v: &Value) -> crate::Rc<Object> {
+    match v {
+        Value::Object(rc) => crate::Rc::clone(rc),
+        other => panic!("expected object, got {other:?}"),
+    }
+}
+
+/// A no-op deep-merge (every incoming key already present with an equal value) must not clone
+/// the target map. `deep_merge` acquires mutable access lazily, so when nothing changes at a
+/// level the shared `Rc` is left untouched.
+#[test]
+fn deep_merge_noop_subset_does_not_clone_object() {
+    let mut a = Value::from_json_str(r#"{"x": {"deep": 1}, "y": 2}"#).unwrap();
+    // Keep a second reference so the map's refcount > 1: eager `make_mut` would clone here.
+    let shared = a.clone();
+    let before = top_object_rc(&a);
+
+    // Strict subset with identical values: no insert, no recurse, no conflict at any level.
+    a.deep_merge(Value::from_json_str(r#"{"y": 2}"#).unwrap())
+        .unwrap();
+
+    let after = top_object_rc(&a);
+    assert!(
+        crate::Rc::ptr_eq(&before, &after),
+        "no-op merge must not clone the shared object map"
+    );
+    assert_eq!(a, shared, "value must be unchanged by a no-op merge");
+}
+
+/// An equal nested object under a shared key is a no-op too — the equality short-circuit runs
+/// before any mutable access, so the map is not cloned.
+#[test]
+fn deep_merge_equal_nested_object_does_not_clone() {
+    let mut a = Value::from_json_str(r#"{"cfg": {"a": 1, "b": 2}, "n": 5}"#).unwrap();
+    let _shared = a.clone();
+    let before = top_object_rc(&a);
+
+    a.deep_merge(Value::from_json_str(r#"{"cfg": {"a": 1, "b": 2}}"#).unwrap())
+        .unwrap();
+
+    let after = top_object_rc(&a);
+    assert!(
+        crate::Rc::ptr_eq(&before, &after),
+        "merging an equal nested object must not clone the map"
+    );
+}
+
+/// A conflict on the first overlapping key is reported without cloning the target map: the
+/// read-only probe detects the conflict before any mutable access is taken.
+#[test]
+fn deep_merge_conflict_does_not_clone_object() {
+    let mut a = Value::from_json_str(r#"{"x": 1, "y": 2}"#).unwrap();
+    let _shared = a.clone();
+    let before = top_object_rc(&a);
+
+    let err = a
+        .deep_merge(Value::from_json_str(r#"{"x": 999}"#).unwrap())
+        .unwrap_err();
+    assert!(format!("{err}").contains("generated multiple times"));
+
+    let after = top_object_rc(&a);
+    assert!(
+        crate::Rc::ptr_eq(&before, &after),
+        "a conflict must not clone the shared object map"
+    );
+}
+
+/// Nest `depth` objects `{"k": {"k": ... leaf}}` iteratively, so building the value can't itself
+/// overflow and there's no parser to cap depth first.
+fn nest(depth: usize, leaf: Value) -> Value {
+    let mut v = leaf;
+    for _ in 0..depth {
+        let mut m = BTreeMap::new();
+        m.insert(Value::from("k"), v);
+        v = Value::from(m);
+    }
+    v
+}
+
+/// Over-deep data must fail with a clean `Err`, not overflow the stack. A `Value` can be built
+/// without serde_json's parse-time cap (the native bindings), so `deep_merge` must guard itself.
+#[test]
+fn deep_merge_rejects_excessive_depth() {
+    let depth = super::MAX_MERGE_DEPTH + 50;
+    // Shared key `k` on both sides forces full-depth recursion; distinct leaves keep the trees
+    // unequal so the equality short-circuit never fires.
+    let mut a = nest(depth, Value::from_json_str(r#"{"a": 1}"#).unwrap());
+    let b = nest(depth, Value::from_json_str(r#"{"b": 2}"#).unwrap());
+
+    let err = a.deep_merge(b).unwrap_err();
+    assert!(
+        format!("{err}").contains("nesting depth"),
+        "expected a depth-limit error, got: {err}"
+    );
+}
+
+/// The pre-scan carries the same guard, so the default build rejects over-deep input up front
+/// (leaving the live document untouched) instead of overflowing during validation.
+#[cfg(not(feature = "allocator-memory-limits"))]
+#[test]
+fn check_mergeable_rejects_excessive_depth() {
+    let depth = super::MAX_MERGE_DEPTH + 50;
+    let a = nest(depth, Value::from_json_str(r#"{"a": 1}"#).unwrap());
+    let b = nest(depth, Value::from_json_str(r#"{"b": 2}"#).unwrap());
+
+    let err = a.check_mergeable(&b).unwrap_err();
+    assert!(
+        format!("{err}").contains("nesting depth"),
+        "expected a depth-limit error, got: {err}"
+    );
+}
+
+const CONST_OBJECT_NEW: Object = Object::new();
+
+#[test]
+fn object_new_is_const_context() {
+    assert!(CONST_OBJECT_NEW.is_empty());
+}
+
+#[test]
+fn object_mutable_inserts_use_btree_storage() {
+    let mut obj = Object::new();
+    obj.insert(val(1), val(10));
+    obj.insert(val(2), val(20));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    obj.insert(val(3), val(30));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+}
+
+#[test]
+fn object_btree_freeze_mutate_insert_and_refreeze_roundtrip() {
+    let mut obj: Object = make_pairs(3).into_iter().collect();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    obj = obj.freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    obj.insert(val(99), val(100));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    assert_eq!(obj.get(&val(99)), Some(&val(100)));
+    obj = obj.freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.get(&val(99)), Some(&val(100)));
+}
+
+#[test]
+fn object_empty_freeze_get_iter_and_cursor() {
+    let obj = Object::new().freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert!(obj.get(&val(0)).is_none());
+    assert_eq!(obj.iter().count(), 0);
+    let mut cursor = obj.cursor();
+    assert!(obj.next(&mut cursor).is_none());
+}
+
+#[test]
+fn object_from_large_btreemap_into_value_is_frozen() {
+    let map: BTreeMap<Value, Value> = make_pairs(3).into_iter().collect();
+    let value = Object::from(map).into_value();
+    let object = value.as_object().expect("object");
+    assert_eq!(object.storage_variant_for_memory_diagnostics(), "Frozen");
+}
+
+#[test]
+fn object_cross_variant_partial_eq_ignores_storage() {
+    let empty_frozen = Object::from_iter(core::iter::empty()).freeze();
+    assert_eq!(Object::new(), empty_frozen);
+
+    let mutable: Object = make_pairs(2).into_iter().collect();
+    assert_eq!(mutable.storage_variant_for_memory_diagnostics(), "BTree");
+    let frozen = mutable.clone().freeze();
+
+    let mut btree: Object = make_pairs(3).into_iter().collect();
+    btree.remove(&val(2));
+    assert_eq!(btree.storage_variant_for_memory_diagnostics(), "BTree");
+
+    assert_eq!(mutable, frozen);
+    assert_eq!(mutable, btree);
+}
+
+#[test]
+fn object_cursor_frozen_one_entry_yields_once() {
+    let obj = Object::from_iter([(val(1), val(2))]).freeze();
+    let mut cursor = obj.cursor();
+    assert_eq!(obj.next(&mut cursor), Some((&val(1), &val(2))));
+    assert!(obj.next(&mut cursor).is_none());
+}
+
+#[test]
+fn object_cursor_resumes_after_frozen_storage_thaws() {
+    let mut obj = Object::from_iter(make_pairs(4)).freeze();
+    let mut cursor = obj.cursor();
+
+    assert_eq!(obj.next(&mut cursor), Some((&val(0), &val(0))));
+    obj.insert(val(5), val(10));
+
+    // Cursors resume after the last yielded key. Structural mutation may change the storage
+    // representation, but continuing from the key yields the remaining greater keys.
+    let remainder: Vec<(Value, Value)> = core::iter::from_fn(|| {
+        obj.next(&mut cursor)
+            .map(|(key, value)| (key.clone(), value.clone()))
+    })
+    .collect();
+    assert_eq!(
+        remainder,
+        Vec::from([
+            (val(1), val(2)),
+            (val(2), val(4)),
+            (val(3), val(6)),
+            (val(5), val(10)),
+        ])
+    );
+}
+
+#[test]
+fn object_iter_mut_on_frozen_persists_changes() {
+    let mut obj = Object::from_iter([(val(1), val(2))]).freeze();
+    for (_, value) in obj.iter_mut() {
+        *value = val(3);
+    }
+    assert_eq!(obj.get(&val(1)), Some(&val(3)));
+}
+
+#[test]
+fn object_hybrid_insert_existing_on_frozen_stays_frozen() {
+    let mut obj = Object::from_iter([(val(1), val(2))]).freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.insert(val(1), val(9)), Some(val(2)));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.get(&val(1)), Some(&val(9)));
+}
+
+#[test]
+fn object_get_or_insert_existing_on_frozen_stays_frozen() {
+    let mut obj = Object::from_iter(make_pairs(3)).freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+
+    // Existing key: the default must not run and storage must stay compact.
+    let slot = obj.get_or_insert_with(val(1), || panic!("default must not be called"));
+    assert_eq!(*slot, val(2));
+    *slot = val(42);
+
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.get(&val(1)), Some(&val(42)));
+}
+
+#[test]
+fn object_get_or_insert_absent_on_frozen_thaws_and_inserts() {
+    let mut obj = Object::from_iter(make_pairs(3)).freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+
+    let slot = obj.get_or_insert_with(val(99), || val(100));
+    assert_eq!(*slot, val(100));
+
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    assert_eq!(obj.get(&val(99)), Some(&val(100)));
+    // Pre-existing keys survive the thaw unchanged.
+    assert_eq!(obj.get(&val(1)), Some(&val(2)));
+}
+
+#[test]
+fn object_get_or_insert_on_empty_frozen_inserts() {
+    let mut obj = Object::new().freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+
+    let slot = obj.get_or_insert_with(val(1), || val(7));
+    assert_eq!(*slot, val(7));
+
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    assert_eq!(obj.get(&val(1)), Some(&val(7)));
+}
+
+#[test]
+fn object_remove_absent_on_frozen_stays_frozen() {
+    let mut obj = Object::from_iter(make_pairs(3)).freeze();
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+
+    // Removing a key that is not present must not disturb the compact storage.
+    assert_eq!(obj.remove(&val(99)), None);
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "Frozen");
+    assert_eq!(obj.len(), 3);
+
+    // Removing a present key thaws to the mutable representation.
+    assert_eq!(obj.remove(&val(1)), Some(val(2)));
+    assert_eq!(obj.storage_variant_for_memory_diagnostics(), "BTree");
+    assert_eq!(obj.get(&val(1)), None);
+}
+
+#[cfg(feature = "std")]
+mod interning_tests {
+    use crate::Value;
+    use alloc::vec::Vec;
+
+    // Parse a homogeneous array of objects sharing keys and return the parsed value.
+    fn parse(json: &str) -> Value {
+        Value::from_json_str(json).expect("valid json")
+    }
+
+    #[test]
+    fn interning_preserves_values_round_trip() {
+        let json = r#"[{"ruleId":"A","level":"error"},{"ruleId":"B","level":"warning"}]"#;
+        let value = parse(json);
+        let arr = value.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].as_object().expect("object").len(), 2);
+        assert_eq!(arr[0]["ruleId"], Value::from("A"));
+        assert_eq!(arr[1]["level"], Value::from("warning"));
+    }
+
+    #[test]
+    fn parse_error_cleans_up_intern_session() {
+        // Truncated input that is valid up to and including an interned key
+        // (`"k"`) before hitting EOF, so at least one key is interned before the
+        // parse fails. The guard must still tear the table down on the error
+        // path, leaving no session installed for the next parse.
+        Value::from_json_str(r#"{"k":1,"#).expect_err("truncated json must error");
+        assert!(
+            !crate::value::interning::is_installed(),
+            "intern table must be torn down after a failed parse"
+        );
+        let value = parse(r#"{"k":"v"}"#);
+        assert_eq!(value["k"], Value::from("v"));
+    }
+
+    #[test]
+    fn nested_guards_reuse_and_teardown_once() {
+        use crate::value::interning::{is_installed, InternGuard};
+        assert!(!is_installed(), "no session before install");
+        let outer = InternGuard::install();
+        assert!(is_installed(), "outer installs the table");
+        {
+            let inner = InternGuard::install();
+            assert!(is_installed(), "inner reuses the existing table");
+            drop(inner);
+            // The inner guard did not install the table, so dropping it must not
+            // tear the table down out from under the outer guard.
+            assert!(is_installed(), "inner drop preserves the outer table");
+        }
+        drop(outer);
+        assert!(!is_installed(), "only the installing guard tears down");
+    }
+
+    // Repeated keys across sibling objects share a single Rc<str> allocation.
+    #[test]
+    fn repeated_keys_share_allocation() {
+        let json = r#"[{"ruleId":"A"},{"ruleId":"B"},{"ruleId":"C"}]"#;
+        let value = parse(json);
+        let arr = value.as_array().expect("array");
+
+        let mut ptrs = Vec::new();
+        for elem in arr.iter() {
+            let obj = elem.as_object().expect("object");
+            for (k, _) in obj.iter() {
+                if let Value::String(rc) = k {
+                    ptrs.push(crate::Rc::as_ptr(rc));
+                }
+            }
+        }
+        assert_eq!(ptrs.len(), 3);
+        assert!(
+            ptrs.windows(2).all(|w| core::ptr::addr_eq(w[0], w[1])),
+            "repeated object keys should share one interned allocation"
+        );
+    }
+}

@@ -976,10 +976,7 @@ fn test_deserialize_array_items_with_fields() {
             assert_eq!(description.as_deref(), Some("outer array"));
             assert_eq!(min_items, &Some(1));
             assert_eq!(max_items, &Some(2));
-            assert_eq!(
-                default,
-                &Some(Value::Array(Rc::new(vec![Value::from("bar")])))
-            );
+            assert_eq!(default, &Some(Value::from_array(vec![Value::from("bar")])));
             match items.as_type() {
                 Type::String {
                     description,
@@ -1498,7 +1495,7 @@ fn test_deserialize_object_default_empty_object() {
     let s = Schema::from_serde_json_value(schema).unwrap();
     match s.as_type() {
         Type::Object { default, .. } => {
-            assert_eq!(default, &Some(Value::Object(Rc::new(BTreeMap::new()))));
+            assert_eq!(default, &Some(Value::new_object()));
         }
         _ => panic!("Expected Type::Object"),
     }
@@ -1778,8 +1775,11 @@ fn test_deserialize_enum_values_with_object_non_string_keys() {
     match s.as_type() {
         Type::Enum { values, .. } => match &values[0] {
             Value::Object(obj) => {
-                assert_eq!(obj[&Value::from("1")], Value::from("one"));
-                assert_eq!(obj[&Value::from("true")], Value::from("bool"));
+                assert_eq!(*obj.get(&Value::from("1")).expect("1"), Value::from("one"));
+                assert_eq!(
+                    *obj.get(&Value::from("true")).expect("true"),
+                    Value::from("bool")
+                );
             }
             _ => panic!("Expected object in enum values"),
         },
@@ -1802,18 +1802,21 @@ fn test_deserialize_enum_values_with_deeply_nested_structures() {
     match s.as_type() {
         Type::Enum { values, .. } => match &values[0] {
             Value::Object(obj) => {
-                let a = &obj[&Value::from("a")];
+                let a = obj.get(&Value::from("a")).expect("a");
                 match a {
                     Value::Array(arr) => match &arr[0] {
                         Value::Object(inner) => {
-                            let b = &inner[&Value::from("b")];
+                            let b = inner.get(&Value::from("b")).expect("b");
                             match b {
                                 Value::Array(barr) => {
                                     assert_eq!(barr[0], Value::from(1));
                                     assert_eq!(barr[1], Value::from(2));
                                     match &barr[2] {
                                         Value::Object(cobj) => {
-                                            assert_eq!(cobj[&Value::from("c")], Value::Null);
+                                            assert_eq!(
+                                                *cobj.get(&Value::from("c")).expect("c"),
+                                                Value::Null
+                                            );
                                         }
                                         _ => panic!("Expected object for 'c'"),
                                     }
@@ -1886,8 +1889,11 @@ fn test_deserialize_const_value_object() {
     match s.as_type() {
         Type::Const { value, .. } => match value {
             Value::Object(ref obj) => {
-                assert_eq!(obj[&Value::from("foo")], Value::from("bar"));
-                assert_eq!(obj[&Value::from("baz")], Value::from(1));
+                assert_eq!(
+                    *obj.get(&Value::from("foo")).expect("foo"),
+                    Value::from("bar")
+                );
+                assert_eq!(*obj.get(&Value::from("baz")).expect("baz"), Value::from(1));
             }
             _ => panic!("Expected object for const value"),
         },
@@ -1940,13 +1946,13 @@ fn test_deserialize_const_value_deeply_nested() {
     match s.as_type() {
         Type::Const { value, .. } => match value {
             Value::Object(ref obj) => {
-                let a = &obj[&Value::from("a")];
+                let a = obj.get(&Value::from("a")).expect("a");
                 match a {
                     Value::Array(arr) => {
                         assert_eq!(arr[0], Value::from(1));
                         match &arr[1] {
                             Value::Object(inner) => {
-                                let b = &inner[&Value::from("b")];
+                                let b = inner.get(&Value::from("b")).expect("b");
                                 match b {
                                     Value::Array(barr) => {
                                         assert_eq!(barr[0], Value::Null);

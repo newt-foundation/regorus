@@ -1,6 +1,6 @@
 package regorus
 
-// #cgo LDFLAGS: -L ../../../ffi/target/release -lregorus_ffi
+// #cgo LDFLAGS: -L ../../../ffi/target/release -L ../../../ffi/target/debug -lregorus_ffi
 // #include "../../../ffi/regorus.h"
 import "C"
 import (
@@ -213,4 +213,60 @@ func (e *Engine) TakePrints() (string, error) {
 	}
 
 	return C.GoString(result.output), nil
+}
+
+type PolicyLengthConfig struct {
+	MaxCol       uint32
+	MaxFileBytes uint
+	MaxLines     uint
+}
+
+func (e *Engine) SetPolicyLengthConfig(config PolicyLengthConfig) error {
+	c := C.RegorusPolicyLengthConfig{
+		max_col:       C.uint32_t(config.MaxCol),
+		max_file_bytes: C.size_t(config.MaxFileBytes),
+		max_lines:      C.size_t(config.MaxLines),
+	}
+	result := C.regorus_engine_set_policy_length_config(e.e, c)
+	defer C.regorus_result_drop(result)
+	if result.status != C.Ok {
+		return fmt.Errorf("%s", C.GoString(result.error_message))
+	}
+	return nil
+}
+
+func (e *Engine) ClearPolicyLengthConfig() error {
+	result := C.regorus_engine_clear_policy_length_config(e.e)
+	defer C.regorus_result_drop(result)
+	if result.status != C.Ok {
+		return fmt.Errorf("%s", C.GoString(result.error_message))
+	}
+	return nil
+}
+
+type CacheConfig struct {
+	Regex uint
+	Glob  uint
+}
+
+func SetCacheConfig(config CacheConfig) error {
+	c := C.RegorusCacheConfig{
+		regex: C.size_t(config.Regex),
+		glob:  C.size_t(config.Glob),
+	}
+	result := C.regorus_set_cache_config(c)
+	defer C.regorus_result_drop(result)
+	if result.status != C.Ok {
+		return fmt.Errorf("%s", C.GoString(result.error_message))
+	}
+	return nil
+}
+
+func ClearCache() error {
+	result := C.regorus_clear_cache()
+	defer C.regorus_result_drop(result)
+	if result.status != C.Ok {
+		return fmt.Errorf("%s", C.GoString(result.error_message))
+	}
+	return nil
 }

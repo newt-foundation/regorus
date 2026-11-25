@@ -5,14 +5,15 @@
 mod collection_literals;
 mod operations;
 
+pub(super) use collection_literals::try_eval_const;
+
 use super::{Compiler, CompilerError, Register, Result};
-use crate::{
-    ast::{Expr, ExprRef},
-    compiler::destructuring_planner::plans::BindingPlan,
-    lexer::Span,
-    rvm::Instruction,
-    Value,
-};
+use crate::ast::{Expr, ExprRef};
+use crate::compiler::destructuring_planner::plans::BindingPlan;
+use crate::lexer::Span;
+use crate::rvm::instructions::GuardMode;
+use crate::rvm::Instruction;
+use crate::Value;
 use alloc::{format, string::ToString};
 
 impl<'a> Compiler<'a> {
@@ -28,12 +29,15 @@ impl<'a> Compiler<'a> {
         span: &Span,
         assert_condition: bool,
     ) -> Result<Register> {
+        expr.check_depth()
+            .map_err(|error| CompilerError::from(error).at(span))?;
         if let Some(reg) = self.loop_expr_register_map.get(expr).cloned() {
             let result_reg = reg;
             if assert_condition {
                 self.emit_instruction(
-                    Instruction::AssertCondition {
-                        condition: result_reg,
+                    Instruction::Guard {
+                        register: result_reg,
+                        mode: GuardMode::Condition,
                     },
                     span,
                 );
@@ -46,13 +50,13 @@ impl<'a> Compiler<'a> {
             | Expr::String { value, .. }
             | Expr::RawString { value, .. }
             | Expr::Bool { value, .. } => {
-                let dest = self.alloc_register();
+                let dest = self.alloc_register()?;
                 let literal_idx = self.add_literal(value.clone());
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
             }
             Expr::Null { .. } => {
-                let dest = self.alloc_register();
+                let dest = self.alloc_register()?;
                 let literal_idx = self.add_literal(Value::Null);
                 self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                 dest
@@ -83,7 +87,7 @@ impl<'a> Compiler<'a> {
                 if let Value::String(_var_name) = value {
                     self.compile_chained_ref(expr, span)?
                 } else {
-                    let dest = self.alloc_register();
+                    let dest = self.alloc_register()?;
                     let literal_idx = self.add_literal(value.clone());
                     self.emit_instruction(Instruction::Load { dest, literal_idx }, span);
                     dest
@@ -91,8 +95,11 @@ impl<'a> Compiler<'a> {
             }
             Expr::RefDot { .. } | Expr::RefBrack { .. } => self.compile_chained_ref(expr, span)?,
             Expr::Membership {
-                value, collection, ..
-            } => self.compile_membership(value, collection, span)?,
+                key,
+                value,
+                collection,
+                ..
+            } => self.compile_membership(key.as_ref(), value, collection, span)?,
             Expr::ArrayCompr { term, query, .. } => {
                 self.compile_array_comprehension(term, query, span)?
             }
@@ -113,8 +120,9 @@ impl<'a> Compiler<'a> {
 
         if assert_condition {
             self.emit_instruction(
-                Instruction::AssertCondition {
-                    condition: result_reg,
+                Instruction::Guard {
+                    register: result_reg,
+                    mode: GuardMode::Condition,
                 },
                 span,
             );

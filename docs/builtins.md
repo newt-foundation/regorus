@@ -11,6 +11,12 @@ the corresponding feature. This is useful in Confidential Computing scenarios wh
 Currently many builtins are `baked-in`, i.e. there is no way to exclude them from the TCB.
 In future, each builtin will be associated with a feature (many builtins could be associated with the same feature).
 
+Structured-value operations preserve collection traversal order and use
+operation-local nesting budgets where needed. A nesting-limit error remains an
+error when strict builtin errors are disabled; ordinary builtin errors retain
+their existing Undefined/false behavior. These budgets do not restrict storing
+native `Value`s or using their iterative comparison and output methods.
+
 - [Comparison](https://www.openpolicyagent.org/docs/latest/policy-reference/#comparison)
   | Builtin                                                                                          | Feature |
   |--------------------------------------------------------------------------------------------------|---------|
@@ -37,6 +43,11 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [x % y](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-numbers-rem)                            | _       |
   | [round](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-numbers-round)                          | _       |
 
+  `numbers.range_step` accepts integer endpoints and a positive integer step,
+  includes the start, and stops before crossing the end. Descending ranges
+  automatically subtract the step. Invalid steps are errors in strict mode
+  and Undefined otherwise. Stepping uses exact integers and incremental
+  allocation, with existing memory-limit checks during accumulation.
 
 - [Aggregates](https://www.openpolicyagent.org/docs/latest/policy-reference/#aggregates)
   | Builtin                                                                                             | Feature |
@@ -69,6 +80,7 @@ In future, each builtin will be associated with a feature (many builtins could b
   |----------------------------------------------------------------------------------------------------------------------|--------------|
   | [json.filter](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-jsonfilter)               | _            |
   | [json.match_schema](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-jsonmatch_schema)   | `jsonschema` |
+  | [json.patch](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-jsonpatch)                 | `jsonpatch`  |
   | [json.remove](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-jsonremove)               | _            |
   | [json.verify_schema](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-jsonverify_schema) | `jsonschema` |
   | [object.filter](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-object-objectfilter)           | _            |
@@ -95,6 +107,7 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [startswith](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-startswith)                            | _       |
   | [strings.any_prefix_match](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsany_prefix_match) | _       |
   | [strings.any_suffix_match](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsany_suffix_match) | _       |
+  | [strings.count](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringscount)                       | _       |
   | [strings.render_template](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsrender_template)   | _       |
   | [strings.replace_n](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsreplace_n)               | _       |
   | [strings.reverse](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-stringsreverse)                   | _       |
@@ -106,6 +119,13 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [trim_space](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-trim_space)                            | _       |
   | [trim_suffix](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-trim_suffix)                          | _       |
   | [upper](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-strings-upper)                                      | _       |
+
+  `sprintf("%t", [value])` renders boolean values as `true` or `false`, following
+  Rust's boolean formatting convention rather than OPA's embedded formatter
+  diagnostics (such as `%!t(string=true)`).
+
+  `strings.count` counts non-overlapping matches. An empty needle returns one
+  plus the number of Unicode code points, not bytes or grapheme clusters.
 
 - [Regex](https://www.openpolicyagent.org/docs/latest/policy-reference/#regex)
   | Builtin                                                                                                                                         | Feature |
@@ -178,6 +198,34 @@ In future, each builtin will be associated with a feature (many builtins could b
   | [yaml.is_valid](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlis_valid)                         | `yaml`      |
   | [yaml.marshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlmarshal)                           | `yaml`      |
   | [yaml.unmarshal](https://www.openpolicyagent.org/docs/latest/policy-reference/#builtin-encoding-yamlunmarshal)                       | `yaml`      |
+
+  `json.marshal`, `json.marshal_with_options`, and `yaml.marshal` retain the
+  upstream 64-container serialization budget. For example, an input containing
+  65 nested arrays returns a typed serialization-depth error, even in non-strict
+  mode; it cannot select a default or make negation succeed. Native `Value`
+  formatting and `to_json_str()` remain iterative and do not use that callback
+  budget.
+
+  `urlquery.encode` and `urlquery.encode_object` retain the
+  `application/x-www-form-urlencoded` escaping used by Rust's `url` crate.
+  This intentionally differs from OPA's Go `net/url.QueryEscape` convention:
+
+  | Input | Regorus (Rust `url` crate) | OPA / Go `net/url.QueryEscape` |
+  |-------|---------------------------|-------------------------------|
+  | `"~"` | `"%7E"`                   | `"~"`                         |
+  | `"*"` | `"*"`                     | `"%2A"`                       |
+  | `" "` | `"+"`                     | `"+"`                         |
+  | `"+"` | `"%2B"`                   | `"%2B"`                       |
+  | `"~* "` | `"%7E*+"`               | `"~%2A+"`                     |
+
+  Object keys and values use the same escaping. This shared behavior applies
+  to both the interpreter and RVM. Policies comparing encoded strings with
+  OPA-generated output should account for the `~` and `*` differences;
+  they reflect different encoding conventions, not data loss.
+
+  `urlquery.decode` decodes one query component, preserving literal `&`, `=`,
+  `#`, tabs, and newlines; `+` becomes a space. Parameter parsing remains the
+  responsibility of `urlquery.decode_object`.
 
 - [Time](https://www.openpolicyagent.org/docs/latest/policy-reference/#time)
    | Builtin                                                                                                                    | Feature |

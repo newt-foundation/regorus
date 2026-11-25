@@ -4,17 +4,16 @@
 #![cfg(feature = "rvm")]
 
 use anyhow::Result;
-use regorus::{
-    rvm::{
-        vm::{ExecutionMode, ExecutionState, SuspendReason, VmError},
-        Instruction, Program, RegoVM,
-    },
-    utils::limits::{
-        fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
-    },
-    Value,
+use regorus::rvm::vm::{ExecutionMode, ExecutionState, SuspendReason, VmError};
+use regorus::rvm::{Instruction, Program, RegoVM};
+use regorus::utils::limits::{
+    fallback_execution_timer_config, set_fallback_execution_timer_config, ExecutionTimerConfig,
 };
-use std::{num::NonZeroU32, sync::Mutex, thread::sleep, time::Duration};
+use regorus::Value;
+use std::num::NonZeroU32;
+use std::sync::Mutex;
+use std::thread::sleep;
+use std::time::Duration;
 
 static LIMITS_TEST_LOCK: Mutex<()> = Mutex::new(());
 

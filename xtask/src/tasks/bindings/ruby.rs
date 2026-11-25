@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{ffi::OsString, process::Command};
+use std::ffi::OsString;
+use std::process::Command;
 
 use anyhow::Result;
 use clap::Args;

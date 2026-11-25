@@ -1,25 +1,30 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{
-    format,
-    string::{String, ToString as _},
-    vec::Vec,
-};
+use alloc::format;
+use alloc::string::{String, ToString as _};
+use alloc::vec::Vec;
 
-use super::{
-    super::types::{BuiltinInfo, ProgramMetadata, RuleInfo, SourceFile, SpanInfo},
-    Program,
-};
-use crate::{
-    rvm::{instructions::InstructionData, Instruction},
-    value::Value,
-};
+use super::super::metadata::ProgramMetadata;
+use super::super::types::{BuiltinInfo, RuleInfo, SourceFile, SpanInfo};
+use super::Program;
+use crate::rvm::instructions::InstructionData;
+use crate::rvm::Instruction;
+use crate::value::Value;
 use indexmap::IndexMap;
 
 impl Program {
     /// Serialize to JSON format with complete program information and proper field names
     pub fn serialize_json(&self) -> Result<String, String> {
+        self.validate_limits()?;
+        self.validate_serialization_depth()?;
+        // json! unwraps serialization errors, so convert fallible Value fields first.
+        let annotations = serde_json::to_value(&self.metadata.annotations)
+            .map_err(|e| format!("JSON serialization failed: {e}"))?;
+        let literals = serde_json::to_value(&self.literals)
+            .map_err(|e| format!("JSON serialization failed: {e}"))?;
+        let rule_tree = serde_json::to_value(&self.rule_tree)
+            .map_err(|e| format!("JSON serialization failed: {e}"))?;
         let json_data = serde_json::json!({
             "metadata": {
                 "compiler_version": self.metadata.compiler_version,
@@ -28,7 +33,10 @@ impl Program {
                 "optimization_level": self.metadata.optimization_level,
                 "rego_v0": self.rego_v0,
                 "needs_runtime_recursion_check": self.needs_runtime_recursion_check,
-                "needs_recompilation": self.needs_recompilation
+                "has_host_await": self.has_host_await,
+                "needs_recompilation": self.needs_recompilation,
+                "language": self.metadata.language,
+                "annotations": annotations
             },
             "program_structure": {
                 "main_entry_point": self.main_entry_point,
@@ -47,13 +55,13 @@ impl Program {
                 "chained_index_params": self.instruction_data.chained_index_params,
                 "comprehension_begin_params": self.instruction_data.comprehension_begin_params
             },
-            "literals": self.literals,
+            "literals": literals,
             "builtin_info_table": self.builtin_info_table,
             "entry_points": self.entry_points,
             "sources": self.sources,
             "rule_infos": self.rule_infos,
             "instruction_spans": self.instruction_spans,
-            "rule_tree": self.rule_tree
+            "rule_tree": rule_tree
         });
 
         serde_json::to_string_pretty(&json_data)
@@ -62,8 +70,10 @@ impl Program {
 
     /// Deserialize program from JSON format
     pub fn deserialize_json(data: &str) -> Result<Program, String> {
-        let json_data: serde_json::Value =
-            serde_json::from_str(data).map_err(|e| format!("JSON parsing failed: {}", e))?;
+        // Leave room for the format envelope around independently bounded values.
+        let json_data =
+            crate::utils::json::from_str(data, crate::utils::depth::MAX_DEPTH.saturating_add(8))
+                .map_err(|e| format!("JSON parsing failed: {e}"))?;
 
         let metadata = json_data
             .get("metadata")
@@ -88,12 +98,36 @@ impl Program {
             .and_then(|v| v.as_u64())
             .and_then(|v| u8::try_from(v).ok())
             .unwrap_or(0);
+        let language = metadata
+            .get("language")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        #[allow(clippy::needless_borrowed_reference)]
+        let annotations: alloc::collections::BTreeMap<String, Value> = match metadata
+            .get("annotations")
+        {
+            Some(&serde_json::Value::Object(ref map)) => {
+                let mut result = alloc::collections::BTreeMap::new();
+                for (k, json_val) in map {
+                    let val = serde_json::from_value::<Value>(json_val.clone())
+                        .map_err(|e| format!("Annotation '{}' deserialization failed: {}", k, e))?;
+                    result.insert(k.clone(), val);
+                }
+                result
+            }
+            _ => alloc::collections::BTreeMap::new(),
+        };
         let rego_v0 = metadata
             .get("rego_v0")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let needs_runtime_recursion_check = metadata
             .get("needs_runtime_recursion_check")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_host_await = metadata
+            .get("has_host_await")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let needs_recompilation = metadata
@@ -137,7 +171,9 @@ impl Program {
 
         let literals: Vec<Value> = json_data
             .get("literals")
-            .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("Literals deserialization failed: {e}"))?
             .unwrap_or_default();
 
         let builtin_info_table: Vec<BuiltinInfo> = json_data
@@ -167,7 +203,9 @@ impl Program {
 
         let rule_tree: Value = json_data
             .get("rule_tree")
-            .map(|v| serde_json::from_value(v.clone()).unwrap_or_else(|_| Value::new_object()))
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("Rule tree deserialization failed: {e}"))?
             .unwrap_or_else(Value::new_object);
 
         let mut program = Program {
@@ -187,18 +225,67 @@ impl Program {
                 compiled_at,
                 source_info,
                 optimization_level,
+                language,
+                annotations,
             },
             rule_tree,
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check,
+            has_host_await,
             needs_recompilation,
             rego_v0,
         };
 
+        // Recompute has_host_await when it was not provided in the JSON input
+        // or when the provided value is not a valid boolean.
+        if json_data
+            .get("metadata")
+            .and_then(|m| m.get("has_host_await").and_then(|v| v.as_bool()))
+            .is_none()
+        {
+            program.recompute_host_await_presence();
+        }
+
+        program.validate_limits()?;
+        program.validate_serialization_depth()?;
         if !program.builtin_info_table.is_empty() {
             let _ = program.initialize_resolved_builtins();
         }
 
         Ok(program)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn deep_program_values_return_serialization_errors_without_panicking() {
+        for field in 0..3 {
+            for depth in [32, 33, 64, 65] {
+                let mut value = Value::Null;
+                for _ in 0..depth {
+                    value = Value::from(vec![value]);
+                }
+                let mut program = Program::new();
+                match field {
+                    0 => program.literals.push(value),
+                    1 => program.rule_tree = value,
+                    _ => {
+                        program.metadata.annotations.insert("deep".into(), value);
+                    }
+                }
+                let result = program.serialize_json();
+                if depth == 32 {
+                    assert!(result.is_ok(), "depth {depth} failed");
+                } else {
+                    assert!(
+                        matches!(result, Err(error) if error.contains("supported nesting limit 32"))
+                    );
+                }
+            }
+        }
     }
 }

@@ -3,14 +3,12 @@
 
 #![allow(clippy::pattern_type_mismatch)]
 
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    builtins::utils::{ensure_args_count, ensure_string, ensure_string_collection},
-    lexer::Span,
-    value::Value,
-    *,
-};
+use crate::ast::{Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::{ensure_args_count, ensure_string, ensure_string_collection};
+use crate::lexer::Span;
+use crate::value::Value;
+use crate::*;
 
 use anyhow::{bail, Result};
 use globset::{GlobBuilder, GlobMatcher};
@@ -54,11 +52,71 @@ fn make_delimiters_unix_style(s: &str, delimiters: &[char]) -> Result<String> {
 }
 
 fn make_glob(pattern: &str, span: &Span) -> Result<GlobMatcher> {
-    Ok(GlobBuilder::new(pattern)
-        .literal_separator(true)
-        .build()
-        .or_else(|_| bail!(span.error("invalid glob")))?
-        .compile_matcher())
+    check_nesting(pattern)?;
+    #[cfg(feature = "cache")]
+    {
+        {
+            let mut cache = crate::cache::GLOB_CACHE.lock();
+            if let Some(matcher) = cache.get(pattern) {
+                return Ok(matcher.clone());
+            }
+        }
+        let matcher = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .or_else(|_| bail!(span.error("invalid glob")))?
+            .compile_matcher();
+        {
+            let mut cache = crate::cache::GLOB_CACHE.lock();
+            cache.put(alloc::string::String::from(pattern), matcher.clone());
+        }
+        Ok(matcher)
+    }
+    #[cfg(not(feature = "cache"))]
+    {
+        Ok(GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .or_else(|_| bail!(span.error("invalid glob")))?
+            .compile_matcher())
+    }
+}
+
+fn check_nesting(pattern: &str) -> Result<()> {
+    let mut depth = 0_usize;
+    let mut characters = pattern.chars().peekable();
+    while let Some(character) = characters.next() {
+        crate::builtins::utils::enforce_limit()?;
+        match character {
+            '\\' if !cfg!(windows) => {
+                characters.next();
+            }
+            '[' => {
+                if matches!(characters.peek(), Some('!') | Some('^')) {
+                    characters.next();
+                }
+                if characters.peek() == Some(&']') {
+                    characters.next();
+                }
+                for character in characters.by_ref() {
+                    if character == ']' {
+                        break;
+                    }
+                }
+            }
+            '{' => {
+                if depth >= crate::utils::depth::MAX_DEPTH {
+                    return Err(
+                        crate::utils::depth::DepthExceeded(crate::utils::depth::MAX_DEPTH).into(),
+                    );
+                }
+                depth = depth.saturating_add(1);
+            }
+            '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn glob_match(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool) -> Result<Value> {

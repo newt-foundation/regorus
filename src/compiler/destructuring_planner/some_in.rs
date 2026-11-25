@@ -5,15 +5,16 @@
 
 //! Planner support for `some .. in` expressions.
 
-use alloc::{collections::BTreeSet, string::String};
+use alloc::collections::BTreeSet;
+use alloc::string::String;
 
-use crate::{
-    ast::{Expr, ExprRef},
-    compiler::destructuring_planner::{
-        destructuring::create_destructuring_plan_with_tracking,
-        utils::{check_literal_structure, validate_pattern_bindings, LiteralStructureCheck},
-        BindingPlan, BindingPlannerError, Result, ScopingMode, VariableBindingContext,
-    },
+use crate::ast::{Expr, ExprRef};
+use crate::compiler::destructuring_planner::destructuring::create_destructuring_plan_with_tracking;
+use crate::compiler::destructuring_planner::utils::{
+    check_literal_structure, validate_pattern_bindings, LiteralStructureCheck,
+};
+use crate::compiler::destructuring_planner::{
+    BindingPlan, BindingPlannerError, Result, ScopingMode, VariableBindingContext,
 };
 
 /// Convenience function for some..in expressions (always allow shadowing for new bindings).

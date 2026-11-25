@@ -148,16 +148,14 @@ fn test_error_display() {
         registry: "test".into(),
     };
     let invalid_error_message = format!("{invalid_error}");
-    assert_eq!(
-        invalid_error_message,
-        "test registration failed: The name ' ' is invalid (empty or whitespace-only names are not allowed)."
-    );
+    assert_eq!(invalid_error_message, "test registration failed: The name ' ' is invalid (empty or whitespace-only names are not allowed).");
 }
 
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_access() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     // Create a fresh registry for this test to avoid interference
     let test_registry = Rc::new(SchemaRegistry::new("TestSchemaRegistry"));
@@ -195,7 +193,8 @@ fn test_concurrent_access() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_duplicate_registration() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     // Create a fresh registry for this test to avoid interference
     let test_registry = Rc::new(SchemaRegistry::new("TestSchemaRegistry"));

@@ -16,14 +16,11 @@ namespace Regorus
     /// Cloning is cheap and involves only incrementing reference counts for shared immutable objects like parsed policies,
     /// data etc. Mutable state is deep copied as needed.
     /// </summary>
-    public unsafe sealed class Engine : IDisposable
+    public unsafe sealed class Engine : SafeHandleWrapper
     {
-        private RegorusEngineHandle? _handle;
-        private int _isDisposed;
-
         public Engine()
+            : base(RegorusEngineHandle.Create(), nameof(Engine))
         {
-            _handle = RegorusEngineHandle.Create();
         }
 
         public static void SetFallbackExecutionTimerConfig(ExecutionTimerConfig config)
@@ -37,42 +34,24 @@ namespace Regorus
             CheckAndDropResult(Regorus.Internal.API.regorus_clear_fallback_execution_timer_config());
         }
 
-        public void Dispose()
+        public static void SetCacheConfig(CacheConfig config)
         {
-            Dispose(disposing: true);
-
-            // This object will be cleaned up by the Dispose method.
-            // Therefore, call GC.SuppressFinalize to
-            // take this object off the finalization queue
-            // and prevent finalization code for this object
-            // from executing a second time.
-            GC.SuppressFinalize(this);
+            var nativeConfig = config.ToNative();
+            CheckAndDropResult(Regorus.Internal.API.regorus_set_cache_config(nativeConfig));
         }
 
-        // Dispose(bool disposing) executes in two distinct scenarios.
-        // If disposing equals true, the method has been called directly
-        // or indirectly by a user's code. Managed and unmanaged resources
-        // can be disposed.
-        // If disposing equals false, the method has been called by the
-        // runtime from inside the finalizer and you should not reference
-        // other objects. Only unmanaged resources can be disposed.
-        void Dispose(bool disposing)
+        public static void ClearCache()
         {
-            if (System.Threading.Interlocked.CompareExchange(ref _isDisposed, 1, 0) == 0)
-            {
-                _handle?.Dispose();
-                _handle = null;
-            }
+            CheckAndDropResult(Regorus.Internal.API.regorus_clear_cache());
         }
 
         private Engine(RegorusEngineHandle handle)
+            : base(handle, nameof(Engine))
         {
-            _handle = handle ?? throw new ArgumentNullException(nameof(handle));
         }
 
         public Engine Clone()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
                 unsafe
@@ -91,397 +70,294 @@ namespace Regorus
 
         public void SetStrictBuiltinErrors(bool strict)
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_strict_builtin_errors((Regorus.Internal.RegorusEngine*)enginePtr, strict));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_strict_builtin_errors((Regorus.Internal.RegorusEngine*)enginePtr, strict));
             });
         }
 
         public void SetExecutionTimerConfig(ExecutionTimerConfig config)
         {
-            ThrowIfDisposed();
             var nativeConfig = config.ToNative();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    var localConfig = nativeConfig;
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_execution_timer_config((Regorus.Internal.RegorusEngine*)enginePtr, &localConfig));
-                }
+                var localConfig = nativeConfig;
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_execution_timer_config((Regorus.Internal.RegorusEngine*)enginePtr, &localConfig));
             });
         }
 
         public void ClearExecutionTimerConfig()
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_clear_execution_timer_config((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_clear_execution_timer_config((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
+
+        public void SetPolicyLengthConfig(PolicyLengthConfig config)
+        {
+            var nativeConfig = config.ToNative();
+            UseHandle(enginePtr =>
+            {
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_policy_length_config((Regorus.Internal.RegorusEngine*)enginePtr, nativeConfig));
+            });
+        }
+
+        public void ClearPolicyLengthConfig()
+        {
+            UseHandle(enginePtr =>
+            {
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_clear_policy_length_config((Regorus.Internal.RegorusEngine*)enginePtr));
+            });
+        }
+
+        /// <summary>
+        /// Adds a policy and returns its legacy dot-joined package metadata.
+        /// Quoted string contents omit their delimiter quotes. This value is
+        /// not a canonical rule path; use bracket notation for string
+        /// components when evaluating a rule.
+        /// </summary>
+        /// <exception cref="ArgumentException">The path contains an embedded NUL.</exception>
         public string? AddPolicy(string path, string rego)
         {
-            ThrowIfDisposed();
+            Utf8Marshaller.ThrowIfContainsNul(path, nameof(path));
+
             return Utf8Marshaller.WithUtf8(path, pathPtr =>
                 Utf8Marshaller.WithUtf8(rego, regoPtr =>
-                {
-                    unsafe
-                    {
-                        return UseHandle(enginePtr =>
-                        {
-                            unsafe
-                            {
-                                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_policy((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr, (byte*)regoPtr));
-                            }
-                        });
-                    }
-                }));
+                    UseHandle(enginePtr =>
+                        CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_policy((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr, (byte*)regoPtr))
+                    )));
+        }
+
+        /// <summary>
+        /// Check whether the policy module identified by its exact source path declares a rule at the selected rule path or a descendant, without evaluating the policy.
+        /// </summary>
+        /// <param name="sourcePath">The exact source label associated with the loaded policy module.</param>
+        /// <param name="rootName">A native-grammar rule path, either a root identifier such as <c>metadata</c> or a dotted path such as <c>metadata.parameters</c>.</param>
+        /// <returns>True if the module declares a rule at the selected path or any component-wise descendant.</returns>
+        /// <exception cref="ArgumentException">Either string contains an embedded NUL, or the rule path is invalid.</exception>
+        /// <exception cref="ArgumentNullException">The source path or root name is null.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// No unique loaded module matches the source path or a rule head cannot be classified.
+        /// </exception>
+        public bool HasDeclaredRuleRootedAt(string sourcePath, string rootName)
+        {
+            if (sourcePath is null)
+            {
+                throw new ArgumentNullException(nameof(sourcePath));
+            }
+            if (rootName is null)
+            {
+                throw new ArgumentNullException(nameof(rootName));
+            }
+
+            Utf8Marshaller.ThrowIfContainsNul(sourcePath, nameof(sourcePath));
+            Utf8Marshaller.ThrowIfContainsNul(rootName, nameof(rootName));
+
+            return Utf8Marshaller.WithUtf8(sourcePath, pathPtr =>
+                Utf8Marshaller.WithUtf8(rootName, rootNamePtr =>
+                    UseHandle(enginePtr =>
+                        ResultHelpers.GetBoolResult(
+                            Regorus.Internal.API.regorus_engine_has_declared_rule_rooted_at(
+                                (Regorus.Internal.RegorusEngine*)enginePtr,
+                                (byte*)pathPtr,
+                                (byte*)rootNamePtr),
+                            nameof(rootName)))));
         }
 
         public void SetRegoV0(bool enable)
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_rego_v0((Regorus.Internal.RegorusEngine*)enginePtr, enable));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_rego_v0((Regorus.Internal.RegorusEngine*)enginePtr, enable));
             });
         }
 
+        /// <summary>
+        /// Adds a policy file and returns its legacy dot-joined package
+        /// metadata, not a canonical rule path. Quoted string contents omit
+        /// their delimiter quotes.
+        /// </summary>
+        /// <exception cref="ArgumentException">The path contains an embedded NUL.</exception>
         public string? AddPolicyFromFile(string path)
         {
-            ThrowIfDisposed();
+            Utf8Marshaller.ThrowIfContainsNul(path, nameof(path));
+
             return Utf8Marshaller.WithUtf8(path, pathPtr =>
             {
-                unsafe
-                {
-                    return UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            return CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_policy_from_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr));
-                        }
-                    });
-                }
+                return UseHandle(enginePtr =>
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_policy_from_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr))
+                );
             });
 
         }
 
         public void AddDataJson(string data)
         {
-            ThrowIfDisposed();
             Utf8Marshaller.WithUtf8(data, dataPtr =>
             {
-                unsafe
+                UseHandle(enginePtr =>
                 {
-                    UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_json((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)dataPtr));
-                        }
-                    });
-                }
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_json((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)dataPtr));
+                });
             });
 
         }
 
         public void AddDataFromJsonFile(string path)
         {
-            ThrowIfDisposed();
             Utf8Marshaller.WithUtf8(path, pathPtr =>
             {
-                unsafe
+                UseHandle(enginePtr =>
                 {
-                    UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_from_json_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr));
-                        }
-                    });
-                }
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_add_data_from_json_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr));
+                });
             });
 
         }
 
         public void SetInputJson(string input)
         {
-            ThrowIfDisposed();
             Utf8Marshaller.WithUtf8(input, inputPtr =>
             {
-                unsafe
+                UseHandle(enginePtr =>
                 {
-                    UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_json((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)inputPtr));
-                        }
-                    });
-                }
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_json((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)inputPtr));
+                });
             });
         }
 
         public void SetInputFromJsonFile(string path)
         {
-            ThrowIfDisposed();
             Utf8Marshaller.WithUtf8(path, pathPtr =>
             {
-                unsafe
+                UseHandle(enginePtr =>
                 {
-                    UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_from_json_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr));
-                        }
-                    });
-                }
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_input_from_json_file((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)pathPtr));
+                });
             });
         }
 
         public string? EvalQuery(string query)
         {
-            ThrowIfDisposed();
             return Utf8Marshaller.WithUtf8(query, queryPtr =>
             {
-                unsafe
-                {
-                    return UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            return CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_query((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)queryPtr));
-                        }
-                    });
-                }
+                return UseHandle(enginePtr =>
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_query((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)queryPtr))
+                );
             });
         }
 
         public string? EvalRule(string rule)
         {
-            ThrowIfDisposed();
             return Utf8Marshaller.WithUtf8(rule, rulePtr =>
             {
-                unsafe
-                {
-                    return UseHandle(enginePtr =>
-                    {
-                        unsafe
-                        {
-                            return CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_rule((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)rulePtr));
-                        }
-                    });
-                }
+                return UseHandle(enginePtr =>
+                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_eval_rule((Regorus.Internal.RegorusEngine*)enginePtr, (byte*)rulePtr))
+                );
             });
         }
 
         public void SetEnableCoverage(bool enable)
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_enable_coverage((Regorus.Internal.RegorusEngine*)enginePtr, enable));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_enable_coverage((Regorus.Internal.RegorusEngine*)enginePtr, enable));
             });
         }
 
         public void ClearCoverageData()
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_clear_coverage_data((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_clear_coverage_data((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
         public string? GetCoverageReport()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_coverage_report((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_coverage_report((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
         public string? GetCoverageReportPretty()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_coverage_report_pretty((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_coverage_report_pretty((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
         public void SetGatherPrints(bool enable)
         {
-            ThrowIfDisposed();
             UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_gather_prints((Regorus.Internal.RegorusEngine*)enginePtr, enable));
-                }
+                CheckAndDropResult(Regorus.Internal.API.regorus_engine_set_gather_prints((Regorus.Internal.RegorusEngine*)enginePtr, enable));
             });
         }
 
         public string? TakePrints()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_take_prints((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_take_prints((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
         public string? GetAstAsJson()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_ast_as_json((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_ast_as_json((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
-        public string? GetPolicyPackageNames()
+        /// <summary>
+        /// Returns JSON rows with <c>source_file</c> and decoded string
+        /// <c>components</c> for every loaded module, in insertion order.
+        /// Repeated packages and source labels are retained; labels are not unique IDs.
+        /// No synthetic <c>data</c> prefix is added. Literal dots stay within their
+        /// component. An empty engine returns <c>[]</c>; the engine is not evaluated
+        /// or prepared.
+        /// </summary>
+        /// <exception cref="EntryPointNotFoundException">
+        /// The native library does not provide this export. Update the native library
+        /// together with the managed binding; legacy package strings are not a fallback.
+        /// </exception>
+        public string? GetPolicyPackageComponents()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_package_names((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_package_components((Regorus.Internal.RegorusEngine*)enginePtr));
+            });
+        }
+
+        /// <summary>
+        /// Returns policy package metadata with its legacy dot-joined text and
+        /// no <c>data</c> prefix. Quoted string contents omit their delimiter
+        /// quotes; use canonical bracketed paths for rule lookup.
+        /// </summary>
+        public string? GetPolicyPackageNames()
+        {
+            return UseHandle(enginePtr =>
+            {
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_package_names((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
         public string? GetPolicyParameters()
         {
-            ThrowIfDisposed();
             return UseHandle(enginePtr =>
             {
-                unsafe
-                {
-                    return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_parameters((Regorus.Internal.RegorusEngine*)enginePtr));
-                }
+                return CheckAndDropResult(Regorus.Internal.API.regorus_engine_get_policy_parameters((Regorus.Internal.RegorusEngine*)enginePtr));
             });
         }
 
-    private static string? StringFromUtf8(IntPtr ptr)
+        private static string? CheckAndDropResult(Regorus.Internal.RegorusResult result)
         {
-
-#if NETSTANDARD2_1
-			return Marshal.PtrToStringUTF8(ptr);
-#else
-            int len = 0;
-            while (Marshal.ReadByte(ptr, len) != 0) { ++len; }
-            byte[] buffer = new byte[len];
-            Marshal.Copy(ptr, buffer, 0, buffer.Length);
-            return Encoding.UTF8.GetString(buffer);
-#endif
-        }
-
-    private static string? CheckAndDropResult(Regorus.Internal.RegorusResult result)
-        {
-            try
-            {
-                if (result.status != Regorus.Internal.RegorusStatus.Ok)
-                {
-                    var message = Utf8Marshaller.FromUtf8(result.error_message);
-                    throw result.status.CreateException(message);
-                }
-
-                return result.data_type switch
-                {
-                    Regorus.Internal.RegorusDataType.String => Utf8Marshaller.FromUtf8(result.output),
-                    Regorus.Internal.RegorusDataType.Boolean => result.bool_value.ToString().ToLowerInvariant(),
-                    Regorus.Internal.RegorusDataType.Integer => result.int_value.ToString(),
-                    Regorus.Internal.RegorusDataType.None => null,
-                    _ => Utf8Marshaller.FromUtf8(result.output)
-                };
-            }
-            finally
-            {
-                Regorus.Internal.API.regorus_result_drop(result);
-            }
-        }
-
-        private void ThrowIfDisposed()
-        {
-            if (_isDisposed != 0 || _handle is null || _handle.IsClosed)
-            {
-                throw new ObjectDisposedException(nameof(Engine));
-            }
-        }
-
-        private RegorusEngineHandle GetHandleForUse()
-        {
-            var handle = _handle;
-            if (handle is null || handle.IsClosed || handle.IsInvalid)
-            {
-                throw new ObjectDisposedException(nameof(Engine));
-            }
-            return handle;
-        }
-
-        private void UseHandle(Action<IntPtr> action)
-        {
-            UseHandle<object?>(handlePtr =>
-            {
-                action(handlePtr);
-                return null;
-            });
-        }
-
-        private T UseHandle<T>(Func<IntPtr, T> func)
-        {
-            var handle = GetHandleForUse();
-            bool addedRef = false;
-            try
-            {
-                handle.DangerousAddRef(ref addedRef);
-                var pointer = handle.DangerousGetHandle();
-                if (pointer == IntPtr.Zero)
-                {
-                    throw new ObjectDisposedException(nameof(Engine));
-                }
-
-                return func(pointer);
-            }
-            finally
-            {
-                if (addedRef)
-                {
-                    handle.DangerousRelease();
-                }
-            }
+            return ResultHelpers.GetStringResult(result);
         }
 
     }

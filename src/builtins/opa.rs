@@ -1,14 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::{
-    ast::{Expr, Ref},
-    builtins,
-    builtins::utils::{enforce_limit, ensure_args_count},
-    *,
-};
+use crate::ast::{Expr, Ref};
+use crate::builtins;
+use crate::builtins::utils::{enforce_limit, ensure_args_count};
+use crate::*;
 
-use crate::{lexer::Span, value::Value};
+use crate::lexer::Span;
+use crate::value::Value;
 
 use alloc::collections::BTreeMap;
 
@@ -25,7 +24,7 @@ fn opa_runtime(span: &Span, params: &[Ref<Expr>], args: &[Value], _strict: bool)
 
     obj.insert(
         Value::String("commit".into()),
-        Value::String(env!("GIT_HASH").into()),
+        Value::String(option_env!("GIT_HASH").unwrap_or("").into()),
     );
 
     obj.insert(

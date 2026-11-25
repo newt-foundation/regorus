@@ -7,7 +7,8 @@
 //! with expressions, queries, and statements using their respective indices.
 
 use crate::*;
-use core::{convert::TryFrom as _, fmt};
+use core::convert::TryFrom as _;
+use core::fmt;
 
 #[inline]
 fn usize_from_u32(value: u32) -> Option<usize> {
@@ -124,22 +125,6 @@ impl<T: Clone> Lookup<T> {
         if let Ok(slot) = self.slot_mut(module_idx, node_idx) {
             *slot = None;
         }
-    }
-
-    pub(crate) fn truncate_modules(&mut self, module_count: usize) {
-        self.slots.truncate(module_count);
-    }
-
-    pub(crate) const fn module_len(&self) -> usize {
-        self.slots.len()
-    }
-
-    pub(crate) fn push_module(&mut self, module: Vec<Option<T>>) {
-        self.slots.push(module);
-    }
-
-    pub(crate) fn remove_module(&mut self, module_idx: usize) -> Option<Vec<Option<T>>> {
-        (module_idx < self.slots.len()).then(|| self.slots.remove(module_idx))
     }
 
     /// Validate indices and return them as usize on success.

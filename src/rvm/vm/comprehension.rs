@@ -1,19 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use crate::{
-    rvm::instructions::{ComprehensionBeginParams, ComprehensionMode},
-    value::Value,
-    Rc,
-};
-use alloc::{collections::BTreeMap, format, sync::Arc, vec::Vec};
+use crate::rvm::instructions::{ComprehensionBeginParams, ComprehensionMode, Instruction};
+use crate::value::Object;
+use crate::value::Value;
+use alloc::format;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
-use super::{
-    context::{ComprehensionContext, IterationState},
-    errors::{Result, VmError},
-    execution_model::{ExecutionFrame, ExecutionMode, FrameKind},
-    machine::RegoVM,
-};
+use super::context::{ComprehensionContext, IterationState};
+use super::errors::{Result, VmError};
+use super::execution_model::{ExecutionFrame, ExecutionMode, FrameKind};
+use super::machine::RegoVM;
 
 impl RegoVM {
     pub(super) fn execute_comprehension_begin(
@@ -35,12 +33,12 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Object::new().into_value(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
         let auto_iterate = params.collection_reg != params.result_reg;
-        let iteration_state = if auto_iterate {
+        let mut iteration_state = if auto_iterate {
             let source_value = self.get_register(params.collection_reg)?.clone();
             match source_value {
                 Value::Array(items) => {
@@ -54,22 +52,17 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
-                        })
+                        // O(1) cursor over shared Rc<Object>.
+                        let cursor = obj.cursor();
+                        Some(IterationState::Object { obj, cursor })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { items: set, cursor })
                     }
                 }
                 Value::Undefined => None,
@@ -80,7 +73,7 @@ impl RegoVM {
             None
         };
 
-        let has_iteration = if let Some(state) = iteration_state.as_ref() {
+        let has_iteration = if let Some(state) = iteration_state.as_mut() {
             self.setup_next_iteration(state, params.key_reg, params.value_reg)?
         } else {
             false
@@ -101,8 +94,10 @@ impl RegoVM {
             comprehension_end: params.comprehension_end,
             iteration_state,
             resume_pc,
+            loop_depth: self.loop_stack.len(),
         };
 
+        let jumped_to_end = auto_iterate && !has_iteration;
         if auto_iterate {
             if has_iteration {
                 self.pc = usize::from(params.body_start).saturating_sub(1);
@@ -112,7 +107,7 @@ impl RegoVM {
             }
         }
 
-        self.comprehension_stack.push(comprehension_context);
+        self.push_unless_exhausted(comprehension_context, jumped_to_end);
 
         Ok(())
     }
@@ -124,12 +119,12 @@ impl RegoVM {
         let initial_result = match params.mode {
             ComprehensionMode::Set => Value::new_set(),
             ComprehensionMode::Array => Value::new_array(),
-            ComprehensionMode::Object => Value::Object(Rc::new(BTreeMap::new())),
+            ComprehensionMode::Object => Object::new().into_value(),
         };
         self.set_register(params.result_reg, initial_result.clone())?;
 
         let auto_iterate = params.collection_reg != params.result_reg;
-        let iteration_state = if auto_iterate {
+        let mut iteration_state = if auto_iterate {
             let source_value = self.get_register(params.collection_reg)?.clone();
             match source_value {
                 Value::Array(items) => {
@@ -143,22 +138,16 @@ impl RegoVM {
                     if obj.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Object {
-                            obj,
-                            current_key: None,
-                            first_iteration: true,
-                        })
+                        let cursor = obj.cursor();
+                        Some(IterationState::Object { obj, cursor })
                     }
                 }
                 Value::Set(set) => {
                     if set.is_empty() {
                         None
                     } else {
-                        Some(IterationState::Set {
-                            items: set,
-                            current_item: None,
-                            first_iteration: true,
-                        })
+                        let cursor = set.cursor();
+                        Some(IterationState::Set { items: set, cursor })
                     }
                 }
                 Value::Undefined => None,
@@ -169,7 +158,7 @@ impl RegoVM {
             None
         };
 
-        let has_iteration = if let Some(state) = iteration_state.as_ref() {
+        let has_iteration = if let Some(state) = iteration_state.as_mut() {
             self.setup_next_iteration(state, params.key_reg, params.value_reg)?
         } else {
             false
@@ -190,6 +179,7 @@ impl RegoVM {
             comprehension_end: params.comprehension_end,
             iteration_state,
             resume_pc,
+            loop_depth: self.loop_stack.len(),
         };
 
         let next_pc = if auto_iterate {
@@ -232,6 +222,7 @@ impl RegoVM {
         }
     }
 
+    #[allow(clippy::if_then_some_else_none)]
     fn execute_comprehension_yield_run_to_completion(
         &mut self,
         value_reg: u8,
@@ -256,26 +247,28 @@ impl RegoVM {
         };
 
         let result_reg = comprehension_context.result_reg;
-        let current_result = self.get_register(result_reg)?.clone();
-        let mode = comprehension_context.mode.clone();
+        // Take ownership of the result register so Rc refcount stays at 1,
+        // allowing Rc::make_mut to mutate in-place instead of deep-cloning.
+        let mut current_result = self.take_register(result_reg)?;
 
-        let updated_result = match (mode, current_result) {
-            (ComprehensionMode::Set, Value::Set(set)) => {
-                let mut new_set = set.as_ref().clone();
-                new_set.insert(value_to_add);
-                Value::Set(crate::Rc::new(new_set))
+        match (&comprehension_context.mode, &mut current_result) {
+            (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
+                if !matches!(value_to_add, Value::Undefined) {
+                    crate::Rc::make_mut(set).insert(value_to_add);
+                }
             }
-            (ComprehensionMode::Array, Value::Array(arr)) => {
-                let mut new_arr = arr.as_ref().to_vec();
-                new_arr.push(value_to_add);
-                Value::Array(crate::Rc::new(new_arr))
+            (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
+                if !matches!(value_to_add, Value::Undefined) {
+                    crate::Rc::make_mut(arr).push(value_to_add);
+                }
             }
-            (ComprehensionMode::Object, Value::Object(obj)) => {
+            (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
                 if let Some(key) = key_value {
-                    let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key, value_to_add);
-                    Value::Object(crate::Rc::new(new_obj))
+                    if key != Value::Undefined && value_to_add != Value::Undefined {
+                        crate::Rc::make_mut(obj).insert(key, value_to_add);
+                    }
                 } else {
+                    self.set_register(result_reg, current_result)?;
                     self.comprehension_stack.push(comprehension_context);
                     return Err(VmError::InvalidIteration {
                         value: Value::String(Arc::from("Object comprehension requires key")),
@@ -284,40 +277,20 @@ impl RegoVM {
                 }
             }
             (_mode, other) => {
+                let offending = core::mem::replace(other, Value::Undefined);
+                self.set_register(result_reg, current_result)?;
                 self.comprehension_stack.push(comprehension_context);
                 return Err(VmError::InvalidIteration {
-                    value: other,
+                    value: offending,
                     pc: self.pc,
                 });
             }
-        };
+        }
 
-        self.set_register(result_reg, updated_result)?;
+        self.set_register(result_reg, current_result)?;
 
+        let mut jumped_to_end = false;
         if let Some(iter_state) = comprehension_context.iteration_state.as_mut() {
-            match *iter_state {
-                IterationState::Object {
-                    ref mut current_key,
-                    ..
-                } => {
-                    let tracked_key =
-                        if comprehension_context.key_reg != comprehension_context.value_reg {
-                            self.get_register(comprehension_context.key_reg)?.clone()
-                        } else {
-                            self.get_register(comprehension_context.value_reg)?.clone()
-                        };
-                    *current_key = Some(tracked_key);
-                }
-                IterationState::Set {
-                    ref mut current_item,
-                    ..
-                } => {
-                    *current_item =
-                        Some(self.get_register(comprehension_context.value_reg)?.clone());
-                }
-                IterationState::Array { .. } => {}
-            }
-
             iter_state.advance();
             let has_next = self.setup_next_iteration(
                 iter_state,
@@ -330,14 +303,16 @@ impl RegoVM {
             } else {
                 comprehension_context.iteration_state = None;
                 self.pc = usize::from(comprehension_context.comprehension_end).saturating_sub(1);
+                jumped_to_end = true;
             }
         }
 
-        self.comprehension_stack.push(comprehension_context);
+        self.push_unless_exhausted(comprehension_context, jumped_to_end);
 
         Ok(())
     }
 
+    #[allow(clippy::if_then_some_else_none)]
     fn execute_comprehension_yield_suspendable(
         &mut self,
         value_reg: u8,
@@ -355,17 +330,7 @@ impl RegoVM {
                 pc: self.pc,
             })?;
 
-        let (
-            value_to_add,
-            key_value,
-            current_result,
-            mode,
-            result_reg_idx,
-            key_reg_idx,
-            value_reg_idx,
-            iteration_key,
-            iteration_value,
-        ) = {
+        let (value_to_add, key_value, mode, result_reg_idx, key_reg_idx, value_reg_idx) = {
             let frame =
                 self.execution_stack
                     .get(comprehension_index)
@@ -385,21 +350,14 @@ impl RegoVM {
                 };
 
                 let result_reg_idx = context.result_reg;
-                let current_result = self.get_register(result_reg_idx)?.clone();
                 let mode = context.mode.clone();
-                let iteration_key = self.get_register(context.key_reg)?.clone();
-                let iteration_value = self.get_register(context.value_reg)?.clone();
-
                 (
                     value_to_add,
                     key_value,
-                    current_result,
                     mode,
                     result_reg_idx,
                     context.key_reg,
                     context.value_reg,
-                    iteration_key,
-                    iteration_value,
                 )
             } else {
                 return Err(VmError::InvalidIteration {
@@ -409,23 +367,28 @@ impl RegoVM {
             }
         };
 
-        let updated_result = match (mode, current_result) {
-            (ComprehensionMode::Set, Value::Set(set)) => {
-                let mut new_set = set.as_ref().clone();
-                new_set.insert(value_to_add);
-                Value::Set(crate::Rc::new(new_set))
+        // Take ownership of the result register so Rc refcount stays at 1,
+        // allowing Rc::make_mut to mutate in-place instead of deep-cloning.
+        let mut current_result = self.take_register(result_reg_idx)?;
+
+        match (&mode, &mut current_result) {
+            (&ComprehensionMode::Set, &mut Value::Set(ref mut set)) => {
+                if !matches!(value_to_add, Value::Undefined) {
+                    crate::Rc::make_mut(set).insert(value_to_add);
+                }
             }
-            (ComprehensionMode::Array, Value::Array(arr)) => {
-                let mut new_arr = arr.as_ref().to_vec();
-                new_arr.push(value_to_add);
-                Value::Array(crate::Rc::new(new_arr))
+            (&ComprehensionMode::Array, &mut Value::Array(ref mut arr)) => {
+                if !matches!(value_to_add, Value::Undefined) {
+                    crate::Rc::make_mut(arr).push(value_to_add);
+                }
             }
-            (ComprehensionMode::Object, Value::Object(obj)) => {
+            (&ComprehensionMode::Object, &mut Value::Object(ref mut obj)) => {
                 if let Some(key) = key_value {
-                    let mut new_obj = obj.as_ref().clone();
-                    new_obj.insert(key, value_to_add);
-                    Value::Object(crate::Rc::new(new_obj))
+                    if key != Value::Undefined && value_to_add != Value::Undefined {
+                        crate::Rc::make_mut(obj).insert(key, value_to_add);
+                    }
                 } else {
+                    self.set_register(result_reg_idx, current_result)?;
                     return Err(VmError::InvalidIteration {
                         value: Value::String(Arc::from("Object comprehension requires key")),
                         pc: self.pc,
@@ -433,12 +396,16 @@ impl RegoVM {
                 }
             }
             (_mode, other) => {
+                let offending = core::mem::replace(other, Value::Undefined);
+                self.set_register(result_reg_idx, current_result)?;
                 return Err(VmError::InvalidIteration {
-                    value: other,
+                    value: offending,
                     pc: self.pc,
                 });
             }
-        };
+        }
+
+        self.set_register(result_reg_idx, current_result)?;
 
         let (iteration_state_snapshot, body_start, comprehension_end) = {
             let frame = self.execution_stack.get_mut(comprehension_index).ok_or(
@@ -453,27 +420,6 @@ impl RegoVM {
             } = &mut frame.kind
             {
                 if let Some(iter_state) = context.iteration_state.as_mut() {
-                    match *iter_state {
-                        IterationState::Object {
-                            ref mut current_key,
-                            ..
-                        } => {
-                            let tracked_key = if context.key_reg != context.value_reg {
-                                iteration_key.clone()
-                            } else {
-                                iteration_value.clone()
-                            };
-                            *current_key = Some(tracked_key);
-                        }
-                        IterationState::Set {
-                            ref mut current_item,
-                            ..
-                        } => {
-                            *current_item = Some(iteration_value.clone());
-                        }
-                        IterationState::Array { .. } => {}
-                    }
-
                     iter_state.advance();
                 }
 
@@ -490,10 +436,21 @@ impl RegoVM {
             }
         };
 
-        self.set_register(result_reg_idx, updated_result)?;
+        if let Some(mut state) = iteration_state_snapshot {
+            let has_next = self.setup_next_iteration(&mut state, key_reg_idx, value_reg_idx)?;
 
-        if let Some(state) = iteration_state_snapshot.as_ref() {
-            let has_next = self.setup_next_iteration(state, key_reg_idx, value_reg_idx)?;
+            // `setup_next_iteration` advances Object's internal cursor; the
+            // owning frame holds the iteration_state, so we must write the
+            // updated state back. (The Array/Set variants are also unchanged
+            // by copy, so the writeback is uniform.)
+            if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
+                if let FrameKind::Comprehension {
+                    ref mut context, ..
+                } = frame.kind
+                {
+                    context.iteration_state = Some(state);
+                }
+            }
 
             if has_next {
                 if let Some(frame) = self.execution_stack.get_mut(comprehension_index) {
@@ -522,18 +479,39 @@ impl RegoVM {
         }
     }
 
+    /// Re-activates a run-to-completion comprehension context unless execution
+    /// jumped to `comprehension_end` and will not reach a `ComprehensionEnd`.
+    ///
+    /// Without a next iteration execution resumes at `comprehension_end`. If
+    /// that is a `ComprehensionEnd` it completes the comprehension; otherwise
+    /// (compiled code targets the instruction after it) the context is finished
+    /// here, as suspendable execution does. The result is already in its
+    /// register, so dropping the context loses nothing.
+    fn push_unless_exhausted(&mut self, context: ComprehensionContext, jumped_to_end: bool) {
+        let lands_on_end = matches!(
+            self.program
+                .instructions
+                .get(usize::from(context.comprehension_end)),
+            Some(Instruction::ComprehensionEnd {})
+        );
+        if !jumped_to_end || lands_on_end {
+            self.comprehension_stack.push(context);
+        }
+    }
+
     pub(super) fn handle_comprehension_condition_failure_run_to_completion(
         &mut self,
     ) -> Result<bool> {
         if let Some(mut context) = self.comprehension_stack.pop() {
             self.advance_comprehension_after_failure(&mut context)?;
-            self.comprehension_stack.push(context);
+            // Without a next iteration the failure jumped to `comprehension_end`.
+            let jumped_to_end = context.iteration_state.is_none();
+            self.push_unless_exhausted(context, jumped_to_end);
             Ok(true)
         } else {
             Ok(false)
         }
     }
-
     pub(super) fn handle_comprehension_condition_failure_suspendable(&mut self) -> Result<bool> {
         if let Some(mut frame) = self.execution_stack.pop() {
             let handled = if let &mut FrameKind::Comprehension {
@@ -559,11 +537,6 @@ impl RegoVM {
         context: &mut ComprehensionContext,
     ) -> Result<()> {
         if let Some(iter_state) = context.iteration_state.as_mut() {
-            self.capture_comprehension_iteration_position(
-                iter_state,
-                context.key_reg,
-                context.value_reg,
-            )?;
             iter_state.advance();
             let has_next =
                 self.setup_next_iteration(iter_state, context.key_reg, context.value_reg)?;
@@ -580,46 +553,19 @@ impl RegoVM {
         Ok(())
     }
 
-    fn capture_comprehension_iteration_position(
-        &mut self,
-        iter_state: &mut IterationState,
-        key_reg: u8,
-        value_reg: u8,
-    ) -> Result<()> {
-        match *iter_state {
-            IterationState::Object {
-                ref mut current_key,
-                ..
-            } => {
-                let tracked_key = if key_reg != value_reg {
-                    self.get_register(key_reg)?.clone()
-                } else {
-                    self.get_register(value_reg)?.clone()
-                };
-                *current_key = Some(tracked_key);
-            }
-            IterationState::Set {
-                ref mut current_item,
-                ..
-            } => {
-                *current_item = Some(self.get_register(value_reg)?.clone());
-            }
-            IterationState::Array { .. } => {}
-        }
-
-        Ok(())
-    }
-
     fn execute_comprehension_end_run_to_completion(&mut self) -> Result<()> {
-        self.comprehension_stack.pop().map_or_else(
-            || {
-                Err(VmError::InvalidIteration {
-                    value: Value::String(Arc::from("No active comprehension context")),
-                    pc: self.pc,
-                })
-            },
-            |_context| Ok(()),
-        )
+        // `ComprehensionEnd` is reached from a loaded program; an empty stack
+        // here means malformed user-supplied bytecode, which must still surface
+        // as a typed error rather than a panic — including in debug builds.
+        // The accumulated result already resides in its result register and needs
+        // no post-processing, so popping the context to unwind the stack suffices.
+        self.comprehension_stack
+            .pop()
+            .ok_or_else(|| VmError::InvalidIteration {
+                value: Value::String(Arc::from("No active comprehension context")),
+                pc: self.pc,
+            })?;
+        Ok(())
     }
 
     fn execute_comprehension_end_suspendable(&mut self) -> Result<()> {
@@ -650,6 +596,8 @@ impl RegoVM {
                     return_pc: _,
                     context,
                 } => {
+                    // The accumulated result already resides in `result_reg`; no
+                    // post-processing is required before resuming.
                     let raw_target = context.resume_pc;
                     let resume_pc = if raw_target <= self.pc {
                         self.pc.saturating_add(1)

@@ -498,7 +498,8 @@ fn test_azure_resource_removal() {
 #[test]
 #[cfg(feature = "std")]
 fn test_concurrent_resource_schema_access() {
-    use std::{sync::Barrier, thread};
+    use std::sync::Barrier;
+    use std::thread;
 
     let barrier = Rc::new(Barrier::new(3));
     let mut handles = vec![];

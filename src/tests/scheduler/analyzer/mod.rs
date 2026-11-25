@@ -12,7 +12,8 @@
     clippy::as_conversions
 )] // scheduler analyzer tests rely on asserts/unwraps and std conveniences
 
-use crate::{ast::*, lexer::*, parser::*, scheduler::*, *};
+use crate::*;
+use crate::{ast::*, lexer::*, parser::*, scheduler::*};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use test_generator::test_resources;
@@ -87,7 +88,7 @@ fn analyze_file(regos: &[String], expected_scopes: &[Scope]) -> Result<()> {
         }
     }
 
-    scopes.sort_by(|a, b| a.0.span.line.cmp(&b.0.span.line));
+    scopes.sort_by_key(|a| a.0.span.line);
     for (idx, (_, scope)) in scopes.iter().enumerate() {
         if idx > expected_scopes.len() {
             bail!("extra scope generated.")
@@ -114,7 +115,7 @@ fn yaml_test_impl(file: &str) -> Result<()> {
     std::println!("\nrunning {file}");
 
     let yaml_str = std::fs::read_to_string(file)?;
-    let test: YamlTest = serde_yaml::from_str(&yaml_str)?;
+    let test: YamlTest = yaml_serde::from_str(&yaml_str)?;
 
     for case in &test.cases {
         std::print!("\ncase {} ", case.note);

@@ -1,0 +1,3 @@
+[advisories]
+# crypto-bigint 0.5 via k256 0.13: ecrecover on public inputs only, see deny.toml
+ignore = ["RUSTSEC-2026-0387"]

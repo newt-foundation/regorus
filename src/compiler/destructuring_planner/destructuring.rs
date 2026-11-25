@@ -8,18 +8,15 @@
 
 //! Functions responsible for building destructuring plans.
 
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-use crate::{
-    ast::{Expr, ExprRef},
-    compiler::destructuring_planner::{
-        context::OverlayBindingContext, utils::extract_literal_key, DestructuringPlan, ScopingMode,
-        VariableBindingContext,
-    },
+use crate::ast::{Expr, ExprRef};
+use crate::compiler::destructuring_planner::context::OverlayBindingContext;
+use crate::compiler::destructuring_planner::utils::extract_literal_key;
+use crate::compiler::destructuring_planner::{
+    DestructuringPlan, ScopingMode, VariableBindingContext,
 };
 
 /// Create a destructuring plan for an expression using a variable binding context.

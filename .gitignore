@@ -25,6 +25,12 @@ bindings/ffi/regorus.ffi.hpp
 
 bindings/*/target
 
+# Temporary commit message files
+.commit-msg.txt
+
+# Local planning docs
+docs/plans/
+
 # C# build folders
 **bin
 **obj
@@ -42,15 +48,12 @@ bindings/ruby/bin/
 # JetBrains IDEs files
 .idea/
 
-CLAUDE.md
-.claude/
+# Java build artifacts
+**/*.class
+**/*.jar
+bindings/java/.classpath
+bindings/java/.project
+bindings/java/.settings/
 
-**/AGENTS.md
-**/CLAUDE.md
-**/.claude
-**/.cursor
-**/PLAN.md
-**/.claude-sessions
-**/.omc
-
-.omx/
+# Emacs backup files
+*~

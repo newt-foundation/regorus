@@ -1,131 +1,141 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-use crate::{
-    rvm::{instructions::Instruction, program::Program},
-    value::Value,
-};
-use alloc::{string::String, vec::Vec};
+use crate::rvm::instructions::Instruction;
+use crate::rvm::program::Program;
+use crate::value::Value;
+use alloc::string::String;
 use core::convert::TryFrom as _;
 
-use super::{
-    dispatch::InstructionOutcome,
-    errors::{Result, VmError},
-    execution_model::{
-        ExecutionFrame, ExecutionMode, ExecutionState, FrameKind, RuleFrameData, RuleFramePhase,
-        SuspendReason,
-    },
-    machine::RegoVM,
+use super::dispatch::InstructionOutcome;
+use super::errors::{Result, VmError};
+use super::execution_model::{
+    ExecutionFrame, ExecutionMode, ExecutionState, FrameKind, RuleFrameData, RuleFramePhase,
+    SuspendReason,
 };
+use super::machine::RegoVM;
 
 impl RegoVM {
     pub fn execute(&mut self) -> Result<Value> {
-        match self.execution_mode {
-            ExecutionMode::RunToCompletion => self.execute_run_to_completion(),
-            ExecutionMode::Suspendable => self.execute_suspendable(),
-        }
+        crate::utils::limits::without_memory_budget_scope(|| {
+            Self::ensure_memory_budget_execution_mode()?;
+            self.execution_mode = self.next_execution_mode;
+            match self.execution_mode {
+                ExecutionMode::RunToCompletion => self.execute_run_to_completion(),
+                ExecutionMode::Suspendable => self.execute_suspendable(),
+            }
+        })
     }
 
     pub fn execute_entry_point_by_index(&mut self, index: usize) -> Result<Value> {
-        let entry_points: Vec<(String, usize)> = self
-            .program
-            .entry_points
-            .iter()
-            .map(|(name, pc)| (name.clone(), *pc))
-            .collect();
+        crate::utils::limits::without_memory_budget_scope(|| {
+            Self::ensure_memory_budget_execution_mode()?;
+            let (entry_point_name, entry_point_pc) = {
+                let (name, &pc) = self.program.entry_points.get_index(index).ok_or(
+                    VmError::InvalidEntryPointIndex {
+                        index,
+                        max_index: self.program.entry_points.len().saturating_sub(1),
+                        pc: self.pc,
+                    },
+                )?;
+                (name.clone(), pc)
+            };
 
-        if index >= entry_points.len() {
-            return Err(VmError::InvalidEntryPointIndex {
-                index,
-                max_index: entry_points.len().saturating_sub(1),
-                pc: self.pc,
-            });
-        }
+            if entry_point_pc >= self.program.instructions.len() {
+                return Err(VmError::EntryPointPcOutOfBounds {
+                    pc: entry_point_pc,
+                    instruction_count: self.program.instructions.len(),
+                    entry_point: entry_point_name,
+                });
+            }
 
-        let &(ref entry_point_name, entry_point_pc) =
-            entry_points
-                .get(index)
-                .ok_or(VmError::InvalidEntryPointIndex {
-                    index,
-                    max_index: entry_points.len().saturating_sub(1),
-                    pc: self.pc,
-                })?;
+            self.execution_mode = self.next_execution_mode;
+            match self.execution_mode {
+                ExecutionMode::RunToCompletion => {
+                    let result = (|| {
+                        self.reset_run_to_completion_state()?;
+                        self.reset_execution_timer_state();
+                        self.validate_vm_state()?;
+                        let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
+                            VmError::EntryPointPcOutOfBounds {
+                                pc: entry_point_pc,
+                                instruction_count: self.program.instructions.len(),
+                                entry_point: entry_point_name.clone(),
+                            }
+                        })?;
 
-        if entry_point_pc >= self.program.instructions.len() {
-            return Err(VmError::EntryPointPcOutOfBounds {
-                pc: entry_point_pc,
-                instruction_count: self.program.instructions.len(),
-                entry_point: entry_point_name.clone(),
-            });
-        }
-
-        match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.reset_execution_state();
-                self.reset_execution_timer_state();
-
-                self.validate_vm_state()?;
-                let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
-                    VmError::EntryPointPcOutOfBounds {
-                        pc: entry_point_pc,
-                        instruction_count: self.program.instructions.len(),
-                        entry_point: entry_point_name.clone(),
+                        self.check_initial_memory_limit()?;
+                        let result = self
+                            .jump_to(entry_point_pc_u32)
+                            .map_err(|err| self.apply_memory_budget_precedence(err))?;
+                        self.check_memory_budget()?;
+                        Ok(result)
+                    })();
+                    match result {
+                        Ok(value) => {
+                            self.finish_implicit_memory_budget_execution();
+                            Ok(value)
+                        }
+                        Err(err) => Err(self.fail_run_to_completion(err)),
                     }
-                })?;
-
-                self.jump_to(entry_point_pc_u32)
+                }
+                ExecutionMode::Suspendable => self.execute_suspendable_entry(entry_point_pc),
             }
-            ExecutionMode::Suspendable => {
-                self.reset_execution_state();
-                self.reset_execution_timer_state();
-
-                self.validate_vm_state()?;
-                self.execute_suspendable_entry(entry_point_pc)
-            }
-        }
+        })
     }
 
     pub fn execute_entry_point_by_name(&mut self, name: &str) -> Result<Value> {
-        let entry_point_pc =
-            self.program
-                .get_entry_point(name)
-                .ok_or_else(|| VmError::EntryPointNotFound {
-                    name: String::from(name),
-                    available: self.program.entry_points.keys().cloned().collect(),
-                    pc: self.pc,
-                })?;
+        crate::utils::limits::without_memory_budget_scope(|| {
+            Self::ensure_memory_budget_execution_mode()?;
+            let entry_point_pc =
+                self.program
+                    .get_entry_point(name)
+                    .ok_or_else(|| VmError::EntryPointNotFound {
+                        name: String::from(name),
+                        available: self.program.entry_points.keys().cloned().collect(),
+                        pc: self.pc,
+                    })?;
 
-        if entry_point_pc >= self.program.instructions.len() {
-            return Err(VmError::EntryPointPcOutOfBounds {
-                pc: entry_point_pc,
-                instruction_count: self.program.instructions.len(),
-                entry_point: String::from(name),
-            });
-        }
+            if entry_point_pc >= self.program.instructions.len() {
+                return Err(VmError::EntryPointPcOutOfBounds {
+                    pc: entry_point_pc,
+                    instruction_count: self.program.instructions.len(),
+                    entry_point: String::from(name),
+                });
+            }
 
-        match self.execution_mode {
-            ExecutionMode::RunToCompletion => {
-                self.reset_execution_state();
-                self.reset_execution_timer_state();
+            self.execution_mode = self.next_execution_mode;
+            match self.execution_mode {
+                ExecutionMode::RunToCompletion => {
+                    let result = (|| {
+                        self.reset_run_to_completion_state()?;
+                        self.reset_execution_timer_state();
+                        self.validate_vm_state()?;
+                        let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
+                            VmError::EntryPointPcOutOfBounds {
+                                pc: entry_point_pc,
+                                instruction_count: self.program.instructions.len(),
+                                entry_point: String::from(name),
+                            }
+                        })?;
 
-                self.validate_vm_state()?;
-                let entry_point_pc_u32 = u32::try_from(entry_point_pc).map_err(|_| {
-                    VmError::EntryPointPcOutOfBounds {
-                        pc: entry_point_pc,
-                        instruction_count: self.program.instructions.len(),
-                        entry_point: String::from(name),
+                        self.check_initial_memory_limit()?;
+                        let result = self
+                            .jump_to(entry_point_pc_u32)
+                            .map_err(|err| self.apply_memory_budget_precedence(err))?;
+                        self.check_memory_budget()?;
+                        Ok(result)
+                    })();
+                    match result {
+                        Ok(value) => {
+                            self.finish_implicit_memory_budget_execution();
+                            Ok(value)
+                        }
+                        Err(err) => Err(self.fail_run_to_completion(err)),
                     }
-                })?;
-
-                self.jump_to(entry_point_pc_u32)
+                }
+                ExecutionMode::Suspendable => self.execute_suspendable_entry(entry_point_pc),
             }
-            ExecutionMode::Suspendable => {
-                self.reset_execution_state();
-                self.reset_execution_timer_state();
-
-                self.validate_vm_state()?;
-                self.execute_suspendable_entry(entry_point_pc)
-            }
-        }
+        })
     }
 
     pub(super) fn jump_to(&mut self, target: u32) -> Result<Value> {
@@ -133,6 +143,11 @@ impl RegoVM {
         let target = self.convert_pc(target, "jump target")?;
         self.pc = target;
         while self.pc < program.instructions.len() {
+            // Per-instruction sanity check: every iteration of the dispatch
+            // loop must re-enter with the VM in a Running/Ready state and the
+            // working data structures coherent.
+            #[cfg(debug_assertions)]
+            self.assert_vm_invariants();
             self.memory_check()?;
             if self.executed_instructions >= self.max_instructions {
                 return Err(VmError::InstructionLimitExceeded {
@@ -174,49 +189,153 @@ impl RegoVM {
     }
 
     fn execute_run_to_completion(&mut self) -> Result<Value> {
-        self.reset_execution_state();
-        self.reset_execution_timer_state();
-        self.execution_state = ExecutionState::Running;
-        match self.jump_to(0_u32) {
+        let result = (|| {
+            self.reset_run_to_completion_state()?;
+            self.reset_execution_timer_state();
+            self.execution_state = ExecutionState::Running;
+            self.validate_program_tree()?;
+            self.check_initial_memory_limit()?;
+            self.jump_to(0_u32)
+                .map_err(|err| self.apply_memory_budget_precedence(err))
+                .and_then(|value| {
+                    self.check_memory_budget()?;
+                    Ok(value)
+                })
+        })();
+        match result {
             Ok(value) => {
                 self.execution_state = ExecutionState::Completed {
                     result: value.clone(),
                 };
+                self.finish_implicit_memory_budget_execution();
                 Ok(value)
             }
-            Err(err) => {
-                self.execution_state = ExecutionState::Error { error: err.clone() };
-                Err(err)
-            }
+            Err(err) => Err(self.fail_run_to_completion(err)),
         }
     }
 
     fn execute_suspendable(&mut self) -> Result<Value> {
-        self.reset_execution_state();
-        self.reset_execution_timer_state();
-        self.execution_state = ExecutionState::Running;
-        match self.run_stackless_from(0) {
-            Ok(result) => Ok(result),
-            Err(err) => {
-                self.execution_state = ExecutionState::Error { error: err.clone() };
-                Err(err)
-            }
-        }
+        self.execute_new_suspendable_execution(0, false)
     }
 
     fn execute_suspendable_entry(&mut self, entry_point_pc: usize) -> Result<Value> {
-        self.execution_state = ExecutionState::Running;
-        self.reset_execution_timer_state();
-        match self.run_stackless_from(entry_point_pc) {
-            Ok(result) => Ok(result),
-            Err(err) => {
-                self.execution_state = ExecutionState::Error { error: err.clone() };
-                Err(err)
+        self.execute_new_suspendable_execution(entry_point_pc, true)
+    }
+
+    fn execute_new_suspendable_execution(
+        &mut self,
+        start_pc: usize,
+        validate_vm_state: bool,
+    ) -> Result<Value> {
+        self.release_previous_execution_state();
+        #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+        self.begin_suspendable_memory_budget_execution();
+        let run = |vm: &mut Self| {
+            vm.initialize_execution_state();
+            #[cfg(debug_assertions)]
+            vm.debug_assert_state_is_clean();
+            vm.execution_state = ExecutionState::Running;
+            vm.reset_execution_timer_state();
+
+            vm.pc = start_pc;
+            let result = (|| {
+                vm.validate_program_tree()?;
+                if validate_vm_state {
+                    vm.validate_vm_state()?;
+                }
+                vm.check_initial_memory_limit()
+            })()
+            .and_then(|()| vm.run_stackless_from(start_pc))
+            .and_then(|value| {
+                vm.check_memory_budget()?;
+                Ok(value)
+            });
+            match result {
+                Ok(value) => {
+                    #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+                    if !vm.ffi_memory_budget_scope_active
+                        && !matches!(vm.execution_state, ExecutionState::Suspended { .. })
+                    {
+                        vm.finish_active_memory_budget_execution();
+                    }
+                    Ok(value)
+                }
+                Err(err) => {
+                    let err = vm.apply_memory_budget_precedence(err);
+                    Err(vm.fail_initial_suspendable_execution(err))
+                }
             }
+        };
+
+        #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+        {
+            self.with_suspendable_memory_budget_scope(run)
+        }
+        #[cfg(any(miri, not(feature = "allocator-memory-limits")))]
+        {
+            run(self)
         }
     }
 
     pub fn resume(&mut self, resume_value: Option<Value>) -> Result<Value> {
+        Self::ensure_memory_budget_resume_supported()?;
+        #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+        {
+            if self.ffi_memory_budget_scope_active {
+                self.resume_in_memory_budget_scope(resume_value)
+            } else {
+                self.with_suspendable_memory_budget_scope(|vm| {
+                    vm.resume_in_memory_budget_scope(resume_value)
+                })
+            }
+        }
+        #[cfg(any(miri, not(feature = "allocator-memory-limits")))]
+        {
+            crate::utils::limits::without_memory_budget_scope(|| {
+                self.resume_in_memory_budget_scope(resume_value)
+            })
+        }
+    }
+
+    fn resume_in_memory_budget_scope(&mut self, resume_value: Option<Value>) -> Result<Value> {
+        let result = self
+            .resume_suspendable_segment(resume_value)
+            .and_then(|value| {
+                self.check_memory_budget()?;
+                Ok(value)
+            });
+        match result {
+            Ok(value) => {
+                #[cfg(all(feature = "allocator-memory-limits", not(miri)))]
+                if !self.ffi_memory_budget_scope_active
+                    && !matches!(self.execution_state, ExecutionState::Suspended { .. })
+                {
+                    self.finish_active_memory_budget_execution();
+                }
+                Ok(value)
+            }
+            Err(err)
+                if matches!(
+                    err,
+                    VmError::MissingResumeValue { .. }
+                        | VmError::UnexpectedResumeValue { .. }
+                        | VmError::InvalidResumeState { .. }
+                ) =>
+            {
+                Err(err)
+            }
+            Err(err) => {
+                let err = self.apply_memory_budget_precedence(err);
+                Err(self.fail_suspendable_execution(err))
+            }
+        }
+    }
+
+    fn resume_suspendable_segment(&mut self, resume_value: Option<Value>) -> Result<Value> {
+        // Precondition is enforced below by returning `VmError::InvalidResumeState`
+        // for any non-`Suspended` state. A `debug_assert!` here would diverge
+        // debug vs release behavior and, when invoked via FFI, would trip the
+        // unwind guard and poison the engine on a recoverable misuse.
         let (reason, mut last_result) = match self.execution_state.clone() {
             ExecutionState::Suspended {
                 reason,
@@ -254,6 +373,7 @@ impl RegoVM {
                 if let Some(slot) = self.registers.get_mut(dest_index) {
                     *slot = value;
                 }
+                self.check_memory_budget()?;
             }
             other_reason => {
                 if resume_value.is_some() {
@@ -305,6 +425,10 @@ impl RegoVM {
 
     fn run_stackless_loop(&mut self, program: &Program, last_result: &mut Value) -> Result<()> {
         while !self.execution_stack.is_empty() {
+            // Per-instruction sanity check: see `assert_vm_invariants` for the
+            // exact contract. Compiled out in release.
+            #[cfg(debug_assertions)]
+            self.assert_vm_invariants();
             self.memory_check()?;
             self.frame_pc_overridden = false;
             let should_finalize_rule = self.execution_stack.last().is_some_and(|frame| {
@@ -586,7 +710,15 @@ impl RegoVM {
         Ok(())
     }
 
-    fn handle_instruction_error(&mut self, _err: VmError, last_result: &mut Value) -> Result<bool> {
+    fn handle_instruction_error(&mut self, err: VmError, last_result: &mut Value) -> Result<bool> {
+        // Resource-limit errors must never be absorbed by rule evaluation.
+        // They represent engine-level constraints, not rule-level failures.
+        // Returning Ok(false) causes the caller to clear execution_stack and
+        // propagate the error, terminating the evaluation entirely.
+        if self.is_fatal_vm_error(&err) {
+            return Ok(false);
+        }
+
         if let Some(frame) = self.execution_stack.pop() {
             match frame.kind {
                 FrameKind::Rule(mut data) => {
@@ -652,5 +784,278 @@ impl RegoVM {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::errors::VmError;
+    use super::{ExecutionMode, ExecutionState, Instruction, Program, RegoVM, Value};
+    use alloc::sync::Arc;
+
+    fn two_instruction_program() -> Arc<Program> {
+        let mut program = Program::new();
+        program.add_instruction(Instruction::LoadTrue { dest: 0 }, None);
+        program.add_instruction(Instruction::Return { value: 0 }, None);
+        Arc::new(program)
+    }
+
+    fn two_instruction_program_with_entry_point() -> Arc<Program> {
+        let mut program = Program::new();
+        program.add_instruction(Instruction::LoadTrue { dest: 0 }, None);
+        program.add_instruction(Instruction::Return { value: 0 }, None);
+        program.entry_points.insert("entry".into(), 0);
+        Arc::new(program)
+    }
+
+    fn host_await_program() -> Arc<Program> {
+        let mut program = Program::new();
+        program.add_instruction(Instruction::LoadInput { dest: 0 }, None);
+        program.add_instruction(Instruction::LoadNull { dest: 1 }, None);
+        program.add_instruction(
+            Instruction::HostAwait {
+                dest: 0,
+                arg: 0,
+                id: 1,
+            },
+            None,
+        );
+        program.add_instruction(Instruction::Return { value: 0 }, None);
+        Arc::new(program)
+    }
+
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn execution_loops_check_memory_once_per_dispatched_instruction() {
+        let program = two_instruction_program();
+
+        for mode in [ExecutionMode::RunToCompletion, ExecutionMode::Suspendable] {
+            let mut vm = RegoVM::new();
+            vm.set_execution_mode(mode);
+            vm.load_program(program.clone());
+
+            assert_eq!(vm.execute().expect("execution succeeds"), Value::Bool(true));
+            assert_eq!(vm.executed_instructions, 2);
+            assert_eq!(vm.memory_check_count, vm.executed_instructions);
+        }
+    }
+
+    #[test]
+    fn instruction_budget_exact_boundaries_are_consistent_across_modes() {
+        let program = two_instruction_program();
+        let default_vm = RegoVM::new();
+        assert_eq!(default_vm.max_instructions, 25_000);
+
+        for mode in [ExecutionMode::RunToCompletion, ExecutionMode::Suspendable] {
+            for (limit, expected_executed, expected_pc) in [(0, 0, 0), (1, 1, 1)] {
+                let mut vm = RegoVM::new();
+                vm.set_execution_mode(mode);
+                vm.set_max_instructions(limit);
+                vm.load_program(program.clone());
+
+                assert_eq!(
+                    vm.execute(),
+                    Err(VmError::InstructionLimitExceeded {
+                        limit,
+                        executed: expected_executed,
+                        pc: expected_pc,
+                    })
+                );
+            }
+
+            for limit in [2, 3] {
+                let mut vm = RegoVM::new();
+                vm.set_execution_mode(mode);
+                vm.set_max_instructions(limit);
+                vm.load_program(program.clone());
+
+                assert_eq!(vm.execute(), Ok(Value::Bool(true)));
+                assert_eq!(vm.executed_instructions, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn instruction_budget_entry_points_reset_consumption_in_both_modes() {
+        for mode in [ExecutionMode::RunToCompletion, ExecutionMode::Suspendable] {
+            for by_name in [true, false] {
+                let mut vm = RegoVM::new();
+                vm.set_execution_mode(mode);
+                vm.set_max_instructions(1);
+                vm.load_program(two_instruction_program_with_entry_point());
+
+                let first = if by_name {
+                    vm.execute_entry_point_by_name("entry")
+                } else {
+                    vm.execute_entry_point_by_index(0)
+                };
+                assert_eq!(
+                    first,
+                    Err(VmError::InstructionLimitExceeded {
+                        limit: 1,
+                        executed: 1,
+                        pc: 1,
+                    })
+                );
+
+                vm.set_max_instructions(2);
+                let second = if by_name {
+                    vm.execute_entry_point_by_name("entry")
+                } else {
+                    vm.execute_entry_point_by_index(0)
+                };
+                assert_eq!(second, Ok(Value::Bool(true)));
+                assert_eq!(vm.executed_instructions, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn instruction_budget_counts_a_dispatched_failing_instruction() {
+        let mut program = Program::new();
+        program.add_instruction(Instruction::LoadTrue { dest: 0 }, None);
+        program.add_instruction(Instruction::LoadNull { dest: 1 }, None);
+        program.add_instruction(
+            Instruction::Lt {
+                dest: 2,
+                left: 0,
+                right: 1,
+            },
+            None,
+        );
+
+        let mut vm = RegoVM::new();
+        vm.set_strict_builtin_errors(true);
+        vm.load_program(Arc::new(program));
+
+        let result = vm.execute();
+        assert!(matches!(
+            result,
+            Err(VmError::ArithmeticError { pc: 2, .. })
+        ));
+        assert_eq!(vm.executed_instructions, 3);
+    }
+
+    #[test]
+    fn load_program_resets_consumption_after_a_successful_execution() {
+        let program = two_instruction_program();
+        let mut vm = RegoVM::new();
+        vm.set_max_instructions(2);
+        vm.load_program(program.clone());
+
+        assert_eq!(vm.execute(), Ok(Value::Bool(true)));
+        assert_eq!(vm.executed_instructions, 2);
+
+        vm.load_program(program);
+        assert_eq!(vm.executed_instructions, 0);
+        assert_eq!(vm.max_instructions, 2);
+        assert_eq!(vm.execute(), Ok(Value::Bool(true)));
+        assert_eq!(vm.executed_instructions, 2);
+    }
+
+    #[test]
+    fn successful_execution_can_be_followed_by_a_fresh_execution() {
+        let program = two_instruction_program();
+        let mut vm = RegoVM::new();
+        vm.set_max_instructions(2);
+        vm.load_program(program);
+
+        assert_eq!(vm.execute(), Ok(Value::Bool(true)));
+        assert_eq!(vm.executed_instructions, 2);
+        assert_eq!(vm.execute(), Ok(Value::Bool(true)));
+        assert_eq!(vm.executed_instructions, 2);
+    }
+
+    #[test]
+    fn instruction_budget_rejects_the_next_suspendable_instruction_without_executing_it() {
+        let mut program = Program::new();
+        program.add_instruction(Instruction::LoadTrue { dest: 0 }, None);
+        program.add_instruction(Instruction::LoadFalse { dest: 1 }, None);
+        program.add_instruction(Instruction::Return { value: 0 }, None);
+
+        let mut vm = RegoVM::new();
+        vm.set_execution_mode(ExecutionMode::Suspendable);
+        vm.set_max_instructions(1);
+        vm.load_program(Arc::new(program));
+
+        assert_eq!(
+            vm.execute(),
+            Err(VmError::InstructionLimitExceeded {
+                limit: 1,
+                executed: 1,
+                pc: 1,
+            })
+        );
+        assert_eq!(vm.get_registers().get(1), Some(&Value::Undefined));
+    }
+
+    #[test]
+    fn instruction_budget_replacement_preserves_consumption_while_suspended() {
+        let program = host_await_program();
+
+        let mut lowered = RegoVM::new();
+        lowered.set_execution_mode(ExecutionMode::Suspendable);
+        lowered.set_max_instructions(3);
+        lowered.load_program(program.clone());
+        assert_eq!(lowered.execute(), Ok(Value::Undefined));
+        assert_eq!(lowered.executed_instructions, 3);
+        lowered.set_max_instructions(3);
+        assert_eq!(
+            lowered.resume(Some(Value::Bool(true))),
+            Err(VmError::InstructionLimitExceeded {
+                limit: 3,
+                executed: 3,
+                pc: 3,
+            })
+        );
+        assert!(matches!(
+            lowered.execution_state(),
+            ExecutionState::Error {
+                error: VmError::InstructionLimitExceeded { .. }
+            }
+        ));
+        assert!(matches!(
+            lowered.resume(Some(Value::Bool(true))),
+            Err(VmError::InvalidResumeState { .. })
+        ));
+
+        lowered.set_max_instructions(4);
+        lowered.set_input(Value::String("second".into()));
+        assert_eq!(lowered.execute(), Ok(Value::Undefined));
+        assert_eq!(
+            lowered.get_host_await_argument(),
+            Some(&Value::String("second".into()))
+        );
+        assert_eq!(
+            lowered.resume(Some(Value::Bool(true))),
+            Ok(Value::Bool(true))
+        );
+
+        let mut lowered_below = RegoVM::new();
+        lowered_below.set_execution_mode(ExecutionMode::Suspendable);
+        lowered_below.set_max_instructions(3);
+        lowered_below.load_program(host_await_program());
+        assert_eq!(lowered_below.execute(), Ok(Value::Undefined));
+        lowered_below.set_max_instructions(2);
+        assert_eq!(
+            lowered_below.resume(Some(Value::Bool(true))),
+            Err(VmError::InstructionLimitExceeded {
+                limit: 2,
+                executed: 3,
+                pc: 3,
+            })
+        );
+
+        let mut raised = RegoVM::new();
+        raised.set_execution_mode(ExecutionMode::Suspendable);
+        raised.set_max_instructions(3);
+        raised.load_program(program);
+        assert_eq!(raised.execute(), Ok(Value::Undefined));
+        raised.set_max_instructions(4);
+        assert_eq!(
+            raised.resume(Some(Value::Bool(true))),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(raised.executed_instructions, 4);
     }
 }

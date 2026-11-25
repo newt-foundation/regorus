@@ -1,18 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{
-    format,
-    string::{String, ToString as _},
-    vec::Vec,
-};
-use bincode::{
-    config::standard,
-    serde::{decode_from_slice, encode_to_vec},
-};
+use alloc::format;
+use alloc::string::{String, ToString as _};
+use alloc::vec::Vec;
+use postcard::{take_from_bytes, to_allocvec};
+use serde::de::DeserializeOwned;
 
 use super::{DeserializationResult, Program};
-use crate::value::Value;
 
 use super::value::{
     binaries_to_values, binary_to_value, BinaryValue, BinaryValueRef, BinaryValueSlice,
@@ -73,29 +68,39 @@ impl Program {
             .ok_or_else(|| format!("Cannot get slice [{}..{}]", start, end))
     }
 
+    fn deserialize_section<T: DeserializeOwned>(data: &[u8], name: &str) -> Result<T, String> {
+        let (value, remaining) =
+            take_from_bytes(data).map_err(|e| format!("{name} deserialization failed: {e}"))?;
+        if !remaining.is_empty() {
+            return Err(format!("{name} contains unexpected trailing data"));
+        }
+        Ok(value)
+    }
+
     /// Serialize program to binary format.
-    /// Uses pure bincode for all sections now that `Value` supports serde.
+    /// Uses postcard for all sections now that `Value` supports serde.
     pub fn serialize_binary(&self) -> Result<Vec<u8>, String> {
         self.validate_limits()?;
+        self.validate_serialization_depth()?;
 
         let mut buffer = Vec::new();
 
         buffer.extend_from_slice(&Self::MAGIC);
         buffer.extend_from_slice(&Self::SERIALIZATION_VERSION.to_le_bytes());
 
-        let entry_points_bin = encode_to_vec(&self.entry_points, standard())
-            .map_err(|e| format!("Entry points bincode serialization failed: {}", e))?;
+        let entry_points_bin = to_allocvec(&self.entry_points)
+            .map_err(|e| format!("Entry points postcard serialization failed: {}", e))?;
 
-        let sources_bin = encode_to_vec(&self.sources, standard())
-            .map_err(|e| format!("Sources bincode serialization failed: {}", e))?;
+        let sources_bin = to_allocvec(&self.sources)
+            .map_err(|e| format!("Sources postcard serialization failed: {}", e))?;
 
-        let literals_bin = encode_to_vec(BinaryValueSlice(self.literals.as_slice()), standard())
-            .map_err(|e| format!("Literals bincode serialization failed: {}", e))?;
+        let literals_bin = to_allocvec(&BinaryValueSlice(self.literals.as_slice()))
+            .map_err(|e| format!("Literals postcard serialization failed: {}", e))?;
 
-        let rule_tree_bin = encode_to_vec(BinaryValueRef(&self.rule_tree), standard())
-            .map_err(|e| format!("Rule tree bincode serialization failed: {}", e))?;
+        let rule_tree_bin = to_allocvec(&BinaryValueRef(&self.rule_tree))
+            .map_err(|e| format!("Rule tree postcard serialization failed: {}", e))?;
 
-        let binary_data = encode_to_vec(self, standard())
+        let binary_data = to_allocvec(self)
             .map_err(|e| format!("Program structure binary serialization failed: {}", e))?;
 
         buffer.extend_from_slice(
@@ -135,7 +140,8 @@ impl Program {
         Ok(buffer)
     }
 
-    /// Deserialize program from binary format with version checking
+    /// Deserialize a program, rejecting corrupt current-version sections and unsupported limits.
+    /// Legacy formats and unresolved builtins return `Partial` and require recompilation.
     pub fn deserialize_binary(data: &[u8]) -> Result<DeserializationResult, String> {
         if data.len() < 9 {
             return Err("Data too short for header".to_string());
@@ -156,128 +162,13 @@ impl Program {
         }
 
         match version {
-            1 => {
-                if data.len() < 25 {
-                    return Err("Data too short for header".to_string());
-                }
-
-                let entry_points_len = Self::read_u32_as_usize(data, 8)?;
-                let sources_len = Self::read_u32_as_usize(data, 12)?;
-                let rego_v0 = Self::read_byte(data, 16)? != 0;
-
-                let mut offset = OffsetTracker::new(17);
-                let entry_points_start = offset.advance(entry_points_len)?;
-                let sources_start = offset.advance(sources_len)?;
-                let binary_len_start = offset.current();
-
-                if data.len() < binary_len_start.checked_add(4).ok_or("Offset overflow")? {
-                    return Err("Data too short for binary length".to_string());
-                }
-
-                let binary_len = Self::read_u32_as_usize(data, binary_len_start)?;
-
-                let mut binary_offset = OffsetTracker::new(binary_len_start);
-                binary_offset.advance(4)?; // Skip the binary_len u32
-                let binary_start = binary_offset.advance(binary_len)?;
-                let json_start = binary_offset.current();
-
-                if data.len() < json_start.checked_add(4).ok_or("Offset overflow")? {
-                    return Err("Data too short for JSON length".to_string());
-                }
-
-                let json_len = Self::read_u32_as_usize(data, json_start)?;
-
-                let total_expected = json_start
-                    .checked_add(4)
-                    .and_then(|v| v.checked_add(json_len))
-                    .ok_or("Offset overflow")?;
-                if data.len() < total_expected {
-                    return Err("Data truncated".to_string());
-                }
-
-                let json_end = json_start
-                    .checked_add(4)
-                    .and_then(|v| v.checked_add(json_len))
-                    .ok_or("Offset overflow")?;
-
-                let entry_points = decode_from_slice(
-                    Self::get_slice(data, entry_points_start, sources_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
-
-                let sources = decode_from_slice(
-                    Self::get_slice(data, sources_start, binary_len_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Sources deserialization failed: {}", e))?;
-
-                let mut needs_recompilation = false;
-
-                let mut program = match decode_from_slice::<Program, _>(
-                    Self::get_slice(data, binary_start, json_start)?,
-                    standard(),
-                ) {
-                    Ok((prog, _)) => prog,
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Program::new()
-                    }
-                };
-
-                let (literals, rule_tree) =
-                    match serde_json::from_slice::<serde_json::Value>(Self::get_slice(
-                        data,
-                        json_start.checked_add(4).ok_or("Offset overflow")?,
-                        json_end,
-                    )?) {
-                        Ok(combined) => {
-                            let literals = combined
-                                .get("literals")
-                                .and_then(|v| serde_json::from_value::<Vec<Value>>(v.clone()).ok())
-                                .unwrap_or_else(|| {
-                                    needs_recompilation = true;
-                                    Vec::new()
-                                });
-
-                            let rule_tree = combined
-                                .get("rule_tree")
-                                .and_then(|v| serde_json::from_value::<Value>(v.clone()).ok())
-                                .unwrap_or_else(|| {
-                                    needs_recompilation = true;
-                                    Value::new_object()
-                                });
-
-                            (literals, rule_tree)
-                        }
-                        Err(_e) => {
-                            needs_recompilation = true;
-                            (Vec::new(), Value::new_object())
-                        }
-                    };
-
-                program.entry_points = entry_points;
-                program.sources = sources;
-                program.literals = literals;
-                program.rule_tree = rule_tree;
-                program.rego_v0 = rego_v0;
-                program.needs_recompilation = needs_recompilation;
-
-                if !program.builtin_info_table.is_empty() {
-                    if let Err(_e) = program.initialize_resolved_builtins() {
-                        program.needs_recompilation = true;
-                    }
-                }
-
-                if program.needs_recompilation {
-                    Ok(DeserializationResult::Partial(program))
-                } else {
-                    Ok(DeserializationResult::Complete(program))
-                }
+            1..=5 => {
+                let mut program = Program::new();
+                program.needs_recompilation = true;
+                program.rego_v0 = Self::legacy_rego_v0(data, version).unwrap_or(false);
+                Ok(DeserializationResult::Partial(program))
             }
-            2 | 3 => {
+            6 => {
                 if data.len() < 29 {
                     return Err("Data too short for header".to_string());
                 }
@@ -286,7 +177,11 @@ impl Program {
                 let sources_len = Self::read_u32_as_usize(data, 12)?;
                 let literals_len = Self::read_u32_as_usize(data, 16)?;
                 let rule_tree_len = Self::read_u32_as_usize(data, 20)?;
-                let rego_v0 = Self::read_byte(data, 24)? != 0;
+                let rego_v0 = match Self::read_byte(data, 24)? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err("Invalid rego_v0 flag".to_string()),
+                };
 
                 let mut offset = OffsetTracker::new(25);
                 let entry_points_start = offset.advance(entry_points_len)?;
@@ -309,74 +204,42 @@ impl Program {
                 if data.len() < binary_end {
                     return Err("Data truncated".to_string());
                 }
+                if data.len() > binary_end {
+                    return Err("Unexpected trailing data".to_string());
+                }
 
-                let entry_points = decode_from_slice(
+                let entry_points = Self::deserialize_section(
                     Self::get_slice(data, entry_points_start, sources_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Entry points deserialization failed: {}", e))?;
-
-                let sources = decode_from_slice(
+                    "Entry points",
+                )?;
+                let sources = Self::deserialize_section(
                     Self::get_slice(data, sources_start, literals_start)?,
-                    standard(),
-                )
-                .map(|(value, _)| value)
-                .map_err(|e| format!("Sources deserialization failed: {}", e))?;
+                    "Sources",
+                )?;
 
-                let mut needs_recompilation = false;
-
-                let literals = match decode_from_slice::<Vec<BinaryValue>, _>(
+                // Current-version decode failures are corruption, not a legacy format.
+                let literals = binaries_to_values(Self::deserialize_section::<Vec<BinaryValue>>(
                     Self::get_slice(data, literals_start, rule_tree_start)?,
-                    standard(),
-                ) {
-                    Ok((binary_literals, _)) => match binaries_to_values(binary_literals) {
-                        Ok(values) => values,
-                        Err(_e) => {
-                            needs_recompilation = true;
-                            Vec::new()
-                        }
-                    },
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Vec::new()
-                    }
-                };
-
-                let rule_tree = match decode_from_slice::<BinaryValue, _>(
+                    "Literals",
+                )?)?;
+                let rule_tree = binary_to_value(Self::deserialize_section::<BinaryValue>(
                     Self::get_slice(data, rule_tree_start, binary_len_start)?,
-                    standard(),
-                ) {
-                    Ok((binary_tree, _)) => match binary_to_value(binary_tree) {
-                        Ok(value) => value,
-                        Err(_e) => {
-                            needs_recompilation = true;
-                            Value::new_object()
-                        }
-                    },
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Value::new_object()
-                    }
-                };
-
-                let mut program = match decode_from_slice::<Program, _>(
+                    "Rule tree",
+                )?)?;
+                let mut program = Self::deserialize_section::<Program>(
                     Self::get_slice(data, binary_start, binary_end)?,
-                    standard(),
-                ) {
-                    Ok((prog, _)) => prog,
-                    Err(_e) => {
-                        needs_recompilation = true;
-                        Program::new()
-                    }
-                };
+                    "Program structure",
+                )?;
 
                 program.entry_points = entry_points;
                 program.sources = sources;
                 program.literals = literals;
                 program.rule_tree = rule_tree;
                 program.rego_v0 = rego_v0;
-                program.needs_recompilation = needs_recompilation;
+                program.needs_recompilation = false;
+
+                // Apply the same supported bounds as compilation and serialization.
+                program.validate_limits()?;
 
                 if !program.builtin_info_table.is_empty() {
                     if let Err(_e) = program.initialize_resolved_builtins() {
@@ -408,8 +271,266 @@ impl Program {
         let version = Self::read_u32(data, 4).ok();
 
         match version {
-            Some(1..=3) => Ok(true),
+            Some(1..=6) => Ok(true),
             _ => Ok(false),
+        }
+    }
+
+    fn legacy_rego_v0(data: &[u8], version: u32) -> Option<bool> {
+        match version {
+            1 => data.get(16).map(|value| *value != 0),
+            2..=5 => data.get(24).map(|value| *value != 0),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    #![allow(
+        clippy::arithmetic_side_effects,
+        clippy::as_conversions,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::print_stdout,
+        clippy::unwrap_used
+    )]
+
+    //! The hostile-blob cases the public test surface cannot express: they need the private
+    //! section encoders (`BinaryValueSlice` / `BinaryValueRef`) and they need to bypass
+    //! `serialize_binary`, which refuses to produce an over-limit program in the first place.
+
+    use super::*;
+    use crate::rvm::Instruction;
+    use crate::value::Value;
+
+    /// Bytes before the first section: MAGIC(4) + version(4) + 4 section lengths + rego_v0(1).
+    const HDR: usize = 25;
+
+    struct Sections {
+        entry_points: Vec<u8>,
+        sources: Vec<u8>,
+        literals: Vec<u8>,
+        rule_tree: Vec<u8>,
+        artifact: Vec<u8>,
+    }
+
+    /// Encode the sections exactly as `serialize_binary` does, except that the artifact section is
+    /// taken straight from `to_allocvec`: `serialize_binary` runs `validate_limits()` first and so
+    /// cannot produce an over-limit blob. That refusal is the gap consume has to close itself.
+    fn sections(program: &Program) -> Sections {
+        Sections {
+            entry_points: to_allocvec(&program.entry_points).expect("entry points"),
+            sources: to_allocvec(&program.sources).expect("sources"),
+            literals: to_allocvec(&BinaryValueSlice(program.literals.as_slice()))
+                .expect("literals"),
+            rule_tree: to_allocvec(&BinaryValueRef(&program.rule_tree)).expect("rule tree"),
+            artifact: to_allocvec(program).expect("artifact section"),
+        }
+    }
+
+    fn assemble(sections: &Sections) -> Vec<u8> {
+        let len_of = |section: &Vec<u8>| {
+            u32::try_from(section.len())
+                .expect("section fits in u32")
+                .to_le_bytes()
+        };
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&Program::MAGIC);
+        blob.extend_from_slice(&Program::SERIALIZATION_VERSION.to_le_bytes());
+        for section in [
+            &sections.entry_points,
+            &sections.sources,
+            &sections.literals,
+            &sections.rule_tree,
+        ] {
+            blob.extend_from_slice(&len_of(section));
+        }
+        blob.push(0); // rego_v0 = false
+        for section in [
+            &sections.entry_points,
+            &sections.sources,
+            &sections.literals,
+            &sections.rule_tree,
+        ] {
+            blob.extend_from_slice(section);
+        }
+        blob.extend_from_slice(&len_of(&sections.artifact));
+        blob.extend_from_slice(&sections.artifact);
+        blob
+    }
+
+    fn sample_program() -> Program {
+        let mut program = Program::new();
+        program.entry_points.insert("main".to_string(), 0);
+        program.instructions = alloc::vec![Instruction::LoadNull { dest: 0 }];
+        program.literals = alloc::vec![Value::from(1.5_f64), Value::from("x")];
+        program.rule_tree = Value::from(7_i64);
+        program
+    }
+
+    /// Byte range of each section within an assembled blob.
+    fn literals_range(blob: &[u8]) -> core::ops::Range<usize> {
+        let len_at = |off: usize| {
+            u32::from_le_bytes([blob[off], blob[off + 1], blob[off + 2], blob[off + 3]]) as usize
+        };
+        let literals_start = HDR + len_at(8) + len_at(12);
+        let literals_end = literals_start + len_at(16);
+        literals_start..literals_end
+    }
+
+    #[cfg(target_os = "linux")]
+    fn peak_rss_kb() -> u64 {
+        let status =
+            std::fs::read_to_string("/proc/self/status").expect("read process memory statistics");
+        status
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .and_then(|value| value.split_whitespace().next())
+            })
+            .expect("VmHWM memory statistic")
+            .parse::<u64>()
+            .expect("numeric peak RSS")
+    }
+
+    /// LEB128, the encoding postcard uses for sequence and map lengths.
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = 0x80 | u8::try_from(value & 0x7f).expect("masked nibble fits in u8");
+            value >>= 7;
+            if value == 0 {
+                out.push(byte & 0x7f);
+                return out;
+            }
+            out.push(byte);
+        }
+    }
+
+    /// `validate_limits()` on consume, instructions side. A blob carrying more than
+    /// `MAX_INSTRUCTIONS` instructions cannot be produced by this crate, so it is hand-assembled.
+    /// Instruction addressing uses `u16`, so consume must enforce the same supported table limits.
+    #[test]
+    fn consume_rejects_over_limit_instruction_count() {
+        let mut program = sample_program();
+        program.instructions =
+            alloc::vec![Instruction::LoadNull { dest: 0 }; Program::MAX_INSTRUCTIONS + 1];
+
+        // The produce side already refuses. This is the half that was missing.
+        program
+            .serialize_binary()
+            .expect_err("serialize_binary must keep refusing an over-limit program");
+
+        let err = Program::deserialize_binary(&assemble(&sections(&program)))
+            .expect_err("consume must reject an over-limit instruction count");
+        assert!(err.contains("max instructions"), "unexpected error: {err}");
+    }
+
+    /// `validate_limits()` on consume, literals side: same construction, the literals section is
+    /// the one that overflows.
+    #[test]
+    fn consume_rejects_over_limit_literal_count() {
+        let mut program = sample_program();
+        program.literals = alloc::vec![Value::Null; Program::MAX_LITERALS + 1];
+
+        program
+            .serialize_binary()
+            .expect_err("serialize_binary must keep refusing an over-limit program");
+
+        let err = Program::deserialize_binary(&assemble(&sections(&program)))
+            .expect_err("consume must reject an over-limit literal count");
+        assert!(err.contains("max literals"), "unexpected error: {err}");
+    }
+
+    /// A corrupted literals section must be `Err` at the current version, not `Ok(Partial)` with an
+    /// empty literal table (the pre-fix behaviour substituted `Vec::new()` and set
+    /// `needs_recompilation`, so a caller that ignored the flag evaluated the wrong program).
+    #[test]
+    fn consume_rejects_a_corrupted_literals_section() {
+        let blob = assemble(&sections(&sample_program()));
+        let literals = literals_range(&blob);
+        // Section layout: u32 varint element count, then one `BinaryValue` per literal.
+        assert_eq!(blob[literals.start], 2, "two literals were encoded");
+
+        // (a) an out-of-range variant tag: `value.rs BINARY_VARIANTS` has 11 entries (0..=10).
+        let mut bad_tag = blob.clone();
+        bad_tag[literals.start + 1] = 99;
+        match Program::deserialize_binary(&bad_tag) {
+            Err(err) => std::println!("corrupt literals tag rejected: {err}"),
+            Ok(result) => panic!("corrupt literals tag accepted: {result:?}"),
+        }
+
+        // Teeth: the untouched blob still consumes cleanly.
+        match Program::deserialize_binary(&blob).expect("the intact blob must consume") {
+            DeserializationResult::Complete(program) => {
+                assert_eq!(program.literals.len(), 2);
+                assert!(!program.needs_recompilation);
+            }
+            DeserializationResult::Partial(program) => {
+                panic!(
+                    "intact blob came back Partial (needs_recompilation={})",
+                    program.needs_recompilation
+                )
+            }
+        }
+    }
+
+    /// Attacker-controlled element counts must not be trusted for pre-allocation. Three shapes:
+    /// the entry-points map count, the literals seq count, and the artifact section's first field
+    /// (`Program::instructions`, first in the derive's field order) - each declares
+    /// 4_000_000_000 elements and carries no payload.
+    ///
+    /// On Linux, measure peak RSS in a child process so unrelated tests cannot inflate it.
+    #[test]
+    fn consume_does_not_pre_allocate_from_forged_element_counts() {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("REGORUS_BLOB_RSS_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "rvm::program::serialization::binary::tests::consume_does_not_pre_allocate_from_forged_element_counts",
+                    "--nocapture",
+                ])
+                .env("REGORUS_BLOB_RSS_CHILD", "1")
+                .output()
+                .expect("run isolated forged-count test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "isolated forged-count test failed: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        let honest = sections(&sample_program());
+        let forged_len = varint(4_000_000_000);
+
+        for field in ["entry_points", "literals", "artifact instructions"] {
+            let mut sections = Sections {
+                entry_points: honest.entry_points.clone(),
+                sources: honest.sources.clone(),
+                literals: honest.literals.clone(),
+                rule_tree: honest.rule_tree.clone(),
+                artifact: honest.artifact.clone(),
+            };
+            match field {
+                "entry_points" => sections.entry_points = forged_len.clone(),
+                "literals" => sections.literals = forged_len.clone(),
+                _ => sections.artifact = forged_len.clone(),
+            }
+            let err = Program::deserialize_binary(&assemble(&sections))
+                .expect_err(&format!("{field}: a forged element count must be rejected"));
+            assert!(!err.is_empty(), "{field}: empty error message");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let rss = peak_rss_kb();
+            std::println!("peak RSS after three forged 4_000_000_000 element counts: {rss} kB");
+            assert!(rss < 300_000, "forged element counts peaked at {rss} kB");
         }
     }
 }

@@ -1,21 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{
-    format,
-    string::{String, ToString as _},
-    vec::Vec,
-};
+use alloc::format;
+use alloc::string::{String, ToString as _};
+use alloc::vec::Vec;
 use anyhow::Result as AnyResult;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::types::{BuiltinInfo, ProgramMetadata, RuleInfo, SourceFile, SpanInfo};
-use crate::{
-    builtins::BuiltinFcn,
-    rvm::{instructions::InstructionData, Instruction},
-    value::Value,
-};
+use super::metadata::ProgramMetadata;
+use super::types::{BuiltinInfo, RuleInfo, SourceFile, SpanInfo};
+use crate::builtins::BuiltinFcn;
+use crate::rvm::instructions::InstructionData;
+use crate::rvm::Instruction;
+use crate::value::Value;
 
 /// Complete compiled program containing all execution artifacts
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +71,12 @@ pub struct Program {
     /// Flag indicating that VirtualDataDocumentLookup instruction was used and runtime recursion checking is needed
     pub needs_runtime_recursion_check: bool,
 
-    /// Flag indicating that recompilation is needed due to partial deserialization failure
-    /// This is set to true when the artifact section was successfully read but the extensible
-    /// section failed to deserialize (e.g., due to version incompatibility)
+    /// Flag indicating whether this program contains any HostAwait instruction.
+    /// Clients can use this to decide whether suspendable execution mode is required.
+    #[serde(default)]
+    pub has_host_await: bool,
+
+    /// Flag indicating that a legacy binary format or unresolved builtin requires recompilation.
     #[serde(default)]
     pub needs_recompilation: bool,
 
@@ -88,7 +89,7 @@ pub struct Program {
 
 impl Program {
     /// Current serialization format version
-    pub const SERIALIZATION_VERSION: u32 = 3;
+    pub const SERIALIZATION_VERSION: u32 = 6;
     /// Magic bytes to identify Regorus program files
     pub const MAGIC: [u8; 4] = *b"REGO";
     /// Maximum instructions supported (matches u16 jump targets)
@@ -125,10 +126,13 @@ impl Program {
                 compiled_at: "unknown".to_string(),
                 source_info: "unknown".to_string(),
                 optimization_level: 0,
+                language: String::new(),
+                annotations: alloc::collections::BTreeMap::new(),
             },
             rule_tree: Value::new_object(),
             resolved_builtins: Vec::new(),
             needs_runtime_recursion_check: false,
+            has_host_await: false,
             needs_recompilation: false,
             rego_v0: false, // Default to Rego v1
         }
@@ -136,6 +140,8 @@ impl Program {
 
     /// Validate that the program stays within supported bounds
     pub fn validate_limits(&self) -> Result<(), String> {
+        crate::utils::depth::check_value(&self.rule_tree, Self::MAX_PATH_DEPTH)
+            .map_err(|error| error.to_string())?;
         if self.instructions.len() > Self::MAX_INSTRUCTIONS {
             return Err(format!(
                 "Program exceeds max instructions ({} > {})",
@@ -211,6 +217,18 @@ impl Program {
             }
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn validate_serialization_depth(&self) -> Result<(), String> {
+        for value in self
+            .literals
+            .iter()
+            .chain(self.metadata.annotations.values())
+        {
+            crate::utils::depth::check_value(value, crate::utils::depth::MAX_DEPTH)
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -333,8 +351,19 @@ impl Program {
 
     /// Add instruction with optional span
     pub fn add_instruction(&mut self, instruction: Instruction, span: Option<SpanInfo>) {
+        if matches!(instruction, Instruction::HostAwait { .. }) {
+            self.has_host_await = true;
+        }
         self.instructions.push(instruction);
         self.instruction_spans.push(span);
+    }
+
+    /// Recompute whether HostAwait is present by scanning instructions.
+    pub fn recompute_host_await_presence(&mut self) {
+        self.has_host_await = self
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::HostAwait { .. }));
     }
 
     /// Add literal value and return its index
@@ -397,7 +426,7 @@ impl Program {
         &self.entry_points
     }
 
-    /// Check if recompilation is needed due to partial deserialization failure
+    /// Check if a legacy binary format or unresolved builtin requires recompilation.
     pub const fn needs_recompilation(&self) -> bool {
         self.needs_recompilation
     }
@@ -410,6 +439,11 @@ impl Program {
     /// Check if the program is fully functional (not needing recompilation)
     pub const fn is_fully_functional(&self) -> bool {
         !self.needs_recompilation
+    }
+
+    /// Check whether HostAwait instructions are present in this program.
+    pub const fn has_host_await(&self) -> bool {
+        self.has_host_await
     }
 }
 

@@ -1257,7 +1257,8 @@ fn test_edge_cases_and_boundary_conditions() {
 
 #[test]
 fn test_concurrent_schema_validation_stress() {
-    use std::{sync::Arc, thread};
+    use std::sync::Arc;
+    use std::thread;
 
     // Create a complex schema for concurrent testing
     let concurrent_schema = json!({
@@ -1334,4 +1335,18 @@ fn test_concurrent_schema_validation_stress() {
         successful_validations, 1000,
         "All 1000 concurrent validations should pass"
     );
+}
+
+#[test]
+fn test_validate_number_beyond_f64_exact_range() {
+    let schema = Schema::from_serde_json_value(json!({ "type": "number", "minimum": 0, "maximum": 1e19 })).unwrap();
+
+    let wei = Value::from_json_str("1000000000000000000").unwrap();
+    assert!(SchemaValidator::validate(&wei, &schema).is_ok());
+
+    let over = Value::from_json_str("100000000000000000000").unwrap();
+    assert!(matches!(
+        SchemaValidator::validate(&over, &schema),
+        Err(ValidationError::OutOfRange { .. })
+    ));
 }

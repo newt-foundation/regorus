@@ -3,7 +3,8 @@
 
 #![allow(clippy::option_if_let_else, clippy::pattern_type_mismatch)]
 
-use crate::{format, schema::Type, Rc, Schema, Value};
+use crate::schema::Type;
+use crate::{format, Rc, Schema, Value};
 use alloc::collections::BTreeMap;
 
 type String = Rc<str>;

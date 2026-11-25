@@ -1,11 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{
-    collections::HashSet,
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::collections::HashSet;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;

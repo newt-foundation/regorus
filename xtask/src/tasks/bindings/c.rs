@@ -1,11 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::tasks::util::{run_cargo_step, run_command, workspace_root};
 use anyhow::{anyhow, Context, Result};
@@ -46,7 +44,8 @@ impl TestCCommand {
         if !self.skip_ffi {
             prepare_ffi_artifacts(self.release, self.frozen)?;
         }
-        run_binding("bindings/c", "regorus_test", self.release)
+        run_binding("bindings/c", "regorus_test", self.release)?;
+        run_binding("bindings/c", "regorus_rvm_test", self.release)
     }
 }
 

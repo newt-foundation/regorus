@@ -2,17 +2,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    literals::{
-        BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral,
-    },
-    operators::{ArrayOperator, ConditionOperator},
-    references::AttributeReference,
-    span::EmptySpan,
+use super::literals::{
+    BooleanLiteral, DateTimeLiteral, NullLiteral, NumberLiteral, StringLiteral, TimeLiteral,
 };
+use super::operators::ArrayOperator;
+use super::references::AttributeReference;
+use super::span::EmptySpan;
+use crate::languages::azure_rbac::builtins::RbacBuiltin;
 
 /// ABAC condition expression
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,7 +105,7 @@ pub enum UnaryOperator {
 pub struct BinaryExpression {
     #[serde(skip)]
     pub span: EmptySpan,
-    pub operator: ConditionOperator,
+    pub operator: RbacBuiltin,
     pub left: Box<ConditionExpr>,
     pub right: Box<ConditionExpr>,
 }

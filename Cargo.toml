@@ -1,23 +1,28 @@
 [workspace]
-members = []
-exclude = [
+
+members = [
     "tests/ensure_no_std",
-    "xtask",
-    "mimalloc",
+  "xtask",
 ]
 
 [package]
 name = "newton-rego"
-description = "Newton Protocol fork of Regorus — Rego policy engine with newton-crypto, newton-tlsn, and newton-identity extensions"
-version = "0.9.0"
+description = "Newton Protocol fork of Regorus — Rego policy engine with newton-crypto and newton-identity extensions"
+version = "0.15.0"
 edition = "2021"
 license = "MIT AND Apache-2.0 AND BSD-3-Clause"
 repository = "https://github.com/newt-foundation/regorus"
 keywords = ["interpreter", "no_std", "opa", "policy-as-code", "rego"]
 
+# Support verification with Verus, a Rust verifier (https://github.com/verus-lang/verus)
+
+[package.metadata.verus]
+verify = true
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+name = "regorus"
 doctest = false
 
 [features]
@@ -25,28 +30,35 @@ default = ["full-opa", "arc", "rvm"]
 
 arc = []
 ast = []
-azure_policy = ["dep:jsonschema", "arc", "dashmap"]
-azure-rbac = []
+azure_policy = ["dep:jsonschema", "dep:chrono", "dep:ipnet", "dep:icu_casemap", "dep:hashbrown", "arc", "dashmap", "rvm"]
+azure-rbac = ["regex", "time", "net"]
 base64 = ["dep:data-encoding"]
 base64url = ["dep:data-encoding"]
 coverage = []
+# Explanations of evaluation results (causality reports, partial evaluation).
+# Produced by the RVM only, so this implies `rvm` (which currently also needs
+# `std` and `arc`).
+explanations = ["rvm"]
 hex = ["dep:data-encoding"]
 http = []
 glob = ["dep:globset"]
 graph = []
 jsonschema = ["dep:jsonschema"]
+jsonpatch = []
+mimalloc = ["dep:mimalloc"]
 net = ["dep:ipnet"]
 no_std = ["lazy_static/spin_no_std"]
 opa-runtime = []
 regex = ["dep:regex"]
-rvm = ["dep:bincode", "dep:indexmap"]
+cache = ["dep:lru"]
+rvm = ["dep:postcard", "dep:indexmap"]
 semver = ["dep:semver"]
-allocator-memory-limits = ["std"]
-std = ["rand/std", "rand/std_rng", "serde_json/std", "msvc_spectre_libs" ]
+allocator-memory-limits = ["std", "mimalloc", "mimalloc/allocator-memory-limits"]
+std = ["rand/std", "rand/std_rng", "serde_json/std", "indexmap?/std", "msvc_spectre_libs", "dep:parking_lot", "vstd/std" ]
 time = ["dep:chrono", "dep:chrono-tz"]
 uuid = ["dep:uuid"]
-urlquery = ["dep:url"]
-yaml = ["serde_yaml"]
+urlquery = ["dep:url", "dep:percent-encoding"]
+yaml = ["yaml_serde"]
 full-opa = [
     "base64",
     "base64url",
@@ -56,9 +68,11 @@ full-opa = [
     "hex",
     "http",
     "jsonschema",
+    "jsonpatch",
     "net",
     "opa-runtime",
     "regex",
+    "cache",
     "semver",
     "std",
     "time",
@@ -78,6 +92,7 @@ opa-no-std = [
   "coverage",
   "graph",
   "hex",
+  "jsonpatch",
   "no_std",
   "opa-runtime",
   "regex",
@@ -89,19 +104,10 @@ opa-no-std = [
 # Rego language extensions
 rego-extensions = []
 
-# Newton-specific Rego extensions for Ethereum cryptography
+# Newton extensions
 newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
-
-# Newton-specific Rego extensions for TLSNotary presentation verification
-newton-tlsn = ["dep:bcs", "dep:bincode", "dep:data-encoding", "dep:p256", "dep:rs_merkle", "dep:sha2", "dep:blake3", "dep:tiny-keccak"]
-
-# Newton-specific Rego extensions for Identity checks
 newton-identity = ["dep:chrono", "std"]
-
-# Newton-specific Rego extensions for confidential data (blacklists, allowlists, sanctions)
 newton-confidential = ["std"]
-
-# Newton-specific Rego extensions for general-purpose date arithmetic
 newton-time = ["dep:chrono", "std"]
 
 # This feature enables some testing utils for OPA tests.
@@ -109,55 +115,62 @@ opa-testutil = []
 rand = ["dep:rand"]
 
 [dependencies]
-anyhow = { version = "1.0.45", default-features = false }
+anyhow = { version = "1.0.102", default-features = false }
 serde = {version = "1.0.150", default-features = false, features = ["derive", "rc", "alloc"] }
-serde_json = { version = "1.0.89", default-features = false, features = ["alloc"] }
+serde_json = { version = "1.0.150", default-features = false, features = ["alloc", "raw_value"] }
+hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"], optional = true }
 lazy_static =  { version = "1.4.0", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 
 data-encoding = { version = "2.8.0", optional = true, default-features=false, features = ["alloc"] }
-num-bigint = { version = "0.4", default-features = false }
+num-bigint = { version = "0.5", default-features = false }
 num-traits = { version = "0.2", default-features = false }
-spin = { version = "0.9.8", default-features = false, features = ["mutex", "spin_mutex"] }
+# Ranges admit the rustc 1.93 SP1 toolchain (parking_lot 0.13 and msvc_spectre_libs 0.2 need 1.95).
+parking_lot = { version = ">=0.12, <0.14", optional = true }
+spin = { version = "0.12.0", default-features = false, features = ["mutex", "spin_mutex"] }
 
 globset = { version = "0.4.16", features = ["simd-accel"], default-features = false, optional = true }
-regex = {version = "1.11.1", optional = true, default-features = false }
-semver = {version = "1.0.25", optional = true, default-features = false }
+regex = {version = "1.12.3", optional = true, default-features = false }
+semver = {version = "1.0.28", optional = true, default-features = false }
 url = { version = "2.5.4", optional = true }
-uuid = { version = "1.15.1", default-features = false, features = ["v4", "fast-rng"], optional = true }
-jsonschema = { version = "0.30.0", default-features = false, optional = true }
-chrono = { version = "0.4.40", optional = true }
+percent-encoding = { version = "2.3", optional = true, default-features = false, features = ["alloc"] }
+uuid = { version = "1.22.0", default-features = false, features = ["v4", "fast-rng"], optional = true }
+jsonschema = { version = "0.60.1", default-features = false, optional = true }
+chrono = { version = "0.4.44", optional = true }
 chrono-tz = { version = "0.10.1", optional = true }
-ipnet = { version = "2.11.0", optional = true, default-features = false }
+ipnet = { version = "2.12.0", optional = true, default-features = false }
+icu_casemap = { version = "2.1", optional = true, default-features = false, features = ["compiled_data"] }
 
-serde_yaml = {version = "0.9.16", default-features = false, optional = true }
+yaml_serde = { version = "0.10", default-features = false, optional = true }
 # Specify thread_rng for in order to use random_range
-rand = { version = "0.9.0", default-features = false, features = ["thread_rng"], optional = true }
+rand = { version = "0.10.0", default-features = false, features = ["thread_rng"], optional = true }
 
 # Causes the project to link with the Spectre-mitigated CRT and libs.
-msvc_spectre_libs = { version = "0.1", features = ["error"], optional = true }
+msvc_spectre_libs = { version = ">=0.1, <0.3", features = ["error"], optional = true }
 dashmap = { version = "6.1", default-features = false, optional = true }
+lru = { version = "0.19.0", default-features = false, optional = true }
+mimalloc = { package = "regorus-mimalloc", path = "mimalloc", version = "2.2.10", optional = true }
 
 # rvm related deps
-indexmap = { version = "2.12.1", default-features = false, features = ["serde"], optional = true }
-bcs = { version = "0.1.6", optional = true }
-bincode = { version = "2.0.1", default-features = false, features = ["alloc", "serde"], optional = true }
+indexmap = { version = "2.13.1", default-features = false, features = ["serde"], optional = true }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"], optional = true }
 
 # Newton extension dependencies
 alloy-primitives = { version = "0.8", optional = true, default-features = false }
 k256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa"] }
-p256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa"] }
-rs_merkle = { version = "1.5", optional = true, default-features = false }
-sha2 = { version = "0.10", optional = true, default-features = false }
-blake3 = { version = "1.8", optional = true, default-features = false }
-tiny-keccak = { version = "2.0", optional = true, default-features = false, features = ["keccak"] }
+
+# Verus-related dependencies.
+# Keep vstd aligned with the Verus release pinned in .github/workflows/verus.yml.
+# In no_std builds only the `alloc` feature is used; the crate's `std` feature
+# additionally enables `vstd/std` (matching vstd's default features).
+vstd = { version = "=0.0.0-2026-09-06-0133", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-anyhow = "1.0.45"
+anyhow = "1.0.102"
 cfg-if = "1.0.0"
 clap = { version = "4.5.53", features = ["derive"] }
 prettydiff = { version = "0.9.0", default-features = false }
-serde_yaml = "0.9.16"
+yaml_serde = "0.10"
 test-generator = "0.3.1"
 walkdir = "2.3.2"
 criterion = { version = "0.8" }
@@ -211,6 +224,16 @@ harness = false
 name = "aci_benchmark"
 harness = false
 
+[[bench]]
+name = "rvm_benchmark"
+harness = false
+required-features = ["rvm"]
+
+[[bench]]
+name = "normalization_benchmark"
+harness = false
+required-features = ["azure_policy"]
+
 [[example]]
 name="regorus"
 harness=false
@@ -222,3 +245,7 @@ doctest=false
 # RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --no-deps
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+# Allow `verus_keep_ghost` configuration flag (used by Verus)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }

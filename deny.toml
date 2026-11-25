@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "Chrono is used by the optional time and Azure Policy features; no compatible replacement is available yet." },
+    { id = "RUSTSEC-2026-0555", reason = "Chrono-tz is used by the optional time feature; the advisory reports no safe upgrade." },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 via k256 0.13 is only used for ecrecover on public inputs; no secret-dependent arithmetic." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is a compile-time proc-macro pulled in by alloy-primitives 0.8." },
+]
