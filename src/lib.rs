@@ -175,6 +175,14 @@ pub mod test_utils;
 pub mod utils;
 pub mod value;
 
+#[cfg(any(
+    feature = "newton-crypto",
+    feature = "newton-identity",
+    feature = "newton-confidential",
+    feature = "newton-time"
+))]
+pub mod extensions;
+
 #[cfg(feature = "azure_policy")]
 pub use {
     compile::compile_policy_for_target,

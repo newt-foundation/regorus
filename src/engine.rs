@@ -432,6 +432,151 @@ impl Engine {
         self.apply_effective_execution_timer_config();
     }
 
+    /// Register Newton crypto extensions with the engine.
+    ///
+    /// This method registers Newton-specific Rego built-in functions for
+    /// Ethereum cryptography operations, including ECDSA signature recovery.
+    ///
+    /// Available functions:
+    /// - `newton.crypto.ecdsa_recover_signer(signature, message_hash)` - Recover signer from raw hash
+    /// - `newton.crypto.ecdsa_recover_signer_personal(signature, message)` - Recover signer using personal_sign format
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let mut engine = Engine::new();
+    ///
+    /// // Register Newton crypto extensions
+    /// engine.with_newton_crypto_extensions()?;
+    ///
+    /// engine.add_policy(
+    ///     "test.rego".to_string(),
+    ///     r#"
+    ///    package test
+    ///    signer := newton.crypto.ecdsa_recover_signer(input.signature, input.hash)
+    ///    "#
+    ///     .to_string(),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "newton-crypto")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-crypto")))]
+    pub fn with_newton_crypto_extensions(&mut self) -> Result<()> {
+        crate::extensions::crypto::register_newton_crypto_extensions(self)
+    }
+
+    /// Register Newton KYC identity domain extensions with the engine.
+    ///
+    /// Registers domain-namespaced built-ins under `newton.identity.kyc.*`
+    /// and the generic `newton.identity.get(field)` accessor. Pass `None`
+    /// for `existing_fields` when KYC is the first domain; pass the returned
+    /// handle to subsequent domain registrations so all domains share a
+    /// single `newton.identity.get` accessor.
+    ///
+    /// # Available functions
+    ///
+    /// | Function | Description |
+    /// |----------|-------------|
+    /// | `newton.identity.kyc.check_approved` | Check approval status |
+    /// | `newton.identity.kyc.address_in_countries` | Check document country against list |
+    /// | `newton.identity.kyc.address_in_subdivision` | Check document address against ISO subdivision list |
+    /// | `newton.identity.kyc.address_not_in_subdivision` | Check document address is not in ISO subdivision list |
+    /// | `newton.identity.kyc.age_gte` | Check birthdate implies age >= input |
+    /// | `newton.identity.kyc.not_expired` | Check document expiration date has not passed |
+    /// | `newton.identity.kyc.valid_for` | Check document is valid for N more days |
+    /// | `newton.identity.kyc.issued_since` | Check document was issued at least N days ago |
+    /// | `newton.identity.get(field)` | Generic accessor for any identity domain field |
+    ///
+    /// ```
+    /// # use regorus::*;
+    /// # use regorus::extensions::identity::KycIdentityData;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let mut engine = Engine::new();
+    ///
+    /// let id = KycIdentityData {
+    ///     reference_date: "2026-01-01".to_string(),
+    ///     status: "approved".to_string(),
+    ///     selected_country_code: "US".to_string(),
+    ///     address_subdivision: "CA".to_string(),
+    ///     address_country_code: "US".to_string(),
+    ///     birthdate: "1970-01-01".to_string(),
+    ///     expiration_date: "2030-01-01".to_string(),
+    ///     issue_date: "2020-01-01".to_string(),
+    ///     issuing_authority: "CA".to_string(),
+    /// };
+    ///
+    /// // Register Newton KYC identity extensions (first domain, pass None)
+    /// let _shared = engine.with_newton_identity_kyc_extensions(id, None)?;
+    ///
+    /// engine.add_policy(
+    ///     "test.rego".to_string(),
+    ///     r#"
+    ///    package test
+    ///    allow if {
+    ///        newton.identity.kyc.check_approved()
+    ///        newton.identity.kyc.address_in_countries(["US"])
+    ///        newton.identity.kyc.address_not_in_subdivision(["NY","NC","HI"])
+    ///    }
+    ///    "#
+    ///     .to_string(),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "newton-identity")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-identity")))]
+    pub fn with_newton_identity_kyc_extensions(
+        &mut self,
+        data: crate::extensions::identity::KycIdentityData,
+        existing_fields: Option<crate::extensions::identity::SharedIdentityFields>,
+    ) -> Result<crate::extensions::identity::SharedIdentityFields> {
+        crate::extensions::identity::register_kyc_identity_extensions(self, data, existing_fields)
+    }
+
+    /// Register Newton confidential blacklist domain extensions.
+    ///
+    /// Adds `newton.confidential.blacklist.contains(address)` and
+    /// `newton.confidential.blacklist.count()` built-in functions.
+    #[cfg(feature = "newton-confidential")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-confidential")))]
+    pub fn with_newton_confidential_blacklist_extensions(
+        &mut self,
+        data: crate::extensions::confidential::BlacklistData,
+        existing_fields: Option<crate::extensions::confidential::SharedConfidentialFields>,
+    ) -> Result<crate::extensions::confidential::SharedConfidentialFields> {
+        crate::extensions::confidential::register_blacklist_extensions(self, data, existing_fields)
+    }
+
+    /// Register Newton confidential allowlist domain extensions.
+    ///
+    /// Adds `newton.confidential.allowlist.contains(address)` and
+    /// `newton.confidential.allowlist.count()` built-in functions.
+    #[cfg(feature = "newton-confidential")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-confidential")))]
+    pub fn with_newton_confidential_allowlist_extensions(
+        &mut self,
+        data: crate::extensions::confidential::AllowlistData,
+        existing_fields: Option<crate::extensions::confidential::SharedConfidentialFields>,
+    ) -> Result<crate::extensions::confidential::SharedConfidentialFields> {
+        crate::extensions::confidential::register_allowlist_extensions(self, data, existing_fields)
+    }
+
+    /// Register Newton time utility extensions.
+    ///
+    /// Adds general-purpose date arithmetic builtins usable by any policy:
+    /// `newton.time.days_between`, `newton.time.days_since`,
+    /// `newton.time.is_within_days`, `newton.time.is_before`,
+    /// `newton.time.is_after`, `newton.time.age_years`.
+    ///
+    /// All functions operate on YYYY-MM-DD strings. No system clock —
+    /// reference dates are passed explicitly for BLS determinism.
+    #[cfg(feature = "newton-time")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "newton-time")))]
+    pub fn with_newton_time_extensions(&mut self) -> Result<()> {
+        crate::extensions::time::register_newton_time_extensions(self)
+    }
+
     /// Clear the policy length configuration, reverting to the defaults.
     ///
     /// # Examples

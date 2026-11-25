@@ -104,6 +104,12 @@ opa-no-std = [
 # Rego language extensions
 rego-extensions = []
 
+# Newton extensions
+newton-crypto = ["dep:alloy-primitives", "dep:k256", "hex"]
+newton-identity = ["dep:chrono", "std"]
+newton-confidential = ["std"]
+newton-time = ["dep:chrono", "std"]
+
 # This feature enables some testing utils for OPA tests.
 opa-testutil = []
 rand = ["dep:rand"]
@@ -147,6 +153,10 @@ mimalloc = { package = "regorus-mimalloc", path = "mimalloc", version = "2.2.10"
 # rvm related deps
 indexmap = { version = "2.13.1", default-features = false, features = ["serde"], optional = true }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"], optional = true }
+
+# Newton extension dependencies
+alloy-primitives = { version = "0.8", optional = true, default-features = false }
+k256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa"] }
 
 # Verus-related dependencies.
 # Keep vstd aligned with the Verus release pinned in .github/workflows/verus.yml.
