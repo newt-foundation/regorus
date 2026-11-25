@@ -469,7 +469,7 @@ name = "ensure_no_std"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "regorus",
+ "newton-rego",
 ]
 
 [[package]]
@@ -997,6 +997,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "newton-rego"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "criterion",
+ "dashmap",
+ "data-encoding",
+ "globset",
+ "hashbrown 0.17.1",
+ "icu_casemap",
+ "indexmap",
+ "ipnet",
+ "jsonschema",
+ "lazy_static",
+ "lru",
+ "msvc_spectre_libs",
+ "num-bigint 0.5.1",
+ "num-traits",
+ "num_cpus",
+ "parking_lot 0.13.0",
+ "percent-encoding",
+ "postcard",
+ "prettydiff",
+ "rand",
+ "regex",
+ "regorus-mimalloc",
+ "semver",
+ "serde",
+ "serde_json",
+ "spin 0.12.3",
+ "test-generator",
+ "thiserror",
+ "url",
+ "uuid",
+ "vstd",
+ "walkdir",
+ "yaml_serde",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,50 +1523,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "regorus"
-version = "0.15.0"
-dependencies = [
- "anyhow",
- "cfg-if",
- "chrono",
- "chrono-tz",
- "clap",
- "criterion",
- "dashmap",
- "data-encoding",
- "globset",
- "hashbrown 0.17.1",
- "icu_casemap",
- "indexmap",
- "ipnet",
- "jsonschema",
- "lazy_static",
- "lru",
- "msvc_spectre_libs",
- "num-bigint 0.5.1",
- "num-traits",
- "num_cpus",
- "parking_lot 0.13.0",
- "percent-encoding",
- "postcard",
- "prettydiff",
- "rand",
- "regex",
- "regorus-mimalloc",
- "semver",
- "serde",
- "serde_json",
- "spin 0.12.3",
- "test-generator",
- "thiserror",
- "url",
- "uuid",
- "vstd",
- "walkdir",
- "yaml_serde",
-]
 
 [[package]]
 name = "regorus-mimalloc"

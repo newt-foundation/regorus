@@ -6,12 +6,12 @@ members = [
 ]
 
 [package]
-name = "regorus"
-description = "A fast, lightweight Rego (OPA policy language) interpreter"
+name = "newton-rego"
+description = "Newton Protocol fork of Regorus — Rego policy engine with Newton crypto, identity, confidential and time extensions"
 version = "0.15.0"
 edition = "2021"
 license = "MIT AND Apache-2.0 AND BSD-3-Clause"
-repository = "https://github.com/microsoft/regorus"
+repository = "https://github.com/newt-foundation/regorus"
 keywords = ["interpreter", "no_std", "opa", "policy-as-code", "rego"]
 
 # Support verification with Verus, a Rust verifier (https://github.com/verus-lang/verus)
@@ -22,6 +22,7 @@ verify = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+name = "regorus"
 doctest = false
 
 [features]

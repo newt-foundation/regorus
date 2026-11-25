@@ -57,3 +57,16 @@ bindings/java/.settings/
 
 # Emacs backup files
 *~
+
+CLAUDE.md
+.claude/
+
+**/AGENTS.md
+**/CLAUDE.md
+**/.claude
+**/.cursor
+**/PLAN.md
+**/.claude-sessions
+**/.omc
+
+.omx/
