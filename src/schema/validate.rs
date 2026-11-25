@@ -11,7 +11,7 @@ use crate::{
     *,
 };
 use alloc::collections::BTreeMap;
-use num_traits::ToPrimitive;
+use num_traits::ToPrimitive as _;
 use regex::Regex;
 
 type String = Rc<str>;
